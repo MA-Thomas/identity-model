@@ -1,0 +1,363 @@
+# Onboarding
+
+[episode]
+id=episode-onboarding
+subject=subject-demo-onboarding
+kind=identity_verification_workflow
+label=Initial patient identity binding
+status=active
+
+[narrative]
+identity_verification anchors=1 witnesses=2 institutional_links=2
+
+[facts]
+fact-onboarding-0 subject=subject-demo-onboarding status=active payload=SubjectCreated kind=human_person
+fact-onboarding-1 subject=subject-demo-onboarding status=active payload=DeviceBindingEstablished device=device-passkey-1 authenticator=passkey assurance=medium
+fact-onboarding-2 subject=subject-demo-onboarding status=active payload=IdentityWitnessRecorded type=government_id_verification target=subject-demo-onboarding assurance=high
+fact-onboarding-3 subject=subject-demo-onboarding status=active payload=BiometricEnrollmentReferenceAdded system=MockPhase1Vault enrollment=mock-enrollment-subject-demo-onboarding modality=face
+fact-onboarding-4 subject=subject-demo-onboarding status=active payload=ClinicalIdentityLinkEstablished org=Example Health external=patient-123 confidence=high
+fact-onboarding-5 subject=subject-demo-onboarding status=active payload=PayerIdentityLinkEstablished payer=Example Payer member=member-123
+
+[memberships]
+membership-onboarding-0 fact=fact-onboarding-0 episode=episode-onboarding role=identity_anchor status=active
+membership-onboarding-1 fact=fact-onboarding-1 episode=episode-onboarding role=device_binding status=active
+membership-onboarding-2 fact=fact-onboarding-2 episode=episode-onboarding role=identity_witness status=active
+membership-onboarding-3 fact=fact-onboarding-3 episode=episode-onboarding role=continuity_witness status=active
+membership-onboarding-4 fact=fact-onboarding-4 episode=episode-onboarding role=institutional_link status=active
+membership-onboarding-5 fact=fact-onboarding-5 episode=episode-onboarding role=institutional_link status=active
+
+[projection]
+subject=subject-demo-onboarding
+assurance=high
+active_devices=device-passkey-1
+active_clinical_links=fact-onboarding-4
+active_payer_links=fact-onboarding-5
+active_authorities=
+unresolved_disputes=
+# Complete Record Export Step-Up
+
+[episode]
+id=episode-export-step-up
+subject=subject-demo-export
+kind=access_authorization_workflow
+label=Complete record export authorization
+status=active
+
+[narrative]
+access_decision fact=fact-export-access-decision action=export_complete_record decision=allowed policy_refs=complete-record-export-policy relied_on=fact-export-credential,fact-export-continuity,fact-export-risk
+evidence fact=fact-export-credential CredentialAssertion authenticator=passkey result=succeeded assurance=medium
+evidence fact=fact-export-continuity BiometricContinuityCheck system=MockPhase1Vault enrollment=demo-enrollment result=passed assurance=high
+evidence fact=fact-export-risk RiskEvaluationEvent action=export_complete_record result=passed required_assurance=high
+
+[facts]
+fact-export-credential subject=subject-demo-export status=active payload=CredentialAssertion authenticator=passkey result=succeeded assurance=medium
+fact-export-continuity subject=subject-demo-export status=active payload=BiometricContinuityCheck system=MockPhase1Vault enrollment=demo-enrollment result=passed assurance=high
+fact-export-risk subject=subject-demo-export status=active payload=RiskEvaluationEvent action=export_complete_record result=passed required_assurance=high
+fact-export-access-decision subject=subject-demo-export status=active payload=AccessDecision action=export_complete_record decision=allowed
+
+[memberships]
+membership-export-0 fact=fact-export-credential episode=episode-export-step-up role=identity_witness status=active
+membership-export-1 fact=fact-export-continuity episode=episode-export-step-up role=continuity_witness status=active
+membership-export-2 fact=fact-export-risk episode=episode-export-step-up role=risk_signal status=active
+membership-export-3 fact=fact-export-access-decision episode=episode-export-step-up role=access_decision_evidence status=active
+
+[projection]
+subject=subject-demo-export
+assurance=high
+active_devices=
+active_clinical_links=
+active_payer_links=
+active_authorities=
+unresolved_disputes=
+latest_access_decision action=export_complete_record decision=allowed fact=fact-export-access-decision
+# Delegation
+
+[episode]
+id=episode-delegation
+subject=subject-demo-patient
+kind=delegation_workflow
+label=Authority delegation
+status=active
+
+[narrative]
+authority_established fact=fact-delegation-authority actor=subject-demo-caregiver target=subject-demo-patient type=caregiver_delegation actions=view_record,share_record
+delegation_access_decision fact=fact-delegation-3 action=share_record decision=allowed policy_refs=caregiver-delegation-policy relied_on=fact-delegation-authority
+authority_revoked fact=fact-delegation-4 relationship=fact-delegation-authority
+
+[facts]
+fact-delegation-0 subject=subject-demo-caregiver status=active payload=SubjectCreated kind=human_person
+fact-delegation-1 subject=subject-demo-patient status=active payload=SubjectCreated kind=human_person
+fact-delegation-authority subject=subject-demo-patient status=active payload=AuthorityRelationshipEstablished actor=subject-demo-caregiver target=subject-demo-patient type=caregiver_delegation
+fact-delegation-3 subject=subject-demo-patient status=active payload=AccessDecision action=share_record decision=allowed
+fact-delegation-4 subject=subject-demo-patient status=active payload=AuthorityRelationshipRevoked relationship=fact-delegation-authority
+
+[memberships]
+membership-delegation-0 fact=fact-delegation-0 episode=episode-delegation role=identity_anchor status=active
+membership-delegation-1 fact=fact-delegation-1 episode=episode-delegation role=identity_anchor status=active
+membership-delegation-2 fact=fact-delegation-authority episode=episode-delegation role=authority_evidence status=active
+membership-delegation-3 fact=fact-delegation-3 episode=episode-delegation role=access_decision_evidence status=active
+membership-delegation-4 fact=fact-delegation-4 episode=episode-delegation role=authority_evidence status=active
+
+[projection]
+subject=subject-demo-patient
+assurance=low
+active_devices=
+active_clinical_links=
+active_payer_links=
+active_authorities=
+unresolved_disputes=
+latest_access_decision action=share_record decision=allowed fact=fact-delegation-3
+# Approved Recovery
+
+[episode]
+id=episode-recovery-approved
+subject=subject-demo-recovery
+kind=account_recovery_workflow
+label=Account recovery
+status=active
+
+[narrative]
+recovery fact=fact-recovery-approved-1 method=government_id_and_liveness result=approved assurance=high
+device_change fact=fact-recovery-approved-2 revoked=device-passkey-lost
+device_change fact=fact-recovery-approved-3 established=device-passkey-replacement
+recovery_access_decision fact=fact-recovery-approved-4 action=change_recovery_method decision=allowed policy_refs=recovery-method-change-policy relied_on=fact-recovery-approved-0,fact-recovery-approved-1
+
+[facts]
+fact-recovery-approved-0 subject=subject-demo-recovery status=active payload=IdentityWitnessRecorded type=government_id_verification target=subject-demo-recovery assurance=high
+fact-recovery-approved-1 subject=subject-demo-recovery status=active payload=AccountRecoveryEvent method=government_id_and_liveness result=approved assurance=high
+fact-recovery-approved-2 subject=subject-demo-recovery status=active payload=DeviceBindingRevoked device=device-passkey-lost
+fact-recovery-approved-3 subject=subject-demo-recovery status=active payload=DeviceBindingEstablished device=device-passkey-replacement authenticator=passkey assurance=medium
+fact-recovery-approved-4 subject=subject-demo-recovery status=active payload=AccessDecision action=change_recovery_method decision=allowed
+
+[memberships]
+membership-recovery-approved-0 fact=fact-recovery-approved-0 episode=episode-recovery-approved role=recovery_evidence status=active
+membership-recovery-approved-1 fact=fact-recovery-approved-1 episode=episode-recovery-approved role=recovery_evidence status=active
+membership-recovery-approved-2 fact=fact-recovery-approved-2 episode=episode-recovery-approved role=device_binding status=active
+membership-recovery-approved-3 fact=fact-recovery-approved-3 episode=episode-recovery-approved role=device_binding status=active
+membership-recovery-approved-4 fact=fact-recovery-approved-4 episode=episode-recovery-approved role=access_decision_evidence status=active
+
+[projection]
+subject=subject-demo-recovery
+assurance=high
+active_devices=device-passkey-replacement
+active_clinical_links=
+active_payer_links=
+active_authorities=
+unresolved_disputes=
+latest_access_decision action=change_recovery_method decision=allowed fact=fact-recovery-approved-4
+# Denied Recovery
+
+[episode]
+id=episode-recovery-denied
+subject=subject-demo-recovery
+kind=account_recovery_workflow
+label=Account recovery
+status=active
+
+[narrative]
+recovery fact=fact-recovery-denied-1 method=provider_attestation result=denied assurance=low
+recovery_access_decision fact=fact-recovery-denied-2 action=change_recovery_method decision=denied policy_refs=recovery-method-change-policy relied_on=fact-recovery-denied-0,fact-recovery-denied-1
+
+[facts]
+fact-recovery-denied-0 subject=subject-demo-recovery status=active payload=IdentityWitnessRecorded type=provider_attestation target=subject-demo-recovery assurance=low
+fact-recovery-denied-1 subject=subject-demo-recovery status=active payload=AccountRecoveryEvent method=provider_attestation result=denied assurance=low
+fact-recovery-denied-2 subject=subject-demo-recovery status=active payload=AccessDecision action=change_recovery_method decision=denied
+
+[memberships]
+membership-recovery-denied-0 fact=fact-recovery-denied-0 episode=episode-recovery-denied role=recovery_evidence status=active
+membership-recovery-denied-1 fact=fact-recovery-denied-1 episode=episode-recovery-denied role=recovery_evidence status=active
+membership-recovery-denied-2 fact=fact-recovery-denied-2 episode=episode-recovery-denied role=access_decision_evidence status=active
+
+[projection]
+subject=subject-demo-recovery
+assurance=low
+active_devices=
+active_clinical_links=
+active_payer_links=
+active_authorities=
+unresolved_disputes=
+latest_access_decision action=change_recovery_method decision=denied fact=fact-recovery-denied-2
+# Trusted Device Recovery
+
+[episode]
+id=episode-recovery-trusted-device
+subject=subject-demo-recovery
+kind=account_recovery_workflow
+label=Account recovery
+status=active
+
+[narrative]
+recovery fact=fact-recovery-trusted-device-1 method=existing_trusted_device result=approved assurance=medium
+recovery_access_decision fact=fact-recovery-trusted-device-2 action=change_recovery_method decision=allowed policy_refs=trusted-device-recovery-policy relied_on=fact-recovery-trusted-device-0,fact-recovery-trusted-device-1
+
+[facts]
+fact-recovery-trusted-device-0 subject=subject-demo-recovery status=active payload=CredentialAssertion authenticator=passkey result=succeeded assurance=medium
+fact-recovery-trusted-device-1 subject=subject-demo-recovery status=active payload=AccountRecoveryEvent method=existing_trusted_device result=approved assurance=medium
+fact-recovery-trusted-device-2 subject=subject-demo-recovery status=active payload=AccessDecision action=change_recovery_method decision=allowed
+
+[memberships]
+membership-recovery-trusted-device-0 fact=fact-recovery-trusted-device-0 episode=episode-recovery-trusted-device role=identity_witness status=active
+membership-recovery-trusted-device-1 fact=fact-recovery-trusted-device-1 episode=episode-recovery-trusted-device role=recovery_evidence status=active
+membership-recovery-trusted-device-2 fact=fact-recovery-trusted-device-2 episode=episode-recovery-trusted-device role=access_decision_evidence status=active
+
+[projection]
+subject=subject-demo-recovery
+assurance=medium
+active_devices=
+active_clinical_links=
+active_payer_links=
+active_authorities=
+unresolved_disputes=
+latest_access_decision action=change_recovery_method decision=allowed fact=fact-recovery-trusted-device-2
+# Rejected Provider Link Dispute
+
+[episode]
+id=episode-provider-link-dispute
+subject=subject-demo-resolution
+kind=dispute_resolution_workflow
+label=Identity dispute resolution
+status=active
+
+[narrative]
+clinical_link_contested fact=fact-provider-link-dispute-1 link=fact-provider-link-dispute-0
+clinical_link_dispute_resolved fact=fact-provider-link-dispute-3 link=fact-provider-link-dispute-0 outcome=rejected
+
+[facts]
+fact-provider-link-dispute-0 subject=subject-demo-resolution status=active payload=ClinicalIdentityLinkEstablished org=Example Health external=patient-possibly-incorrect confidence=ambiguous
+fact-provider-link-dispute-1 subject=subject-demo-resolution status=active payload=ClinicalIdentityLinkContested link=fact-provider-link-dispute-0
+fact-provider-link-dispute-2 subject=subject-demo-resolution status=active payload=IdentityWitnessRecorded type=in_person_clinic_verification target=subject-demo-resolution assurance=high
+fact-provider-link-dispute-3 subject=subject-demo-resolution status=active payload=ClinicalIdentityLinkDisputeResolved link=fact-provider-link-dispute-0 outcome=rejected
+
+[memberships]
+membership-provider-link-dispute-0 fact=fact-provider-link-dispute-0 episode=episode-provider-link-dispute role=institutional_link status=active
+membership-provider-link-dispute-1 fact=fact-provider-link-dispute-1 episode=episode-provider-link-dispute role=dispute_evidence status=active
+membership-provider-link-dispute-2 fact=fact-provider-link-dispute-2 episode=episode-provider-link-dispute role=identity_witness status=active
+membership-provider-link-dispute-3 fact=fact-provider-link-dispute-3 episode=episode-provider-link-dispute role=dispute_evidence status=active
+
+[projection]
+subject=subject-demo-resolution
+assurance=high
+active_devices=
+active_clinical_links=
+active_payer_links=
+active_authorities=
+unresolved_disputes=
+# Confirmed Provider Link Dispute
+
+[episode]
+id=episode-provider-link-dispute
+subject=subject-demo-resolution
+kind=dispute_resolution_workflow
+label=Identity dispute resolution
+status=active
+
+[narrative]
+clinical_link_contested fact=fact-provider-link-dispute-1 link=fact-provider-link-dispute-0
+clinical_link_dispute_resolved fact=fact-provider-link-dispute-3 link=fact-provider-link-dispute-0 outcome=confirmed
+
+[facts]
+fact-provider-link-dispute-0 subject=subject-demo-resolution status=active payload=ClinicalIdentityLinkEstablished org=Example Health external=patient-possibly-incorrect confidence=ambiguous
+fact-provider-link-dispute-1 subject=subject-demo-resolution status=active payload=ClinicalIdentityLinkContested link=fact-provider-link-dispute-0
+fact-provider-link-dispute-2 subject=subject-demo-resolution status=active payload=IdentityWitnessRecorded type=in_person_clinic_verification target=subject-demo-resolution assurance=high
+fact-provider-link-dispute-3 subject=subject-demo-resolution status=active payload=ClinicalIdentityLinkDisputeResolved link=fact-provider-link-dispute-0 outcome=confirmed
+
+[memberships]
+membership-provider-link-dispute-0 fact=fact-provider-link-dispute-0 episode=episode-provider-link-dispute role=institutional_link status=active
+membership-provider-link-dispute-1 fact=fact-provider-link-dispute-1 episode=episode-provider-link-dispute role=dispute_evidence status=active
+membership-provider-link-dispute-2 fact=fact-provider-link-dispute-2 episode=episode-provider-link-dispute role=identity_witness status=active
+membership-provider-link-dispute-3 fact=fact-provider-link-dispute-3 episode=episode-provider-link-dispute role=dispute_evidence status=active
+
+[projection]
+subject=subject-demo-resolution
+assurance=high
+active_devices=
+active_clinical_links=fact-provider-link-dispute-0
+active_payer_links=
+active_authorities=
+unresolved_disputes=
+# Duplicate Subject Merge
+
+[episode]
+id=episode-duplicate-subject-merge
+subject=subject-demo-resolution
+kind=dispute_resolution_workflow
+label=Identity dispute resolution
+status=active
+
+[narrative]
+subject_merge fact=fact-subject-merge-1 surviving=subject-demo-resolution merged=subject-demo-duplicate
+
+[facts]
+fact-subject-merge-0 subject=subject-demo-resolution status=active payload=IdentityWitnessRecorded type=demographic_match target=subject-demo-resolution assurance=medium
+fact-subject-merge-1 subject=subject-demo-resolution status=active payload=DuplicateSubjectMergeRecorded surviving=subject-demo-resolution merged=subject-demo-duplicate
+
+[memberships]
+membership-subject-merge-0 fact=fact-subject-merge-0 episode=episode-duplicate-subject-merge role=dispute_evidence status=active
+membership-subject-merge-1 fact=fact-subject-merge-1 episode=episode-duplicate-subject-merge role=dispute_evidence status=active
+
+[projection]
+subject=subject-demo-resolution
+assurance=medium
+active_devices=
+active_clinical_links=
+active_payer_links=
+active_authorities=
+unresolved_disputes=
+# Incorrect Merge Split
+
+[episode]
+id=episode-incorrect-merge-split
+subject=subject-demo-resolution
+kind=dispute_resolution_workflow
+label=Identity dispute resolution
+status=active
+
+[narrative]
+subject_split fact=fact-subject-split-1 prior=subject-demo-resolution restored=subject-demo-restored-a,subject-demo-restored-b
+
+[facts]
+fact-subject-split-0 subject=subject-demo-resolution status=active payload=IdentityWitnessRecorded type=provider_attestation target=subject-demo-resolution assurance=high
+fact-subject-split-1 subject=subject-demo-resolution status=active payload=IncorrectMergeSplitRecorded prior=subject-demo-resolution restored=subject-demo-restored-a,subject-demo-restored-b
+
+[memberships]
+membership-subject-split-0 fact=fact-subject-split-0 episode=episode-incorrect-merge-split role=dispute_evidence status=active
+membership-subject-split-1 fact=fact-subject-split-1 episode=episode-incorrect-merge-split role=dispute_evidence status=active
+
+[projection]
+subject=subject-demo-resolution
+assurance=high
+active_devices=
+active_clinical_links=
+active_payer_links=
+active_authorities=
+unresolved_disputes=
+# Witness Supersession
+
+[episode]
+id=episode-witness-supersession
+subject=subject-demo-resolution
+kind=dispute_resolution_workflow
+label=Identity dispute resolution
+status=active
+
+[narrative]
+witness_superseded fact=fact-witness-supersession-2 old=fact-witness-supersession-0 replacement=fact-witness-supersession-1
+
+[facts]
+fact-witness-supersession-0 subject=subject-demo-resolution status=superseded payload=IdentityWitnessRecorded type=demographic_match target=subject-demo-resolution assurance=medium
+fact-witness-supersession-1 subject=subject-demo-resolution status=active payload=IdentityWitnessRecorded type=government_id_verification target=subject-demo-resolution assurance=high
+fact-witness-supersession-2 subject=subject-demo-resolution status=active payload=IdentityWitnessSuperseded old=fact-witness-supersession-0 replacement=fact-witness-supersession-1
+
+[memberships]
+membership-witness-supersession-0 fact=fact-witness-supersession-0 episode=episode-witness-supersession role=identity_witness status=active
+membership-witness-supersession-1 fact=fact-witness-supersession-1 episode=episode-witness-supersession role=identity_witness status=active
+membership-witness-supersession-2 fact=fact-witness-supersession-2 episode=episode-witness-supersession role=dispute_evidence status=active
+
+[projection]
+subject=subject-demo-resolution
+assurance=high
+active_devices=
+active_clinical_links=
+active_payer_links=
+active_authorities=
+unresolved_disputes=
