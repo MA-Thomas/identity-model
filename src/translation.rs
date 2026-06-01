@@ -1,6 +1,7 @@
 use crate::continuity::*;
 use crate::fen::*;
 use crate::identity::*;
+use crate::liveness::*;
 use crate::provider::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,6 +92,50 @@ impl FenTranslator {
                 assurance_level,
                 evidence_ref,
                 expires_at,
+                context: IdentityWitnessContext::default(),
+            },
+            source_system,
+            Vec::new(),
+        )
+    }
+
+    pub fn selfie_liveness_witness_recorded(
+        &self,
+        subject_id: SubjectId,
+        ceremony: VerifiedLivenessCeremony,
+    ) -> FactDraft {
+        self.draft(
+            subject_id.clone(),
+            ceremony.observed_at.clone(),
+            FactPayload::IdentityWitnessRecorded {
+                witness_type: IdentityWitnessType::SelfieLivenessCheck,
+                target_subject_id: subject_id,
+                assurance_level: ceremony.assurance_level,
+                evidence_ref: None,
+                expires_at: Some(ceremony.expires_at.clone()),
+                context: ceremony.identity_witness_context(),
+            },
+            Some(ceremony.source_system()),
+            ceremony.external_refs(),
+        )
+    }
+
+    pub fn identity_attribute_asserted(
+        &self,
+        subject_id: SubjectId,
+        occurred_at: Timestamp,
+        attribute: IdentityAttribute,
+        value: IdentityAttributeValue,
+        confidence: MatchConfidence,
+        source_system: Option<String>,
+    ) -> FactDraft {
+        self.draft(
+            subject_id,
+            occurred_at,
+            FactPayload::IdentityAttributeAsserted {
+                attribute,
+                value,
+                confidence,
             },
             source_system,
             Vec::new(),

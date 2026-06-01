@@ -61,6 +61,7 @@ pub enum FactPayload {
         assurance_level: AssuranceLevel,
         evidence_ref: Option<DocumentRef>,
         expires_at: Option<Timestamp>,
+        context: IdentityWitnessContext,
     },
     BiometricEnrollmentReferenceAdded {
         biometric_system: String,

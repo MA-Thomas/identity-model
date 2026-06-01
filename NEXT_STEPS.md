@@ -1,449 +1,507 @@
 # Next Steps
 
-## Current State
+## Handoff Snapshot
 
-This repo contains a dependency-free Rust crate implementing the first FEN identity-model foundations, provider-backed vertical slices, typed workflow commands, split onboarding/service APIs, and a small service boundary for integration work.
+Start here. The repo now has eleven relevant implementation slices:
 
-The stable design boundary remains:
+- encrypted Fact persistence and policy-gated materialization are implemented and tested in memory
+- PostgreSQL migrations, row mapping, SQLx repository methods, env-gated live adapter harnesses, rollback coverage, and replay-equivalence coverage are implemented
+- a higher-level encryption-aware workflow repository facade converts workflow slices into encrypted stored envelopes, owns append-sequence assignment, delegates durable append to a stored-envelope repository, and replays policy-gated materialized state
+- a PostgreSQL-backed encryption-aware workflow facade now allocates append sequences inside the same SQL transaction that writes encrypted facts, episodes, memberships, and workflow transaction rows
+- Keycloak/OIDC account-session bootstrap, feature-gated JWKS verification, and an env-gated live Keycloak harness are implemented
+- iPhone/App Attest-shaped device evidence can now be verified at an adapter boundary and bound into the account-token bootstrap workflow as a normal device-binding fact
+- a shared mobile onboarding command now wraps OIDC token verification, App Attest-shaped device evidence verification, workflow append, replay, and a safe account/device summary; a dependency-free CLI smoke harness and a feature-gated HTTP handler call the same command
+- a feature-gated `production-crypto` adapter now encrypts fact plaintext with AES-256-GCM through `ring`, using the existing canonical associated-data contract and append-sequence-derived 96-bit nonces
+- an App Attest key-state guard now records verified key state, used challenge nonces, sign-count progress, and revocation state so synthetic or future real App Attest verification cannot replay the same challenge or move a key across app/device context
+- PostgreSQL now has an App Attest key-state migration and state-store adapter, with transactional challenge replay protection, sign-count updates, key revocation state, and runtime wiring through the existing verifier guard
+- a feature-gated `runtime-server` binary now loads runtime config from env, connects to PostgreSQL, optionally runs migrations, assembles `SqlxPostgresEncryptionAwareWorkflowRepository` with the AES-256-GCM adapter, selects JWKS-backed OIDC verification, wraps the current static App Attest-shaped verifier in the durable PostgreSQL key-state guard, exposes `/health` and `/ready`, and forwards `POST /mobile/onboarding` through the same framework-neutral handler
+
+The latest hardening pass also moved security-sensitive timestamp comparisons onto parsed UTC helpers, centralized encrypted persistence labels on typed enums, indexed materialized projection checks to avoid repeated scans, deduped replayed view rows, and split workflow outcome helpers out of the service facade.
+
+The latest local Keycloak proof is complete. A throwaway Keycloak `26.6.1` dev setup created realm `fen-dev`, client `fen-identity-dev`, and user `marcus`, obtained a real access token, verified it through discovery/JWKS, appended the FEN account-session workflow, and replayed materialized state successfully. The reproducible setup lives in `LOCAL_KEYCLOAK_DEV.md`.
+
+The PostgreSQL live harness has now passed against a disposable PostgreSQL database in this workspace. The live proof covered migration execution, encrypted append/query, duplicate fact ID, duplicate append sequence, all-facts replay order, subject-scoped query, policy-gated materialization, materialization audit insert, workflow-slice transaction append/query, PostgreSQL-backed encrypted workflow append/replay, transaction rollback, and replay-equivalence against `MaterializedIdentityState`.
+
+The next useful handoff move is replacing the runtime server's static App Attest-shaped parser/signature proof with real Apple App Attest attestation/assertion verification, then moving fact key material from env-loaded bytes into a production key-management/wrapping boundary.
+
+Do not treat Keycloak, PostgreSQL, a KMS, Apple App Attest, or any provider SDK as the identity source of truth. They provide evidence and durable infrastructure. FEN owns the typed fact graph, policy gates, replay semantics, and materialized projections.
+
+## Testable MVP Priority Order
+
+These are the most important remaining workstreams for a testable MVP. They focus on proving one real product path end to end:
 
 ```text
-provider/substrate produces evidence -> FEN verifies/translates -> FEN writes facts
+iPhone evidence + OIDC session
+  -> production HTTP runtime
+  -> real verifier/key boundaries
+  -> encrypted PostgreSQL append
+  -> policy-gated materialization
+  -> safe mobile summary
 ```
 
-Vendors, IAM systems, biometric SDKs, and hosted continuity services are evidence producers. They do not own identity truth. FEN owns the typed fact graph, policy evaluation, workflow evidence, and materialized projections.
+Do not expand into broad product surface area before this path is real. The MVP should prove that FEN can accept real mobile evidence, append durable encrypted facts, replay state through policy and key gates, and explain what happened without letting the web framework, database, IAM system, or device provider become the identity model.
 
-## Progress Snapshot
+1. **Production Runtime**
 
-As of the latest implementation pass, the cleanup items that were previously blocking integration have moved from "planned" to "implemented":
+   Build the actual server entry point around the existing framework-neutral mobile HTTP handler. The first feature-gated runtime server shell now loads config, connects to PostgreSQL, optionally runs migrations, assembles `SqlxPostgresEncryptionAwareWorkflowRepository`, selects JWKS-backed OIDC verification, wraps the current App Attest-shaped verifier boundary in durable PostgreSQL-backed key-state replay protection, selects the AES-256-GCM encryptor/key resolver, configures policy/materialization context, exposes health/readiness checks, and keeps the web layer thin.
 
-- typed workflow command structs exist for onboarding, access step-up, delegation, recovery, and identity dispute resolution
-- workflow IDs are planned explicitly through `WorkflowIdPlan`, including relied-on fact references
-- policy freshness can run through `PolicyEvaluationContext` and a small `Clock` boundary
-- `IdentityWorkflowService` provides the first application-facing API layer over workflow slices, continuity challenge issue/verify, policy evaluation, narrative rendering, and materialized projections
-- compatibility wrappers still preserve existing examples and tests
+   Remaining runtime work: move from the local shell to production-grade transport concerns such as concurrency, graceful shutdown, request tracing, deployment migration policy, stricter body/timeout handling, real App Attest cryptographic verification, async-native App Attest state operations, and durable key-management storage.
 
-A follow-on hardening pass added:
+2. **Real Key And Crypto Boundary**
 
-- modern Rust module entrypoints without `mod.rs` files
-- detailed access-authorization service outcomes that surface policy reasons and the access-decision fact ID while preserving the existing workflow outcome API
-- versioned, reviewable policy artifact support through `PolicyArtifact`, stable versioned policy refs, artifact status, effective windows, review metadata, and service-level artifact evaluation
-- append-only repository traits plus an in-memory identity repository and replay helpers for rebuilding materialized identity state from stored facts
-- a golden fixture contract covering onboarding, export step-up, delegation, recovery, and identity-resolution rendered examples
-- detailed service outcomes for onboarding, recovery, delegation, and identity dispute resolution, so callers can retrieve reviewable fact IDs without inspecting raw workflow slices
-- production-facing onboarding steps now distinguish subject registration, device binding, continuity enrollment, provider identity linking, and payer identity linking; provider and payer links are optional follow-on facts rather than required first-touch inputs
-- `IdGenerator` can now assign subject IDs for new-subject registration while still allowing callers to register an externally supplied subject ID
+   The first AEAD adapter now exists behind `production-crypto`: AES-256-GCM through `ring`, canonical associated data, explicit 32-byte key validation, and 96-bit nonces derived from a deployment nonce domain plus append sequence.
 
-A second integration-readiness pass added:
+   Remaining key work: move key material out of env-loaded local bytes, add DEK/KEK or KMS wrapping behavior, represent wrapped key state durably, support rotation/rewrapping policy, and ensure production deployments cannot start with test-only key config.
 
-- generated workflow ID plans and production-facing request constructors so callers do not need to hand-build `WorkflowIdPlan` for ordinary service use
-- a core onboarding orchestration helper that composes subject registration, device binding, and continuity enrollment without requiring provider or payer links
-- a repository-backed service append/replay path, plus an `IdentityWorkflowRepository` append boundary for future transactional database adapters
-- atomic in-memory workflow-slice append preflight, so duplicate fact or membership IDs cannot partially mutate repository history
-- structured policy artifact definitions for sensitive actions, emergency access, delegation constraints, recovery-method changes, and break-glass workflows
-- auditable continuity verification rejection facts for invalid signatures, nonce failures, replay, malformed assertions, and related verifier rejections
+3. **Real Apple App Attest**
 
-The remaining work is no longer "split the architecture apart," "separate onboarding concerns," or "hide fixture ID plans from service callers." The next step is to move into production crypto, real provider transport, database-backed persistence, policy storage/review workflow notes, and deeper threat-model coverage.
+   Replace the current deterministic App Attest-shaped verifier with a real Apple App Attest adapter. The key-state guard now enforces app/team/bundle/device consistency, challenge replay protection, sign-count monotonicity, and revocation state after an assertion has been synthetically verified, and the runtime persists that state in PostgreSQL. The real adapter still needs to verify Apple attestation/assertion formats, bind server-issued challenge bytes, persist any real attestation-key metadata needed for verification, and translate only verified evidence into FEN facts.
 
-## What Exists Now
+   MVP outcome: the iPhone path proves app-bound device possession with real Apple evidence before FEN appends the device-binding workflow facts.
 
-Core model:
+4. **Policy And Governance Storage**
 
-- FEN envelope types in `src/fen.rs`
-- Sparse subject and identity primitives in `src/identity.rs`
-- Identity `FactPayload` variants for witnesses, continuity, continuity verifier rejections, devices, institutional links, disputes, authority, recovery, risk, and access decisions
-- Identity workflow scaffolding in `src/workflows.rs`
-- Materialized identity-state projection in `src/materialized.rs`
-- Translation helpers from trusted provider events into FEN fact drafts in `src/translation.rs`
+   Add durable storage and review lifecycle for policy artifacts that will be cited by access decisions and materialization decisions. Keep policy refs versioned, reviewed, lifecycle-aware, and stable over time. Avoid embedding mutable policy meaning directly in route handlers, database rows, or provider adapters.
 
-Continuity and providers:
+   MVP outcome: materialization and access decisions can cite durable policy refs, and later audits can explain which policy version permitted or denied reliance.
 
-- Phase-compatible continuity assertion contract in `src/continuity.rs`
-- Canonical continuity assertion serialization in `src/continuity/canonical.rs`
-- Continuity verifier traits, deterministic signature-verifier seam, assurance mapping, and in-memory nonce lifecycle
-- Replaceable continuity provider contract in `src/provider/contract.rs`
-- Scripted hosted-provider adapter in `src/provider/hosted.rs`
-- Mock Phase 1 and hosted-style continuity providers in `src/provider/mocks.rs`
+5. **Database Operationalization**
 
-Policy and support boundaries:
+   Turn the PostgreSQL adapter from a tested storage proof into an operational database boundary. Add migration version tracking, deployment-safe migration execution, connection-pool configuration, readiness checks, backup/restore expectations, index review, live harness setup guidance, and CI/pre-production coverage for feature-enabled database tests.
 
-- Sensitive-action policy evaluation in `src/policy.rs`
-- Versioned policy artifacts, status/effective-window checks, and policy review metadata in `src/policy.rs`
-- Structured policy artifact definitions for sensitive actions, emergency access, delegation constraints, recovery-method changes, and break-glass workflows
-- Typed `PolicyEvaluationReason` values for step-up, denial, and manual-review explanations
-- Timestamp parsing/freshness helper boundary in `src/time.rs`
-- Clock and policy evaluation context boundary in `src/clock.rs` and `src/policy.rs`
-- ID generation trait and deterministic generator in `src/ids.rs`
-- Workflow ID plans for fact, episode, membership, challenge, nonce, and relied-on fact references in `src/flows/core.rs`
+   MVP outcome: the encrypted append/replay path can be run repeatedly against a real database with predictable schema state and operational diagnostics.
 
-Persistence and replay:
+6. **Product Mobile Path**
 
-- Append-only fact, episode, and membership repository traits in `src/persistence.rs`
-- Transaction-shaped workflow-slice append trait plus atomic in-memory append preflight
-- In-memory identity repository for tests and adapter prototyping
-- Replay helpers for rebuilding `MaterializedIdentityState` from stored facts
+   After the server contract is real, build the smallest iOS proof path that obtains a Keycloak/OIDC token, obtains App Attest evidence for a server-issued challenge, submits the mobile onboarding request, and displays the safe account/device summary. Keep this as a proof app or thin product slice until the backend evidence contract stabilizes.
 
-Public service boundary:
+   Treat this as a staged test boundary. Backend MVP tests can keep using fixtures and synthetic App Attest-shaped evidence. The real-device MVP needs a minimal native iPhone app because Apple App Attest evidence is produced by `DCAppAttestService` inside a signed app on a supported device. An investor demo on the investor's own phone likely needs a TestFlight or demo build, HTTPS access to the runtime, a prepared Keycloak login path, and deliberate handling of App Attest development versus production environment behavior.
 
-- `IdentityWorkflowService` in `src/service.rs`
-- `WorkflowOutcome` containing the workflow slice, materialized projection, and narrative lines
-- detailed service outcome structs for onboarding, access authorization, recovery, delegation, and identity disputes
-- Service methods for subject registration, core onboarding orchestration, device binding, continuity enrollment, optional provider/payer identity linking, bundled onboarding, repository append/replay, continuity challenge issue/verify/audit, sensitive-action policy evaluation, policy artifact evaluation, recovery, delegation, and dispute resolution
+   MVP outcome: a real phone can exercise the full onboarding path without relying on CLI-only or synthetic HTTP fixtures.
 
-Workflow slices:
+7. **Hardening**
 
-- Separated onboarding requests for subject registration, device binding, continuity enrollment, provider identity linking, and payer identity linking in `src/flows/onboarding.rs`
-- Bundled demo/compatibility onboarding flow and `OnboardingRequest` in `src/flows/onboarding.rs`
-- Complete-record export step-up flow and `CompleteRecordExportStepUpRequest` in `src/flows/access.rs`, including auditable verifier-rejection facts
-- Delegation flow and `DelegationRequest` in `src/flows/delegation.rs`
-- Recovery flows and `RecoveryRequest` in `src/flows/recovery.rs`
-- Dispute, merge, split, and witness-supersession flows with `IdentityDisputeResolutionRequest` in `src/flows/disputes.rs`
-- Generated-ID constructors for production-facing workflow request structs while fixture constructors remain stable for demos/tests
-- Shared workflow/episode helpers in `src/flows/core.rs`, `src/flows/support.rs`, and `src/flows/episode_labels.rs`
+   Finish the security and reliability pass around the MVP path: threat-model the runtime, audit logging, replay failures, key-access failures, App Attest failure modes, timestamp and clock-skew handling, error taxonomy, rate limits, request body limits, idempotency/retry behavior, feature-matrix CI, and safe redaction of logs and responses.
 
-Fixtures and examples:
+   MVP outcome: the testable path is not just happy-path functional; it has explicit failure behavior, observability, and guardrails around the places where identity, keys, device evidence, and encrypted materialization can go wrong.
 
-- Stable fixture rendering in `src/fixtures/rendering.rs`
-- Narrative rendering in `src/fixtures/narrative.rs`
-- Presentation-only enum labels in `src/fixtures/fixture_labels.rs`
-- Runnable service-facade examples for onboarding, export step-up, delegation, recovery, and identity resolution in `examples/`
+## Next Handoff Commands
 
-Tests:
+Re-run the already-proven local Keycloak smoke test only if the next owner needs to verify the OIDC path from scratch. Follow `LOCAL_KEYCLOAK_DEV.md`, then run:
 
-- Focused integration tests under `tests/`
-- Service/API boundary coverage in `tests/service_api.rs`
-- Architecture guard for enum-to-string label boundaries in `tests/string_boundaries.rs`
+```sh
+IDENTITY_MODEL_KEYCLOAK_ISSUER="http://127.0.0.1:8080/realms/fen-dev" \
+IDENTITY_MODEL_KEYCLOAK_CLIENT_ID="fen-identity-dev" \
+IDENTITY_MODEL_KEYCLOAK_TOKEN="$TOKEN" \
+cargo test --features oidc-jwks-verifier \
+  live_keycloak_token_can_bootstrap_append_and_replay_when_env_is_set \
+  -- --nocapture
+```
+
+Re-run this if the next owner needs to verify all live PostgreSQL adapter proofs from scratch:
+
+```sh
+IDENTITY_MODEL_POSTGRES_URL="postgres://USER:PASSWORD@127.0.0.1:5432/DATABASE" \
+cargo test --features postgres-adapter \
+  live_postgres \
+  -- --nocapture
+```
+
+If a local database is needed, create a disposable PostgreSQL instance, point `IDENTITY_MODEL_POSTGRES_URL` at it, and let the tests run the migrations. Keep it disposable because the harness uses live append tables and cleans up only the rows it creates.
+
+## Intended iPhone Onboarding Shape
+
+The real-world mobile onboarding target should look like this:
+
+```text
+iPhone app signs in with Keycloak
+  -> app obtains OIDC access token
+  -> app obtains Apple App Attest or device assertion evidence
+  -> FEN verifies the token and device evidence at adapter boundaries
+  -> FEN appends account-session, portal-login witness, verified-email, and device evidence facts
+  -> replay materializes the current account/device state
+```
+
+Keep these evidence streams separate:
+
+- Keycloak/OIDC proves account/session context, issuer, client/audience, subject, authentication method, and verified email when present.
+- iPhone/App Attest should prove app-bound device possession through a challenge, attestation/assertion verification, replay protection, bundle/team/app allow-listing, and durable attestation-key state.
+- FEN should bind the verified account-session evidence and verified device evidence through workflow facts; neither evidence source should directly own the identity graph.
+
+Do not generalize the current Apple-specific verifier into a broad `DeviceEvidenceVerifier` until a second platform integration is real. App Attest, Play Integrity, Android key attestation, Windows Hello/passkeys, TPM attestation, and managed-device attestation are related evidence sources, but they prove different claims. When Android or desktop enters scope, add a neutral verified-device-evidence shape that platform-specific verifiers can emit into. Also do not assume Apple App Attest covers desktop Mac apps; treat iOS/iPadOS App Attest, managed Apple device attestation, consumer Mac passkey/Secure Enclave evidence, Android app/device integrity, Android hardware-backed key attestation, and Windows Hello/TPM signals as distinct adapter inputs that FEN translates into typed facts.
+
+## Priority Now: Production Entry Point Shape
+
+The in-memory Rust proof for encrypted Fact persistence exists, and the PostgreSQL adapter now has migration SQL, row mapping, a feature-gated SQLx repository, and an env-gated live integration test harness for encrypted Fact envelopes and workflow-slice transaction rows. The Keycloak/OIDC-facing slice now exists too: verified OIDC session evidence can enter FEN as normal credential, portal-login witness, and verified-email attribute facts, and a feature-gated JWKS verifier can validate live Keycloak-style JWTs.
+
+The local Keycloak harness has been run against a throwaway `fen-dev` realm on `127.0.0.1:8080`; it created a realm/client/user, obtained a token, verified the token through discovery/JWKS, appended the FEN workflow, and replayed state successfully. The PostgreSQL harness has now also been run against a disposable live database, and rollback/replay-equivalence coverage has been added. The PostgreSQL-backed encrypted workflow facade now assigns durable append sequences under a transaction-scoped advisory lock, writes the stored workflow slice atomically, and replays materialized state through policy-gated decryption. The App Attest-shaped mobile device evidence slice now exists as a deterministic adapter boundary and is bound into the account-token bootstrap path.
+
+The shared mobile onboarding command now exists in `src/mobile.rs`, the dependency-free CLI smoke harness in `src/bin/mobile_onboarding_smoke.rs` calls the same command, and the feature-gated HTTP handler in `src/mobile_http.rs` exposes `POST /mobile/onboarding` as a framework-agnostic method/path/body adapter. The command takes OIDC token evidence, App Attest-shaped assertion evidence, challenge nonce context, and client context; verifies OIDC and App Attest evidence at adapter boundaries; rejects device-reference mismatch before append; appends account/session/device-binding facts through the workflow repository boundary; replays materialized state; and returns a narrow account/device summary instead of exposing full workflow internals.
+
+The mobile HTTP handler now has an encrypted-facade path that keeps the same request/response contract while appending through `EncryptionAwareWorkflowRepository` and replaying the summary from policy-gated encrypted facts. The next implementation priority is runtime composition: instantiate the HTTP path with `SqlxPostgresEncryptionAwareWorkflowRepository`, production key selection, JWKS-backed OIDC verification, and the eventual real App Attest verifier/key-state store. The HTTP endpoint should be the product-facing path for the mobile app; the CLI should remain a local smoke path that reuses the same command so future work can test Keycloak plus device evidence without driving a full app.
+
+The intended entry-point shape is:
+
+```text
+mobile onboarding command
+  input: OIDC token, challenge nonce, platform device evidence, client context
+  verifies: challenge freshness, OIDC session, device evidence, subject/device consistency
+  appends: credential, portal-login witness, verified-email when present, device-binding facts
+  persists: through the encryption-aware workflow repository over durable stored-envelope storage
+  returns: safe materialized account/device summary
+```
+
+Keep HTTP and CLI thin. They should parse input, select verifier/config, call the shared command, and shape errors or output. They should not own identity semantics, fact construction rules, replay behavior, or policy meaning.
+
+Do not build a mobile app before the server-side contract exists. Sequence this as: first wire the HTTP handler to durable persistence and production verifier selection; then add a tiny iOS proof app to exercise real Keycloak plus App Attest evidence once the endpoint exists; only then consider a production mobile app. The CLI remains useful after the app exists because it can smoke-test local command wiring without driving the full app.
+
+The proven Rust shape is:
+
+```text
+typed Fact -> encrypted persistence envelope -> policy-gated materialization -> typed Fact
+```
+
+This keeps the broader FEN paradigm intact:
+
+```text
+provider/substrate produces evidence -> FEN verifies/translates -> FEN writes encrypted facts -> Rust policy permits materialization
+```
+
+The database should preserve append order, uniqueness, indexes, ciphertext, and operational metadata. Rust owns semantic interpretation, policy evaluation, key access, decryption, materialization, and materialization audit behavior.
+
+### Completed Rust Slice
+
+The encrypted persistence envelope and in-memory/test crypto path are implemented without adding PostgreSQL, KMS, HSM, cloud SDKs, or production database dependencies.
+
+Implemented build targets:
+
+- define adapter-level encrypted Fact envelope types, including append metadata, `fact_id`, `subject_id`, payload type, status, materialization policy refs, encryption metadata, associated-data version, and ciphertext
+- define canonical associated-data bytes for encrypted Fact envelopes
+- add small encryption/key abstractions for Fact payload encryption, key lookup, key status, and materialization-time decryption
+- add a deterministic test-only encryptor/key resolver so behavior can be tested without choosing the final production KMS or AEAD provider
+- add policy-gated materialization helpers that require Rust policy approval before key access and decryption
+- add materialization audit shapes for attempted materialization, policy denial, key access, decryption, and success
+- move encoded plaintext handling behind an explicit codec boundary so production adapters can replace the deterministic test codec
+- add round-trip tests proving an encrypted envelope materializes back into the expected typed `Fact`
+- add negative tests for tampered fact ID, subject ID, append sequence, payload type, status, policy refs, ciphertext, wrong key, missing key, and retired key
+
+This slice lives in `src/persistence/encrypted.rs` and is covered by `tests/encrypted_persistence.rs`.
+
+### Completed PostgreSQL Adapter Slice
+
+The PostgreSQL adapter slice now exists:
+
+- migration SQL for encrypted fact envelopes and materialization audit records
+- migration SQL for workflow transactions, episodes, episode memberships, and episode relations
+- row mapping between `StoredEncryptedFact` and PostgreSQL-shaped records
+- row mapping between stored workflow envelopes and PostgreSQL-shaped episode, membership, and relation records
+- feature-gated SQLx repository behind `postgres-adapter`
+- connection/pool construction and migration execution
+- encrypted Fact append, all-facts replay query, and subject-scoped query methods
+- workflow-slice and episode-composition transaction append methods that write encrypted facts, episodes, memberships, and relations in one SQL transaction
+- PostgreSQL-backed encrypted workflow facade that encrypts workflow slices, allocates fact/episode/membership append sequences under `pg_advisory_xact_lock`, writes the stored slice atomically, and replays through policy/key-gated materialization
+- replay-oriented query methods for stored episodes, memberships, and episode relations
+- materialization audit event insert method
+- duplicate fact, episode, membership, relation, and append-sequence constraint mapping back into repository errors
+- `bytea` storage shape for nonce and ciphertext
+- `TEXT[]` policy refs for queryable materialization policy routing
+- `JSONB` payload shapes for exact status, author, code, onset, and retraction reconstruction where workflow tables need typed metadata
+- row sorting by append sequence for replay
+- encrypted payload type, encryption algorithm, and associated-data version labels centralized on the encrypted persistence enums instead of duplicated in PostgreSQL mapping helpers
+- tests proving row conversion preserves associated-data bytes and materialization behavior
+- tests proving workflow row conversion preserves typed episode, membership, relation, status, retraction, and invalid-label behavior
+- env-gated live adapter test harness for migration, append, duplicate handling, replay query, subject query, policy-gated materialization, materialization audit insert, and workflow-slice transaction append/query
+- env-gated live rollback tests proving failed workflow-slice and episode-composition transactions do not leave partial rows behind
+- env-gated live replay-equivalence test proving PostgreSQL append ordering can materialize and replay into the same `MaterializedIdentityState` as direct in-memory replay
+- env-gated live encrypted workflow facade test proving PostgreSQL-backed append/replay works through the production-shaped facade
+
+The SQLx dependency is optional and narrowed to PostgreSQL plus the Tokio/Rustls runtime so the default crate remains dependency-light.
+
+### Completed Keycloak/OIDC Bootstrap Slice
+
+The IAM adapter boundary now exists without adding live network or JWT dependencies to the default crate:
+
+- generic `OidcClientConfig` and `VerifiedOidcSession` types for already-verified OIDC evidence
+- Keycloak-shaped fixture constructor for issuer, subject, client, session, AMR, ACR, and email claims
+- `OidcSessionVerifier` trait and deterministic `StaticOidcSessionVerifier` for tests
+- context validation for token, issuer, client/audience, subject, and expiration
+- OIDC assurance mapping from AMR/ACR into FEN `AuthenticatorType` and `AssuranceLevel`
+- account-session bootstrap workflow that records `CredentialAssertion`, `IdentityWitnessRecorded` with `PatientPortalLoginProof`, and `IdentityAttributeAsserted` for email only when the OIDC session marks the email verified
+- external references that preserve IdP subject, session, and client refs without making Keycloak the identity source of truth
+- service facade methods for accepting already-verified sessions and accepting raw tokens through a verifier
+- repository-backed token harness that verifies a token, builds the workflow, appends it, and replays materialized state
+- feature-gated `OidcJwksSessionVerifier` that fetches discovery/JWKS metadata and verifies asymmetric JWTs
+- env-gated live Keycloak harness controlled by `IDENTITY_MODEL_KEYCLOAK_ISSUER`, `IDENTITY_MODEL_KEYCLOAK_CLIENT_ID`, and `IDENTITY_MODEL_KEYCLOAK_TOKEN`
+- local Keycloak development setup in `LOCAL_KEYCLOAK_DEV.md`
+- tests covering Keycloak-style passkey login, verified email promotion, unverified email suppression, verifier rejection paths, RS256/JWKS validation, symmetric algorithm rejection, unknown key rejection, observed expiration, and append/replay behavior
+- local live-run proof using a `fen-dev` realm, `fen-identity-dev` client, and `marcus` test user
+
+### Completed iPhone/App Attest Device Evidence Slice
+
+The mobile device-evidence boundary now exists without adding Apple SDK or production cryptographic dependencies to the default crate:
+
+- `AppAttestClientConfig` allow-lists team ID, bundle ID, app ID, and development/production environment
+- `VerifiedAppAttestAssertion` carries app-bound device evidence, key ID, challenge nonce, sign count, observed timing, and assurance level
+- `AppAttestAssertionVerifier` trait and deterministic `StaticAppAttestAssertionVerifier` for tests
+- context validation for assertion payload, team ID, bundle ID, app ID, environment, challenge nonce, device ref, key ID, and expiration
+- `StatefulAppAttestAssertionVerifier`, `InMemoryAppAttestKeyStateStore`, and `PostgresAppAttestKeyStateStore` wrap a cryptographic/parser verifier with key-state checks for challenge replay, monotonic sign counts, app/device context drift, and revoked keys
+- account-token plus App Attest service methods that verify OIDC and App Attest evidence before appending anything
+- App Attest evidence translates into a normal `DeviceBindingEstablished` fact with `AuthenticatorType::Other("apple_app_attest")`, device-binding membership role, and external refs for the App Attest key/app identity
+- mismatch or rejected App Attest evidence prevents repository mutation
+- replayed materialized state includes the App Attest-bound device as an active device
+
+### Completed Shared Mobile Onboarding Command Slice
+
+The combined mobile entry-point command now exists without adding web framework, Apple SDK, production cryptography, or database dependencies to the default crate:
+
+- `MobileOnboardingCommandRequest` groups account token evidence, App Attest-shaped assertion evidence, and client context
+- `execute_mobile_onboarding_command` calls the existing service path so HTTP and CLI surfaces do not own identity semantics
+- command execution verifies OIDC and App Attest evidence before append, preserves the existing device-reference mismatch guard, appends the workflow slice, replays materialized state, and returns `MobileOnboardingSummary`
+- `execute_encrypted_mobile_onboarding_command` verifies the same evidence, appends through `EncryptionAwareWorkflowRepository`, replays through policy/key-gated encrypted materialization, and returns the same safe summary shape
+- `MobileOnboardingEncryptedPersistenceContext` carries server-side persistence context for transaction ID, commit timestamp, and materialization policy evaluation
+- the summary includes subject ID, assurance level, active devices, workflow episode ID, key fact IDs, and committed fact count, without exposing full fact payloads or workflow internals
+- App Attest context validation now rejects empty challenge nonces
+- `mobile_onboarding_smoke` provides a dependency-free CLI harness that reads evidence/config from environment variables and exercises the same command with deterministic verifiers
+- tests cover successful command append/summary, encrypted-facade append/replay, rejection without repository mutation, empty App Attest challenge rejection, challenge replay rejection, sign-count replay rejection, key context drift rejection, and revoked-key rejection
+
+### Completed Mobile HTTP Endpoint Slice
+
+The product-facing HTTP adapter shape now exists behind the optional `mobile-http` feature without making the default crate depend on JSON or a web framework:
+
+- `handle_mobile_onboarding_http_request` handles `POST /mobile/onboarding` as a framework-agnostic method/path/body adapter
+- the HTTP request body carries subject, observed time, OIDC token/config, App Attest-shaped evidence/config, expected device ref, and client context
+- the handler parses JSON, constructs `MobileOnboardingCommandRequest`, calls `execute_mobile_onboarding_command`, and serializes a narrow JSON response
+- `handle_encrypted_mobile_onboarding_http_request` parses the same JSON contract but calls the encrypted-facade command path instead of the plaintext in-memory workflow repository path
+- HTTP adapter code owns only wire parsing, status codes, and error shaping; identity semantics stay in the shared command and service path
+- success returns subject ID, assurance level, active devices, workflow episode ID, key fact IDs, and committed fact count
+- invalid JSON maps to `400`, wrong method to `405`, OIDC verification failure to `401`, App Attest/device mismatch to `422`, and repository append failure to `409`
+- encrypted command encryption/materialization failures map to `500` because they indicate server-side persistence, key, or policy configuration failures
+- tests cover successful HTTP response JSON, encrypted-facade HTTP append, invalid request JSON, wrong method, device mismatch, and no repository mutation on rejection
+
+### Completed Encryption-Aware Workflow Repository Facade Slice
+
+The selected persistence direction is now a higher-level Rust facade over the explicit stored-envelope adapter boundary:
+
+- `EncryptionAwareWorkflowRepository` accepts an `IdentityWorkflowSlice`, transaction ID, and commit timestamp
+- the facade assigns fact, episode, and membership append sequences in one workflow-level plan
+- fact payloads are encrypted through a metadata planner, encryption key, and payload encryptor before storage
+- stored facts carry materialization policy refs, canonical associated data, encryption metadata, and ciphertext
+- workflow episodes and memberships are stored alongside the encrypted facts as durable explanation records
+- storage is delegated through `StoredEncryptedWorkflowRepository`, so PostgreSQL remains an envelope store rather than the identity semantic owner
+- replay and subject materialization go back through policy evaluation, key resolution, decryption, and Rust projection logic
+- deterministic metadata planning and an in-memory stored-envelope repository keep the facade covered without adding production KMS or database dependencies to the default crate
+- tests prove a mobile OIDC plus App Attest workflow can be encrypted, appended with explicit sequences, replayed, matched back to the direct workflow projection, and reached through the mobile HTTP adapter shape
+
+The PostgreSQL-backed version of this facade now exists for durable append-sequence allocation and stored-envelope writes. The runtime now composes that durable facade with JWKS-backed OIDC, AES-256-GCM fact encryption, and durable App Attest key-state replay protection.
+
+Important PostgreSQL design choices to preserve:
+
+- store canonical timestamp fields as `TEXT`, not `TIMESTAMPTZ`, so PostgreSQL never normalizes values that participate in associated-data checks
+- store nonce and ciphertext as `BYTEA`
+- keep semantic `FactPayload` plaintext out of the production table shape
+- use `JSONB` only for status payload metadata needed to reconstruct the envelope status
+- keep `append_sequence` as an explicit unique replay order independent of `fact_id`
+- keep queryable operational metadata for `subject_id`, payload type, status kind, materialization policy refs, and replay order
+- keep episodes, memberships, and relations durable as append-only workflow explanation records; do not let them become identity truth
+- keep policy approval, key access, decryption, plaintext decoding, and materialized projection building in Rust
+- keep workflow-to-envelope conversion, encryption, sequence planning, and replay helpers in the Rust facade above the database adapter
+
+Immediate next implementation order:
+
+1. Replace the synthetic App Attest parser/signature proof with real Apple App Attest attestation/assertion verification.
+2. Move fact key material from env-loaded bytes into DEK/KEK or KMS-backed wrapping and rotation.
+3. Move the local runtime shell toward production-grade transport and make App Attest state checks async-native when the server framework is selected.
+
+The live PostgreSQL tests are skipped unless `IDENTITY_MODEL_POSTGRES_URL` is present; they have passed against a disposable PostgreSQL database in this workspace. The live Keycloak test is skipped unless the Keycloak env vars are present; it has passed against the local dev setup documented in `LOCAL_KEYCLOAK_DEV.md`.
+
+PostgreSQL is the preferred first production database because it gives mature transactions, indexes, binary ciphertext storage, JSON/hybrid metadata options, and operational reliability without asking SQL to become the source of identity meaning.
+
+## Current State
+
+This repo contains a Rust crate implementing the first FEN identity-model foundations:
+
+- typed FEN facts, identity primitives, workflow slices, policy evaluation, and materialized projections
+- parsed UTC timestamp helpers for policy, IAM, device-evidence, and projection validity checks
+- split onboarding and service APIs for subject registration, device binding, continuity enrollment, provider links, payer links, recovery, delegation, access decisions, and identity disputes
+- generic OIDC/Keycloak session evidence boundary, JWKS verifier, and account-token bootstrap append/replay harness
+- shared mobile onboarding command, dependency-free CLI smoke harness, and feature-gated HTTP handler for OIDC plus App Attest-shaped device evidence
+- append-only in-memory repository traits and replay helpers for facts, episodes, memberships, and episode relations
+- encrypted Fact envelope, associated-data, test encryption/key, policy-gated materialization, materialization audit, and in-memory encrypted repository boundaries
+- higher-level encryption-aware workflow repository facade for converting typed workflow slices into encrypted stored envelopes and replaying them through policy/key gates
+- PostgreSQL migrations, row-mapping boundaries, feature-gated SQLx repository methods, and a PostgreSQL-backed encrypted workflow facade for encrypted facts, materialization audit records, workflow transactions, episodes, memberships, and episode relations
+- composed onboarding with parent/child `EpisodeRelationType::PartOf` workflow structure
+- policy artifacts with versioned refs, lifecycle status, effective windows, review metadata, and action-specific definitions
+- canonical continuity assertions and typed rejection reasons
+- optional feature-gated strict Ed25519 verification and provider-issued Ed25519 test adapter
+- documentation for persistence, policy artifacts, continuity assertions, encrypted Fact payloads, and security transitions
+
+The stable boundary remains:
+
+```text
+providers and substrates produce evidence; FEN owns identity truth
+```
+
+Vendors, IAM systems, biometric SDKs, hosted continuity services, KMS providers, and databases are replaceable infrastructure. They do not own the FEN fact graph.
 
 ## Verified Behavior
 
-Run:
+Default suite:
 
 ```sh
 cargo test
 ```
 
-The current suite has 49 passing tests and verifies that:
+Currently passes 88 tests.
 
-- verified continuity assertions become canonical `BiometricContinuityCheck` facts
-- nonce verification rejects unknown, expired, reused, and enrollment-mismatched assertions
-- registry-backed continuity verification handles canonical serialization, provider-key authorization, retired keys, malformed signatures, invalid signatures, and replay attempts
-- complete-record export requires step-up when fresh continuity evidence is missing
-- complete-record export is allowed when credential, continuity, and risk evidence satisfy policy
-- failed continuity checks remain auditable facts and produce step-up decisions
-- verifier-rejected continuity assertions remain auditable facts and produce step-up decisions when used in access authorization
-- service-level continuity verification can return an auditable rejection fact for invalid signatures and related verifier failures
-- policy freshness windows force step-up when credential, continuity, or risk evidence is stale
-- policy evaluations carry typed reason codes
-- policy artifacts generate versioned refs, carry review metadata, and gate inactive or expired policies into typed manual-review outcomes
-- policy artifacts carry structured action-specific definitions for delegation, recovery-method changes, and break-glass workflows
-- service methods evaluate directly against supplied `PolicyArtifact` values and preserve artifact lifecycle gates
-- timestamp parsing returns explicit errors for unsupported timestamp shapes
-- mock onboarding produces subject, device, witness, enrollment, provider-link, payer-link, episode, and membership artifacts
-- split service onboarding can register a subject, bind a device, and enroll continuity without requiring provider or payer links
-- provider and payer identity links can be added as independent optional service steps
-- subject registration can either use a caller-supplied subject ID or assign one through `IdGenerator`
-- service core onboarding can compose subject registration, device binding, and continuity enrollment with generated IDs and without provider/payer links
-- service append/replay returns repository-backed materialized state across multiple workflow slices
-- access authorization workflows keep evidence roles explicit through memberships
-- provider swap behavior preserves canonical continuity and access-decision fact shape
-- scripted hosted-provider request/response structs map into canonical FEN enrollment and continuity artifacts
-- revoked devices are excluded from materialized state
-- revoked or expired authorities are excluded from active materialized authority
-- contested links are excluded from active materialized links unless confirmed
-- witness expiration, validity periods, failed continuity, latest access decisions, and authority scope queries are handled in projections
-- approved, denied, and trusted-device recovery paths produce explicit recovery events and access decisions
-- duplicate-subject merge, incorrect-merge split, and witness supersession workflows remain auditable
-- typed workflow requests preserve the existing slice behavior while allowing explicit ID plans
-- service facade returns workflow facts, memberships, narrative lines, and materialized projections
-- detailed service access outcomes surface policy reasons and access-decision fact IDs while preserving compatibility with existing service calls
-- detailed service outcomes for onboarding, recovery, delegation, and identity dispute resolution surface reviewable fact IDs while preserving compatibility with existing service calls
-- service continuity challenge issue/verify covers nonce lifecycle and assertion verification
-- clock-backed policy evaluation context drives freshness tests without coupling tests to wall-clock behavior
-- fixture and narrative output is pinned by a golden integration contract
-- append-only repository replay rebuilds materialized state while preserving revoked, superseded, contested, and expired-history behavior
-- workflow-slice repository append rejects duplicate IDs atomically without partially mutating history
-- enum-to-string helpers stay isolated to rendering, signing, and human-facing label boundaries
-
-Run examples with:
+Feature-enabled Ed25519 suite:
 
 ```sh
-cargo run --example onboarding
-cargo run --example export_step_up
-cargo run --example delegation
-cargo run --example recovery
-cargo run --example identity_resolution
+cargo test --features ed25519-dalek-verifier
 ```
 
-All examples continue to render stable fixture-style output after the service and request-boundary changes.
+Currently passes 91 tests.
 
-## Completed Milestones
+Feature-enabled OIDC/JWKS suite:
 
-### 1. Architecture Cleanup
-
-The crate has been split into visible boundaries:
-
-- `src/lib.rs` now only exposes modules and re-exports
-- tests moved out of `src/lib.rs` into focused files under `tests/`
-- the former `src/flows.rs` was split into onboarding, access, delegation, recovery, disputes, core, support, and episode-label modules
-- the former `src/provider.rs` was split into provider contract, hosted adapter, and mock providers
-- the former `src/fixtures.rs` was split into rendering, narrative, payload summaries, presentation labels, and support helpers
-- the former `src/continuity.rs` was split so canonical signing serialization lives in `src/continuity/canonical.rs`
-
-### 2. Typed Internal Explanations
-
-Policy evaluation now returns typed `PolicyEvaluationReason` values instead of requiring callers to infer policy meaning from strings or decision-only output.
-
-The model remains Rust-typed internally:
-
-```text
-typed facts/policies/projections -> typed decisions and reason codes
+```sh
+cargo test --features oidc-jwks-verifier
 ```
 
-### 3. Boundary-Only String Labels
+Currently passes 92 tests. One test is env-gated and no-ops unless the Keycloak issuer/client/token env vars are set.
 
-Enum-to-string conversion is now explicitly boundary-only:
+Feature-enabled mobile HTTP suite:
 
-- fixture and narrative labels: `src/fixtures/fixture_labels.rs`
-- canonical continuity signing labels: `src/continuity/canonical.rs`
-- human-facing episode labels: `src/flows/episode_labels.rs`
-
-Architecture rule:
-
-```text
-typed Rust enums internally -> string labels only at rendering, persistence, provider/wire, or signing boundaries
+```sh
+cargo test --features mobile-http
 ```
 
-`tests/string_boundaries.rs` guards against generic label helpers creeping back into core modules.
+Currently passes 91 tests.
 
-### 4. Timestamp and ID Boundaries
+Feature-enabled PostgreSQL adapter suite:
 
-Freshness logic now uses `src/time.rs` rather than private ad hoc parsing in policy code. The helper still supports a narrow dependency-free UTC timestamp shape, but parse failures are explicit.
-
-Workflow fixture ID generation now goes through `IdGenerator` and `DeterministicIdGenerator` in `src/ids.rs`, preserving stable demo IDs while leaving room for production ID generation later.
-
-### 5. Typed Workflow Commands
-
-Workflow flows now have typed command/request structs:
-
-- `OnboardingRequest`
-- `CompleteRecordExportStepUpRequest`
-- `RecoveryRequest`
-- `DelegationRequest`
-- `IdentityDisputeResolutionRequest`
-
-Compatibility wrappers preserve the previous example and test call sites, while service and future API callers can pass typed commands through core logic without JSON-shaped or UI-shaped thinking leaking inward.
-
-### 6. Workflow ID Plans
-
-`WorkflowIdPlan` now centralizes episode IDs, fact IDs, membership IDs, challenge IDs, nonces, and cross-fact references such as access decisions relying on authority or evidence facts.
-
-Stable examples use explicit fixture ID plans where human-readable demo IDs matter. Operational callers can supply generated plans, and tests verify that cross-fact references follow the supplied plan rather than hidden hard-coded IDs.
-
-### 7. Clock and Evaluation Context
-
-`Clock`, `FixedClock`, and `PolicyEvaluationContext` now provide a small time boundary around policy freshness evaluation. Existing explicit timestamps remain available for deterministic examples.
-
-### 8. Initial Public Service Boundary
-
-`IdentityWorkflowService` wraps the main flows and lower-level continuity/policy operations so applications do not need to assemble every fact, membership, projection, and narrative manually.
-
-### 9. Split Onboarding Boundary
-
-Production-facing onboarding is now decomposed into independently callable service steps:
-
-- `register_subject` for caller-supplied subject IDs
-- `register_new_subject` for service-assigned subject IDs through `IdGenerator`
-- `bind_device`
-- `enroll_continuity_reference`
-- `link_provider_identity`
-- `link_payer_identity`
-
-The old bundled `OnboardingRequest` remains available as a demo/compatibility path that emits the full six-fact onboarding fixture. Provider and payer links are no longer required for first-touch subject registration, device binding, or continuity enrollment.
-
-## Remaining Cleanup Before Integration
-
-These are still worth doing before real provider transport, crypto, database-backed persistence, or application APIs land.
-
-### 1. Finish Service/API Ergonomics
-
-The service facade now exposes detailed outcomes for the main application-facing workflows, plus split onboarding methods for production-style composition. The next cleanup is mostly ergonomic: reduce places where callers must understand fixture/demo defaults, hand-build ID plans, or inspect optional fact IDs.
-
-Recently completed:
-
-- typed outcome structs for the remaining service workflows where callers need more than the generic workflow/projection/narrative bundle
-- runnable examples now use the service facade rather than low-level slice helpers
-- tests prove old wrappers and new service calls remain behaviorally equivalent
-- production-facing onboarding has been separated into explicit subject registration, device binding, continuity enrollment, provider link, and payer link service steps
-- generated-ID constructors hide fixture/demo ID plans for production-facing request construction
-- core onboarding orchestration composes registration, device binding, and continuity enrollment without provider/payer links
-- service append/replay can persist a workflow slice and return repository-backed current state
-
-Build target:
-
-- documentation snippets showing the detailed service outcomes in API-style usage
-- tighter error/outcome shapes where service callers should not need to reason over optional fact IDs for workflows that always emit a given fact
-- review whether remaining optional fact IDs should become path-specific typed outcomes
-
-Practical outcome:
-
-Applications can use the service API as the primary boundary, choose only the identity steps they actually have evidence for, and keep tests/demos stable through fixture helpers.
-
-### 2. Promote Policy to Versioned Artifacts
-
-Policy now has `PolicyArtifact` support with versioned refs, status, effective windows, review metadata, artifact-level evaluation, service-level artifact evaluation, and action-specific definition structs. The next integration-ready version should focus on storage/review workflows and migration notes rather than only in-memory artifact shape.
-
-Recently completed:
-
-- explicit artifact structs for emergency access, delegation constraints, recovery-method changes, and break-glass workflows
-- more structured freshness requirements by evidence type and action
-
-Build target:
-
-- migration notes for policy artifact storage and review workflows
-
-Practical outcome:
-
-Access decisions become explainable against reviewed policy artifacts rather than only against helper defaults.
-
-### 3. Keep Fixture/Narrative Rendering Presentation-Only
-
-The renderer is split and guarded, but future contributors should keep the rule intact:
-
-```text
-typed Rust model -> rendered fixture/log/audit string
+```sh
+cargo test --features postgres-adapter
 ```
 
-not:
+Currently reports 93 passing test functions with the feature enabled when `IDENTITY_MODEL_POSTGRES_URL` is absent. Five live tests are env-gated and no-op unless that URL is set; those live tests pass against a disposable PostgreSQL database when the URL is present.
 
-```text
-rendered string -> domain decision logic
+Full all-features suite:
+
+```sh
+cargo test --all-features
 ```
 
-If fixture output becomes an integration contract, pin it with golden files rather than parsing it back into domain behavior.
+Currently passes 103 tests.
 
-## Next Product/Architecture Milestones
+The tests cover:
 
-### 1. Policy Hardening
+- continuity challenge lifecycle, replay rejection, expired nonces, unknown nonces, and enrollment mismatches
+- registry-backed signature verification with unknown, retired, wrong-provider, malformed, and invalid keys/signatures
+- feature-gated strict Ed25519 verification over canonical FEN assertion bytes
+- provider-issued FEN-native Ed25519 assertions through the service path
+- service-level access decisions, policy reasons, policy artifacts, and stale-evidence checks
+- parsed timestamp comparisons for policy effective windows, stale evidence, OIDC session expiration, App Attest assertion expiration, and projection validity windows
+- Keycloak/OIDC session bootstrap into credential, portal-login witness, and verified-email facts
+- App Attest-shaped device evidence validation, account-token binding, device-binding fact creation, and rejection-without-append behavior
+- shared mobile onboarding command summary behavior, encrypted-facade mobile command behavior, CLI harness compile path, HTTP JSON/status-code adapter behavior, encrypted-facade HTTP adapter behavior, empty App Attest challenge rejection, and invalid App Attest timestamp rejection
+- feature-gated OIDC/JWKS verification, asymmetric JWT validation, env-gated live Keycloak token harness, and account-token append/replay
+- split onboarding, composed onboarding, repository append/replay, and episode relations
+- encrypted Fact envelope round trips, append-sequence replay, policy-before-key access, materialization audit, codec boundary, tamper detection, wrong-key, missing-key, and retired-key failures
+- encryption-aware workflow repository sequence planning, encrypted workflow append, policy-gated replay, mobile workflow projection equivalence, and PostgreSQL-backed encrypted workflow append/replay
+- PostgreSQL migration shape, row mapping, SQLx adapter compile path, AAD preservation, status/time reconstruction, replay sorting, and audit-row mapping
+- PostgreSQL workflow transaction migration shape, typed row mapping, replay sorting, invalid-label rejection, and SQLx adapter compile path
+- env-gated live PostgreSQL adapter harness for migration, append, duplicate handling, replay query, subject query, policy-gated materialization, audit insert, workflow-slice transaction append/query, PostgreSQL-backed encrypted workflow append/replay, rollback, and replay-equivalence
+- materialized projections for active devices, links, disputes, witnesses, authorities, recovery, access decisions, invalid validity windows, and duplicate replayed view rows
+- golden fixture rendering and presentation-only string boundaries
 
-Policies now have reviewable artifacts, artifact-level gating, and explicit definitions for sensitive actions, emergency access, delegation constraints, recovery-method changes, and break-glass workflows. Continue toward operational storage and review lifecycle semantics.
+## Implementation Roadmap
 
-Build targets:
+### 1. Encrypted Fact Persistence
 
-- richer policy versioning and review lifecycle states for operational storage
-- tests proving access decisions cite stable policy refs, relied-on facts, and typed reasons
-- migration notes for storing and reviewing policy artifacts outside the crate
+The dependency-light Rust proof is implemented. Keep this boundary stable while moving into the durable adapter.
 
-Practical outcome:
-
-Access decisions become reviewable policy artifacts, not just helper-function results.
-
-### 2. Persistence and Replay
-
-The crate now has append-only repository traits, a workflow-slice append trait, an in-memory repository with atomic append preflight, replay helpers, and service append/replay. Next, prepare the boundary for database-backed storage without adding database dependencies to the core model.
-
-Build targets:
-
-- database-backed adapter notes and storage contract boundaries
-- persisted record envelopes for fact, episode, and membership append operations if needed
-- stale-evidence replay tests combined with policy evaluation contexts
-- migration notes for later database-backed storage
-
-Practical outcome:
-
-The audit graph becomes operational: facts are written once, projections can be rebuilt, and current identity state remains explainable from history.
-
-### 3. Golden Fixtures and Integration Contracts
-
-The rendered workflow examples are now pinned by a golden fixture test. If downstream consumers need separately distributed artifacts, split or publish those generated files as needed.
-
-Build targets:
-
-- generated fixture files for each example, if separate files are useful for consumers
-- tests comparing example output to golden files
-- documented update command for intentional fixture changes
-- fixture coverage for onboarding, export step-up, delegation, recovery, and identity resolution
+Use `FACT_ENCRYPTION_AND_MATERIALIZATION_CONTRACT.md` and `PERSISTENCE_CONTRACT.md` as the controlling references.
 
 Practical outcome:
 
-Other teams can integrate against concrete examples and detect accidental workflow-shape changes early.
+Sensitive semantic payloads can remain encrypted at rest while FEN still preserves append-only audit history, replayability, policy explanation, and materialized projections.
 
-### 4. Production Trust Boundary
+### 2. PostgreSQL Persistence Adapter
 
-Replace the deterministic test signature helper with real cryptographic verification while keeping `ContinuitySignatureVerifier` as the stable seam.
+The migrations, row-mapping boundary, feature-gated SQLx encrypted-fact/workflow repository methods, PostgreSQL-backed encrypted workflow facade, live database integration coverage, rollback tests, and replay-equivalence tests are implemented.
 
-Build targets:
+Use PostgreSQL for durable append order, transactions, uniqueness constraints, queryable operational metadata, and binary ciphertext storage. Keep identity semantics in Rust.
 
-- selected signing format and crate
-- cryptographic signature verification backend
-- production verification-key storage or policy lookup
-- provider key rotation behavior backed by real key material
-- tests that bind canonical serialization to the selected signature algorithm
-- negative tests for malformed, retired, wrong-provider, expired, replayed, and wrong-key assertions
+The chosen persistence direction is a higher-level encrypted workflow facade over the explicit stored-envelope adapter boundary. Keep PostgreSQL as the durable envelope store; let the facade own encryption, sequence planning, policy refs, workflow-to-envelope conversion, and replay helpers. For production-shaped PostgreSQL composition, use `SqlxPostgresEncryptionAwareWorkflowRepository`.
 
 Practical outcome:
 
-FEN can trust continuity assertions from a real substrate without making that substrate part of the identity ontology.
+The audit graph becomes operational without turning SQL tables into identity truth.
 
-### 5. Real Provider Transport
+### 3. Policy Storage and Review Workflow
 
-The provider-shaped adapter boundary exists. Once a vendor or hosted substrate is chosen, add real transport only at the provider edge.
+The in-memory `PolicyArtifact` model is ready enough for service-level evaluation. The next policy work should focus on repository traits and operational review storage only after persistence requirements are concrete.
 
-Build targets:
+Use `POLICY_ARTIFACT_CONTRACT.md` as the controlling reference.
+
+Practical outcome:
+
+Access decisions can cite stable, reviewed, versioned policy refs across time.
+
+### 4. Live Provider Transport and Key Operations
+
+The provider-shaped adapter boundary exists, and the feature-gated Ed25519 adapter proves provider-issued FEN-native assertions with active/retired key behavior.
+
+Remaining work belongs in provider/infrastructure adapters:
 
 - authenticated HTTP or SDK transport
-- provider-specific request signing and response validation
-- live error mapping into `ContinuityProviderError`
-- integration tests reusing canonical fact-shape assertions
-- proof that canonical FEN facts do not change when provider implementation changes
+- vendor-native signature validation at the adapter edge
+- live provider key discovery and refresh
+- durable verification-key storage
+- operational key-rotation policy
+- integration tests proving provider changes do not alter FEN fact shape
+
+Use `CONTINUITY_ASSERTION_PROFILE.md` and `SECURITY_AND_TRANSITION_NOTES.md` as the controlling references.
 
 Practical outcome:
 
-The rest of the identity graph can stay stable while Phase 1 vendor, hosted, or enclave-backed providers are swapped.
+FEN can trust real continuity evidence without letting provider-native payloads become identity ontology.
 
-### 6. Threat-Model Pass
+### 5. Threat-Model Pass
 
-Before real biometric/provider work, explicitly model abuse cases and expected controls.
+After encrypted persistence begins, update the threat model around:
 
-Build targets:
-
-- replay and nonce abuse scenarios
-- stale evidence and session-extension abuse
-- provider compromise and key-rotation scenarios
-- account takeover and malicious recovery scenarios
-- incorrect merge/split and insider dispute-resolution scenarios
-- emergency access misuse scenarios
-- tests or notes linking each risk to controls in verifier, policy, projection, or audit
-
-Practical outcome:
-
-The system has a clear security posture before it starts trusting real continuity evidence.
-
-### 7. Workspace Split When Dependencies Demand It
-
-Do not split into many crates prematurely. Keep the current crate until real provider transport, production crypto, persistence, or API dependencies land.
-
-Likely future shape:
-
-```text
-crates/
-  identity-core/
-  identity-providers/
-  identity-fixtures/
-  identity-api/
-```
+- encrypted payload tampering
+- associated-data swapping
+- wrong-key and retired-key materialization
+- key unwrap audit
+- cached projection leakage
+- derived export leakage
+- replay and nonce abuse
+- provider compromise and provider key rotation
+- malicious recovery, incorrect merge/split, and insider dispute-resolution scenarios
 
 Practical outcome:
 
-Provider SDKs, HTTP clients, crypto crates, fixture tooling, and API dependencies stay out of the core model.
+Security controls are tied to verifier behavior, policy gates, key management, persistence envelopes, projection rules, and audit records.
 
-## Current Principle To Preserve
+## Principles To Preserve
 
-Phase 1 should be implemented as the first provider adapter, not as the identity architecture.
+- Rust owns FEN semantics; databases store durable envelopes and operational indexes.
+- Facts are append-only; corrections and revocations are represented by new facts or statuses, not destructive mutation.
+- `FactPayload` semantics should not absorb database sequence fields, KMS details, provider SDK shapes, or transport-specific payloads.
+- Materialized projections are rebuildable read models, not sources of truth.
+- Cached projections and derived views must not bypass encrypted source facts.
+- Provider-native evidence is verified at the adapter edge before translation into FEN facts.
+- Strings belong at rendering, provider/wire, persistence, and signing boundaries; core logic should stay typed.
+- Keep the core crate lean until real adapter dependencies require a workspace split.
 
-The FEN identity graph should remain stable as the continuity substrate moves from vendor-backed to hosted to enclave-backed.
+## Reference Documents
 
-Core rule:
-
-```text
-typed Rust facts, policies, commands, and projections inside FEN;
-strings only at rendering, persistence, provider/wire, and signing boundaries.
-```
+- `PERSISTENCE_CONTRACT.md`: append-only persistence, ordering, transaction, and adapter rules
+- `FACT_ENCRYPTION_AND_MATERIALIZATION_CONTRACT.md`: encrypted Fact envelopes and policy-gated materialization
+- `POLICY_ARTIFACT_CONTRACT.md`: policy artifact storage, review, lifecycle, and citation rules
+- `CONTINUITY_ASSERTION_PROFILE.md`: FEN-native continuity assertion profile and verifier guidance
+- `SECURITY_AND_TRANSITION_NOTES.md`: security boundaries and later-phase transition notes
+- `LOCAL_KEYCLOAK_DEV.md`: local Keycloak dev realm and live OIDC/JWKS smoke test setup
+- `build_plan.md`: broader milestone history and rationale

@@ -1,10 +1,13 @@
-use crate::fen::{FactId, Id, MembershipId, ProblemEpisodeId, SubjectId};
+use crate::fen::{FactId, Id, MembershipId, ProblemEpisodeId, RelationId, SubjectId};
 use std::collections::BTreeMap;
 
 pub trait IdGenerator {
     fn next_fact_id(&mut self, prefix: &str) -> FactId;
     fn next_episode_id(&mut self, prefix: &str) -> ProblemEpisodeId;
     fn next_membership_id(&mut self, prefix: &str) -> MembershipId;
+    fn next_relation_id(&mut self, prefix: &str) -> RelationId {
+        self.next_membership_id(prefix)
+    }
     fn next_subject_id(&mut self, prefix: &str) -> SubjectId;
 }
 
@@ -39,6 +42,10 @@ impl IdGenerator for DeterministicIdGenerator {
     }
 
     fn next_membership_id(&mut self, prefix: &str) -> MembershipId {
+        self.next_id(prefix)
+    }
+
+    fn next_relation_id(&mut self, prefix: &str) -> RelationId {
         self.next_id(prefix)
     }
 

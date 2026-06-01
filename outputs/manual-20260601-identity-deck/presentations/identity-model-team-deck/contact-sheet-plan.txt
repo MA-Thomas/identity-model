@@ -1,0 +1,21 @@
+14-slide macro layout plan:
+
+1. Editorial cover with thesis and three concept rail
+2. Four-question identity map
+3. Core FEN model stack
+4. Initial biological binding workflow
+5. Binding versus continuity comparison
+6. Three trust-domain architecture
+7. Nonce and liveness freshness flow
+8. Stored versus excluded biometric evidence
+9. Evidence adapter boundary map
+10. Encrypted persistence and policy materialization flow
+11. Failure/correction as facts
+12. UX workflow implication map
+13. Rust implementation proof and next horizon
+14. Team discussion decision board
+
+Rhythm checks:
+- No more than two repeated grid-style slides.
+- No three consecutive slides share the same layout family.
+- Most slides use one primary diagram, one claim, and short supporting labels.

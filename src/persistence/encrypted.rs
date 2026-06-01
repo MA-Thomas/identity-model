@@ -1,0 +1,1724 @@
+use super::{
+    RepositoryError, StoredEpisodeMembership, StoredIdentityWorkflowSlice, StoredProblemEpisode,
+};
+use crate::fen::*;
+use crate::flows::IdentityWorkflowSlice;
+use crate::identity::AccessDecisionResult;
+use crate::materialized::{materialize_identity_state, MaterializedIdentityState};
+use crate::policy::PolicyEvaluation;
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+
+pub type AppendSequence = u64;
+pub type PersistenceTransactionId = Id;
+pub type FactEncryptionKeyId = String;
+
+pub const ENCRYPTED_FACT_AAD_PROFILE_NAME: &str = "fen-encrypted-fact";
+pub const ENCRYPTED_FACT_AAD_PROFILE_VERSION_V1: &str = "v1";
+const ENCRYPTED_FACT_SCHEMA_VERSION_V1: &str = "fact-v1";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredEncryptedFact {
+    pub append_sequence: AppendSequence,
+    pub transaction_id: PersistenceTransactionId,
+    pub committed_at: Timestamp,
+    pub fact_id: FactId,
+    pub subject_id: SubjectId,
+    pub occurred_at: TemporalAnchor,
+    pub payload_type: FactPayloadType,
+    pub status: FactStatus,
+    pub materialization_policy_refs: Vec<PolicyRef>,
+    pub encryption: FactEncryptionMetadata,
+    pub ciphertext: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FactEncryptionMetadata {
+    pub algorithm: FactEncryptionAlgorithm,
+    pub key_id: FactEncryptionKeyId,
+    pub wrapped_dek_ref: Option<String>,
+    pub nonce: Vec<u8>,
+    pub aad_version: EncryptedFactAssociatedDataVersion,
+}
+
+impl FactEncryptionMetadata {
+    pub fn deterministic_test(
+        key_id: impl Into<FactEncryptionKeyId>,
+        nonce: impl Into<Vec<u8>>,
+    ) -> Self {
+        Self {
+            algorithm: FactEncryptionAlgorithm::DeterministicTest,
+            key_id: key_id.into(),
+            wrapped_dek_ref: None,
+            nonce: nonce.into(),
+            aad_version: EncryptedFactAssociatedDataVersion::V1,
+        }
+    }
+
+    pub fn aes_256_gcm(
+        key_id: impl Into<FactEncryptionKeyId>,
+        nonce: impl Into<Vec<u8>>,
+        wrapped_dek_ref: Option<String>,
+    ) -> Self {
+        Self {
+            algorithm: FactEncryptionAlgorithm::Aes256Gcm,
+            key_id: key_id.into(),
+            wrapped_dek_ref,
+            nonce: nonce.into(),
+            aad_version: EncryptedFactAssociatedDataVersion::V1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FactEncryptionAlgorithm {
+    DeterministicTest,
+    Aes256Gcm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncryptedFactAssociatedDataVersion {
+    V1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FactPayloadType {
+    Measurement,
+    Prescription,
+    Procedure,
+    Diagnosis,
+    Document,
+    Coverage,
+    Claim,
+    SubjectCreated,
+    IdentityAttributeAsserted,
+    IdentityWitnessRecorded,
+    BiometricEnrollmentReferenceAdded,
+    BiometricContinuityCheck,
+    ContinuityVerificationRejected,
+    DeviceBindingEstablished,
+    DeviceBindingRevoked,
+    CredentialAssertion,
+    ClinicalIdentityLinkEstablished,
+    ClinicalIdentityLinkContested,
+    ClinicalIdentityLinkDisputeResolved,
+    PayerIdentityLinkEstablished,
+    PayerIdentityLinkContested,
+    PayerIdentityLinkDisputeResolved,
+    DuplicateSubjectMergeRecorded,
+    IncorrectMergeSplitRecorded,
+    IdentityWitnessSuperseded,
+    AuthorityRelationshipEstablished,
+    AuthorityRelationshipRevoked,
+    AccountRecoveryEvent,
+    RiskEvaluationEvent,
+    AccessDecision,
+}
+
+impl FactPayloadType {
+    pub fn from_payload(payload: &FactPayload) -> Self {
+        match payload {
+            FactPayload::Measurement => Self::Measurement,
+            FactPayload::Prescription => Self::Prescription,
+            FactPayload::Procedure => Self::Procedure,
+            FactPayload::Diagnosis => Self::Diagnosis,
+            FactPayload::Document => Self::Document,
+            FactPayload::Coverage => Self::Coverage,
+            FactPayload::Claim => Self::Claim,
+            FactPayload::SubjectCreated { .. } => Self::SubjectCreated,
+            FactPayload::IdentityAttributeAsserted { .. } => Self::IdentityAttributeAsserted,
+            FactPayload::IdentityWitnessRecorded { .. } => Self::IdentityWitnessRecorded,
+            FactPayload::BiometricEnrollmentReferenceAdded { .. } => {
+                Self::BiometricEnrollmentReferenceAdded
+            }
+            FactPayload::BiometricContinuityCheck { .. } => Self::BiometricContinuityCheck,
+            FactPayload::ContinuityVerificationRejected { .. } => {
+                Self::ContinuityVerificationRejected
+            }
+            FactPayload::DeviceBindingEstablished { .. } => Self::DeviceBindingEstablished,
+            FactPayload::DeviceBindingRevoked { .. } => Self::DeviceBindingRevoked,
+            FactPayload::CredentialAssertion { .. } => Self::CredentialAssertion,
+            FactPayload::ClinicalIdentityLinkEstablished { .. } => {
+                Self::ClinicalIdentityLinkEstablished
+            }
+            FactPayload::ClinicalIdentityLinkContested { .. } => {
+                Self::ClinicalIdentityLinkContested
+            }
+            FactPayload::ClinicalIdentityLinkDisputeResolved { .. } => {
+                Self::ClinicalIdentityLinkDisputeResolved
+            }
+            FactPayload::PayerIdentityLinkEstablished { .. } => Self::PayerIdentityLinkEstablished,
+            FactPayload::PayerIdentityLinkContested { .. } => Self::PayerIdentityLinkContested,
+            FactPayload::PayerIdentityLinkDisputeResolved { .. } => {
+                Self::PayerIdentityLinkDisputeResolved
+            }
+            FactPayload::DuplicateSubjectMergeRecorded { .. } => {
+                Self::DuplicateSubjectMergeRecorded
+            }
+            FactPayload::IncorrectMergeSplitRecorded { .. } => Self::IncorrectMergeSplitRecorded,
+            FactPayload::IdentityWitnessSuperseded { .. } => Self::IdentityWitnessSuperseded,
+            FactPayload::AuthorityRelationshipEstablished { .. } => {
+                Self::AuthorityRelationshipEstablished
+            }
+            FactPayload::AuthorityRelationshipRevoked { .. } => Self::AuthorityRelationshipRevoked,
+            FactPayload::AccountRecoveryEvent { .. } => Self::AccountRecoveryEvent,
+            FactPayload::RiskEvaluationEvent { .. } => Self::RiskEvaluationEvent,
+            FactPayload::AccessDecision { .. } => Self::AccessDecision,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Measurement => "measurement",
+            Self::Prescription => "prescription",
+            Self::Procedure => "procedure",
+            Self::Diagnosis => "diagnosis",
+            Self::Document => "document",
+            Self::Coverage => "coverage",
+            Self::Claim => "claim",
+            Self::SubjectCreated => "subject_created",
+            Self::IdentityAttributeAsserted => "identity_attribute_asserted",
+            Self::IdentityWitnessRecorded => "identity_witness_recorded",
+            Self::BiometricEnrollmentReferenceAdded => "biometric_enrollment_reference_added",
+            Self::BiometricContinuityCheck => "biometric_continuity_check",
+            Self::ContinuityVerificationRejected => "continuity_verification_rejected",
+            Self::DeviceBindingEstablished => "device_binding_established",
+            Self::DeviceBindingRevoked => "device_binding_revoked",
+            Self::CredentialAssertion => "credential_assertion",
+            Self::ClinicalIdentityLinkEstablished => "clinical_identity_link_established",
+            Self::ClinicalIdentityLinkContested => "clinical_identity_link_contested",
+            Self::ClinicalIdentityLinkDisputeResolved => "clinical_identity_link_dispute_resolved",
+            Self::PayerIdentityLinkEstablished => "payer_identity_link_established",
+            Self::PayerIdentityLinkContested => "payer_identity_link_contested",
+            Self::PayerIdentityLinkDisputeResolved => "payer_identity_link_dispute_resolved",
+            Self::DuplicateSubjectMergeRecorded => "duplicate_subject_merge_recorded",
+            Self::IncorrectMergeSplitRecorded => "incorrect_merge_split_recorded",
+            Self::IdentityWitnessSuperseded => "identity_witness_superseded",
+            Self::AuthorityRelationshipEstablished => "authority_relationship_established",
+            Self::AuthorityRelationshipRevoked => "authority_relationship_revoked",
+            Self::AccountRecoveryEvent => "account_recovery_event",
+            Self::RiskEvaluationEvent => "risk_evaluation_event",
+            Self::AccessDecision => "access_decision",
+        }
+    }
+
+    pub fn from_str_label(value: &str) -> Option<Self> {
+        let payload_type = match value {
+            "measurement" => Self::Measurement,
+            "prescription" => Self::Prescription,
+            "procedure" => Self::Procedure,
+            "diagnosis" => Self::Diagnosis,
+            "document" => Self::Document,
+            "coverage" => Self::Coverage,
+            "claim" => Self::Claim,
+            "subject_created" => Self::SubjectCreated,
+            "identity_attribute_asserted" => Self::IdentityAttributeAsserted,
+            "identity_witness_recorded" => Self::IdentityWitnessRecorded,
+            "biometric_enrollment_reference_added" => Self::BiometricEnrollmentReferenceAdded,
+            "biometric_continuity_check" => Self::BiometricContinuityCheck,
+            "continuity_verification_rejected" => Self::ContinuityVerificationRejected,
+            "device_binding_established" => Self::DeviceBindingEstablished,
+            "device_binding_revoked" => Self::DeviceBindingRevoked,
+            "credential_assertion" => Self::CredentialAssertion,
+            "clinical_identity_link_established" => Self::ClinicalIdentityLinkEstablished,
+            "clinical_identity_link_contested" => Self::ClinicalIdentityLinkContested,
+            "clinical_identity_link_dispute_resolved" => Self::ClinicalIdentityLinkDisputeResolved,
+            "payer_identity_link_established" => Self::PayerIdentityLinkEstablished,
+            "payer_identity_link_contested" => Self::PayerIdentityLinkContested,
+            "payer_identity_link_dispute_resolved" => Self::PayerIdentityLinkDisputeResolved,
+            "duplicate_subject_merge_recorded" => Self::DuplicateSubjectMergeRecorded,
+            "incorrect_merge_split_recorded" => Self::IncorrectMergeSplitRecorded,
+            "identity_witness_superseded" => Self::IdentityWitnessSuperseded,
+            "authority_relationship_established" => Self::AuthorityRelationshipEstablished,
+            "authority_relationship_revoked" => Self::AuthorityRelationshipRevoked,
+            "account_recovery_event" => Self::AccountRecoveryEvent,
+            "risk_evaluation_event" => Self::RiskEvaluationEvent,
+            "access_decision" => Self::AccessDecision,
+            _ => return None,
+        };
+        Some(payload_type)
+    }
+}
+
+impl FactEncryptionAlgorithm {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DeterministicTest => "deterministic_test",
+            Self::Aes256Gcm => "aes_256_gcm",
+        }
+    }
+
+    pub fn from_str_label(value: &str) -> Option<Self> {
+        match value {
+            "deterministic_test" => Some(Self::DeterministicTest),
+            "aes_256_gcm" => Some(Self::Aes256Gcm),
+            _ => None,
+        }
+    }
+}
+
+impl EncryptedFactAssociatedDataVersion {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::V1 => "v1",
+        }
+    }
+
+    pub fn from_str_label(value: &str) -> Option<Self> {
+        match value {
+            "v1" => Some(Self::V1),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncryptedFactPlaintext {
+    pub code: Option<CodedValue>,
+    pub payload: FactPayload,
+    pub provenance: Provenance,
+    pub external_refs: Vec<ExternalRef>,
+}
+
+impl EncryptedFactPlaintext {
+    pub fn from_fact(fact: &Fact) -> Self {
+        Self {
+            code: fact.code.clone(),
+            payload: fact.payload.clone(),
+            provenance: fact.provenance.clone(),
+            external_refs: fact.external_refs.clone(),
+        }
+    }
+
+    pub fn into_fact(self, envelope: &StoredEncryptedFact) -> Fact {
+        Fact {
+            id: envelope.fact_id.clone(),
+            subject_id: envelope.subject_id.clone(),
+            occurred_at: envelope.occurred_at.clone(),
+            code: self.code,
+            payload: self.payload,
+            status: envelope.status.clone(),
+            provenance: self.provenance,
+            external_refs: self.external_refs,
+        }
+    }
+}
+
+pub trait EncryptedFactPlaintextCodec {
+    fn encode_fact_plaintext(&self, plaintext: &EncryptedFactPlaintext) -> Vec<u8>;
+
+    fn decode_fact_plaintext(
+        &self,
+        encoded: &[u8],
+    ) -> Result<EncryptedFactPlaintext, FactMaterializationError>;
+}
+
+#[derive(Debug, Default)]
+pub struct InMemoryEncryptedFactPlaintextCodec {
+    plaintexts_by_encoded_bytes: RefCell<BTreeMap<Vec<u8>, EncryptedFactPlaintext>>,
+}
+
+impl InMemoryEncryptedFactPlaintextCodec {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl EncryptedFactPlaintextCodec for InMemoryEncryptedFactPlaintextCodec {
+    fn encode_fact_plaintext(&self, plaintext: &EncryptedFactPlaintext) -> Vec<u8> {
+        let encoded = format!("{plaintext:?}").into_bytes();
+        self.plaintexts_by_encoded_bytes
+            .borrow_mut()
+            .insert(encoded.clone(), plaintext.clone());
+        encoded
+    }
+
+    fn decode_fact_plaintext(
+        &self,
+        encoded: &[u8],
+    ) -> Result<EncryptedFactPlaintext, FactMaterializationError> {
+        self.plaintexts_by_encoded_bytes
+            .borrow()
+            .get(encoded)
+            .cloned()
+            .ok_or(FactMaterializationError::PlaintextDecodeFailed)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FactDataEncryptionKey {
+    pub key_id: FactEncryptionKeyId,
+    pub key_material: Vec<u8>,
+    pub status: FactKeyStatus,
+}
+
+impl FactDataEncryptionKey {
+    pub fn active(
+        key_id: impl Into<FactEncryptionKeyId>,
+        key_material: impl Into<Vec<u8>>,
+    ) -> Self {
+        Self {
+            key_id: key_id.into(),
+            key_material: key_material.into(),
+            status: FactKeyStatus::Active,
+        }
+    }
+
+    pub fn retired(
+        key_id: impl Into<FactEncryptionKeyId>,
+        key_material: impl Into<Vec<u8>>,
+    ) -> Self {
+        Self {
+            key_id: key_id.into(),
+            key_material: key_material.into(),
+            status: FactKeyStatus::Retired,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FactKeyStatus {
+    Active,
+    Retired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FactKeyAccessError {
+    MissingKey,
+}
+
+pub trait FactKeyResolver {
+    fn resolve_fact_key(
+        &self,
+        key_id: &FactEncryptionKeyId,
+    ) -> Result<FactDataEncryptionKey, FactKeyAccessError>;
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StaticFactKeyResolver {
+    keys_by_id: BTreeMap<FactEncryptionKeyId, FactDataEncryptionKey>,
+}
+
+impl StaticFactKeyResolver {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn from_keys(keys: impl IntoIterator<Item = FactDataEncryptionKey>) -> Self {
+        let mut resolver = Self::new();
+        for key in keys {
+            resolver.register(key);
+        }
+        resolver
+    }
+
+    pub fn register(&mut self, key: FactDataEncryptionKey) {
+        self.keys_by_id.insert(key.key_id.clone(), key);
+    }
+}
+
+impl FactKeyResolver for StaticFactKeyResolver {
+    fn resolve_fact_key(
+        &self,
+        key_id: &FactEncryptionKeyId,
+    ) -> Result<FactDataEncryptionKey, FactKeyAccessError> {
+        self.keys_by_id
+            .get(key_id)
+            .cloned()
+            .ok_or(FactKeyAccessError::MissingKey)
+    }
+}
+
+pub trait FactPayloadEncryptor {
+    fn encrypt_fact_plaintext(
+        &self,
+        key: &FactDataEncryptionKey,
+        encryption: &FactEncryptionMetadata,
+        associated_data: &[u8],
+        plaintext: &EncryptedFactPlaintext,
+    ) -> Result<Vec<u8>, FactEncryptionError>;
+
+    fn decrypt_fact_plaintext(
+        &self,
+        key: &FactDataEncryptionKey,
+        encryption: &FactEncryptionMetadata,
+        associated_data: &[u8],
+        ciphertext: &[u8],
+    ) -> Result<EncryptedFactPlaintext, FactMaterializationError>;
+}
+
+#[derive(Debug)]
+pub struct DeterministicTestFactEncryptor<C = InMemoryEncryptedFactPlaintextCodec> {
+    codec: C,
+}
+
+impl DeterministicTestFactEncryptor<InMemoryEncryptedFactPlaintextCodec> {
+    pub fn new() -> Self {
+        Self::with_codec(InMemoryEncryptedFactPlaintextCodec::new())
+    }
+}
+
+impl Default for DeterministicTestFactEncryptor<InMemoryEncryptedFactPlaintextCodec> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<C> DeterministicTestFactEncryptor<C> {
+    pub fn with_codec(codec: C) -> Self {
+        Self { codec }
+    }
+
+    fn authentication_tag(
+        key: &FactDataEncryptionKey,
+        encryption: &FactEncryptionMetadata,
+        associated_data: &[u8],
+        encoded_plaintext: &[u8],
+    ) -> u64 {
+        fnv64([
+            key.key_id.as_bytes(),
+            key.key_material.as_slice(),
+            encryption.nonce.as_slice(),
+            associated_data,
+            encoded_plaintext,
+        ])
+    }
+}
+
+impl<C: EncryptedFactPlaintextCodec> FactPayloadEncryptor for DeterministicTestFactEncryptor<C> {
+    fn encrypt_fact_plaintext(
+        &self,
+        key: &FactDataEncryptionKey,
+        encryption: &FactEncryptionMetadata,
+        associated_data: &[u8],
+        plaintext: &EncryptedFactPlaintext,
+    ) -> Result<Vec<u8>, FactEncryptionError> {
+        if encryption.algorithm != FactEncryptionAlgorithm::DeterministicTest {
+            return Err(FactEncryptionError::UnsupportedAlgorithm);
+        }
+
+        let encoded_plaintext = self.codec.encode_fact_plaintext(plaintext);
+        let tag = Self::authentication_tag(key, encryption, associated_data, &encoded_plaintext);
+        let mut ciphertext = Vec::new();
+        push_bytes(&mut ciphertext, b"fen-deterministic-test-encrypted-fact");
+        push_bytes(&mut ciphertext, encryption.nonce.as_slice());
+        push_u64(&mut ciphertext, tag);
+        push_bytes(&mut ciphertext, &encoded_plaintext);
+        Ok(ciphertext)
+    }
+
+    fn decrypt_fact_plaintext(
+        &self,
+        key: &FactDataEncryptionKey,
+        encryption: &FactEncryptionMetadata,
+        associated_data: &[u8],
+        ciphertext: &[u8],
+    ) -> Result<EncryptedFactPlaintext, FactMaterializationError> {
+        if encryption.algorithm != FactEncryptionAlgorithm::DeterministicTest {
+            return Err(FactMaterializationError::UnsupportedAlgorithm);
+        }
+
+        let mut reader = CiphertextReader::new(ciphertext);
+        let header = reader.read_bytes()?;
+        if header != b"fen-deterministic-test-encrypted-fact" {
+            return Err(FactMaterializationError::AuthenticationFailed);
+        }
+        let nonce = reader.read_bytes()?;
+        if nonce != encryption.nonce {
+            return Err(FactMaterializationError::AuthenticationFailed);
+        }
+        let observed_tag = reader.read_u64()?;
+        let encoded_plaintext = reader.read_bytes()?;
+        if !reader.is_finished() {
+            return Err(FactMaterializationError::AuthenticationFailed);
+        }
+
+        let expected_tag =
+            Self::authentication_tag(key, encryption, associated_data, &encoded_plaintext);
+        if observed_tag != expected_tag {
+            return Err(FactMaterializationError::AuthenticationFailed);
+        }
+
+        self.codec.decode_fact_plaintext(&encoded_plaintext)
+    }
+}
+
+#[cfg(feature = "production-crypto")]
+#[derive(Debug)]
+pub struct RingAes256GcmFactEncryptor<C = InMemoryEncryptedFactPlaintextCodec> {
+    codec: C,
+}
+
+#[cfg(feature = "production-crypto")]
+impl RingAes256GcmFactEncryptor<InMemoryEncryptedFactPlaintextCodec> {
+    pub fn new() -> Self {
+        Self::with_codec(InMemoryEncryptedFactPlaintextCodec::new())
+    }
+}
+
+#[cfg(feature = "production-crypto")]
+impl Default for RingAes256GcmFactEncryptor<InMemoryEncryptedFactPlaintextCodec> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "production-crypto")]
+impl<C> RingAes256GcmFactEncryptor<C> {
+    pub fn with_codec(codec: C) -> Self {
+        Self { codec }
+    }
+}
+
+#[cfg(feature = "production-crypto")]
+impl<C: EncryptedFactPlaintextCodec> FactPayloadEncryptor for RingAes256GcmFactEncryptor<C> {
+    fn encrypt_fact_plaintext(
+        &self,
+        key: &FactDataEncryptionKey,
+        encryption: &FactEncryptionMetadata,
+        associated_data: &[u8],
+        plaintext: &EncryptedFactPlaintext,
+    ) -> Result<Vec<u8>, FactEncryptionError> {
+        if encryption.algorithm != FactEncryptionAlgorithm::Aes256Gcm {
+            return Err(FactEncryptionError::UnsupportedAlgorithm);
+        }
+        if key.key_material.len() != 32 {
+            return Err(FactEncryptionError::InvalidKeyMaterial);
+        }
+        if encryption.nonce.len() != 12 {
+            return Err(FactEncryptionError::InvalidNonce);
+        }
+
+        let unbound_key =
+            ring::aead::UnboundKey::new(&ring::aead::AES_256_GCM, key.key_material.as_slice())
+                .map_err(|_| FactEncryptionError::InvalidKeyMaterial)?;
+        let sealing_key = ring::aead::LessSafeKey::new(unbound_key);
+        let nonce = ring::aead::Nonce::try_assume_unique_for_key(encryption.nonce.as_slice())
+            .map_err(|_| FactEncryptionError::InvalidNonce)?;
+        let mut in_out = self.codec.encode_fact_plaintext(plaintext);
+        sealing_key
+            .seal_in_place_append_tag(nonce, ring::aead::Aad::from(associated_data), &mut in_out)
+            .map_err(|_| FactEncryptionError::EncryptionFailed)?;
+        Ok(in_out)
+    }
+
+    fn decrypt_fact_plaintext(
+        &self,
+        key: &FactDataEncryptionKey,
+        encryption: &FactEncryptionMetadata,
+        associated_data: &[u8],
+        ciphertext: &[u8],
+    ) -> Result<EncryptedFactPlaintext, FactMaterializationError> {
+        if encryption.algorithm != FactEncryptionAlgorithm::Aes256Gcm {
+            return Err(FactMaterializationError::UnsupportedAlgorithm);
+        }
+        if key.key_material.len() != 32 {
+            return Err(FactMaterializationError::InvalidKeyMaterial);
+        }
+        if encryption.nonce.len() != 12 {
+            return Err(FactMaterializationError::InvalidNonce);
+        }
+
+        let unbound_key =
+            ring::aead::UnboundKey::new(&ring::aead::AES_256_GCM, key.key_material.as_slice())
+                .map_err(|_| FactMaterializationError::InvalidKeyMaterial)?;
+        let opening_key = ring::aead::LessSafeKey::new(unbound_key);
+        let nonce = ring::aead::Nonce::try_assume_unique_for_key(encryption.nonce.as_slice())
+            .map_err(|_| FactMaterializationError::InvalidNonce)?;
+        let mut in_out = ciphertext.to_vec();
+        let encoded_plaintext = opening_key
+            .open_in_place(nonce, ring::aead::Aad::from(associated_data), &mut in_out)
+            .map_err(|_| FactMaterializationError::AuthenticationFailed)?;
+        self.codec.decode_fact_plaintext(encoded_plaintext)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FactEncryptionError {
+    KeyIdMismatch,
+    KeyNotActive,
+    UnsupportedAlgorithm,
+    InvalidKeyMaterial,
+    InvalidNonce,
+    EncryptionFailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FactMaterializationError {
+    PolicyDenied,
+    MaterializationPolicyRefsNotSatisfied,
+    MissingKey,
+    RetiredKey,
+    AuthenticationFailed,
+    PlaintextDecodeFailed,
+    UnsupportedAlgorithm,
+    InvalidKeyMaterial,
+    InvalidNonce,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FactMaterializationAuditOutcome {
+    Attempted,
+    PolicyDenied,
+    KeyAccessAttempted,
+    KeyAccessSucceeded,
+    KeyAccessFailed,
+    DecryptionAttempted,
+    DecryptionFailed,
+    Succeeded,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FactMaterializationAuditContext {
+    pub caller: Option<String>,
+    pub purpose: Option<String>,
+    pub requested_at: Option<Timestamp>,
+}
+
+impl FactMaterializationAuditContext {
+    pub fn new(
+        caller: Option<String>,
+        purpose: Option<String>,
+        requested_at: Option<Timestamp>,
+    ) -> Self {
+        Self {
+            caller,
+            purpose,
+            requested_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FactMaterializationAuditEvent {
+    pub subject_id: SubjectId,
+    pub fact_ids: Vec<FactId>,
+    pub materialization_policy_refs: Vec<PolicyRef>,
+    pub evaluated_policy_refs: Vec<PolicyRef>,
+    pub caller: Option<String>,
+    pub purpose: Option<String>,
+    pub requested_at: Option<Timestamp>,
+    pub outcome: FactMaterializationAuditOutcome,
+    pub error: Option<FactMaterializationError>,
+}
+
+pub trait FactMaterializationAuditSink {
+    fn record_materialization_event(&mut self, event: FactMaterializationAuditEvent);
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InMemoryFactMaterializationAuditLog {
+    events: Vec<FactMaterializationAuditEvent>,
+}
+
+impl InMemoryFactMaterializationAuditLog {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn events(&self) -> Vec<FactMaterializationAuditEvent> {
+        self.events.clone()
+    }
+}
+
+impl FactMaterializationAuditSink for InMemoryFactMaterializationAuditLog {
+    fn record_materialization_event(&mut self, event: FactMaterializationAuditEvent) {
+        self.events.push(event);
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NoopFactMaterializationAuditSink;
+
+impl FactMaterializationAuditSink for NoopFactMaterializationAuditSink {
+    fn record_materialization_event(&mut self, _event: FactMaterializationAuditEvent) {}
+}
+
+pub trait EncryptedFactRepository {
+    fn append_encrypted_fact(
+        &mut self,
+        envelope: StoredEncryptedFact,
+    ) -> Result<(), RepositoryError>;
+    fn all_encrypted_facts(&self) -> Vec<StoredEncryptedFact>;
+    fn encrypted_facts_for_subject(&self, subject_id: &SubjectId) -> Vec<StoredEncryptedFact>;
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InMemoryEncryptedFactRepository {
+    encrypted_facts: Vec<StoredEncryptedFact>,
+}
+
+impl InMemoryEncryptedFactRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl EncryptedFactRepository for InMemoryEncryptedFactRepository {
+    fn append_encrypted_fact(
+        &mut self,
+        envelope: StoredEncryptedFact,
+    ) -> Result<(), RepositoryError> {
+        if self
+            .encrypted_facts
+            .iter()
+            .any(|existing| existing.fact_id == envelope.fact_id)
+        {
+            return Err(RepositoryError::DuplicateFactId);
+        }
+        if self
+            .encrypted_facts
+            .iter()
+            .any(|existing| existing.append_sequence == envelope.append_sequence)
+        {
+            return Err(RepositoryError::DuplicateAppendSequence);
+        }
+
+        self.encrypted_facts.push(envelope);
+        self.encrypted_facts
+            .sort_by_key(|envelope| envelope.append_sequence);
+        Ok(())
+    }
+
+    fn all_encrypted_facts(&self) -> Vec<StoredEncryptedFact> {
+        self.encrypted_facts.clone()
+    }
+
+    fn encrypted_facts_for_subject(&self, subject_id: &SubjectId) -> Vec<StoredEncryptedFact> {
+        self.encrypted_facts
+            .iter()
+            .filter(|envelope| &envelope.subject_id == subject_id)
+            .cloned()
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncryptionAwareWorkflowRepository<R, M, E> {
+    storage: R,
+    metadata_planner: M,
+    encryptor: E,
+    key: FactDataEncryptionKey,
+    materialization_policy_refs: Vec<PolicyRef>,
+    sequence_state: EncryptedWorkflowAppendSequenceState,
+}
+
+impl<R, M, E> EncryptionAwareWorkflowRepository<R, M, E> {
+    pub fn new(
+        storage: R,
+        metadata_planner: M,
+        encryptor: E,
+        key: FactDataEncryptionKey,
+        materialization_policy_refs: Vec<PolicyRef>,
+        sequence_state: EncryptedWorkflowAppendSequenceState,
+    ) -> Self {
+        Self {
+            storage,
+            metadata_planner,
+            encryptor,
+            key,
+            materialization_policy_refs,
+            sequence_state,
+        }
+    }
+
+    pub fn storage(&self) -> &R {
+        &self.storage
+    }
+
+    pub fn storage_mut(&mut self) -> &mut R {
+        &mut self.storage
+    }
+
+    pub fn sequence_state(&self) -> EncryptedWorkflowAppendSequenceState {
+        self.sequence_state
+    }
+}
+
+impl<R, M, E> EncryptionAwareWorkflowRepository<R, M, E>
+where
+    R: StoredEncryptedWorkflowRepository,
+    M: FactEncryptionMetadataPlanner,
+    E: FactPayloadEncryptor,
+{
+    pub fn append_workflow_slice(
+        &mut self,
+        slice: IdentityWorkflowSlice,
+        transaction_id: PersistenceTransactionId,
+        committed_at: Timestamp,
+    ) -> Result<StoredIdentityWorkflowSlice, EncryptionAwareWorkflowRepositoryError> {
+        let sequence_plan = self.sequence_state.plan_for_slice(&slice);
+        let stored = build_stored_encrypted_workflow_slice(
+            slice,
+            transaction_id,
+            committed_at,
+            &sequence_plan,
+            self.materialization_policy_refs.clone(),
+            &self.key,
+            &mut self.metadata_planner,
+            &self.encryptor,
+        )?;
+
+        self.storage
+            .append_stored_workflow_slice(stored.clone())
+            .map_err(EncryptionAwareWorkflowRepositoryError::Repository)?;
+        self.sequence_state.advance_by_plan(&sequence_plan);
+
+        Ok(stored)
+    }
+
+    pub fn materialize_subject_facts(
+        &self,
+        subject_id: &SubjectId,
+        policy_evaluation: &PolicyEvaluation,
+        key_resolver: &impl FactKeyResolver,
+    ) -> Result<Vec<Fact>, FactMaterializationError> {
+        materialize_encrypted_facts(
+            &self.storage.encrypted_facts_for_subject(subject_id),
+            policy_evaluation,
+            key_resolver,
+            &self.encryptor,
+        )
+    }
+
+    pub fn replay_identity_state(
+        &self,
+        subject_id: SubjectId,
+        policy_evaluation: &PolicyEvaluation,
+        key_resolver: &impl FactKeyResolver,
+    ) -> Result<MaterializedIdentityState, FactMaterializationError> {
+        let facts = self.materialize_subject_facts(&subject_id, policy_evaluation, key_resolver)?;
+        Ok(materialize_identity_state(subject_id, &facts))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EncryptedWorkflowAppendSequenceState {
+    pub next_fact_append_sequence: AppendSequence,
+    pub next_episode_append_sequence: AppendSequence,
+    pub next_membership_append_sequence: AppendSequence,
+}
+
+impl EncryptedWorkflowAppendSequenceState {
+    pub fn new(
+        next_fact_append_sequence: AppendSequence,
+        next_episode_append_sequence: AppendSequence,
+        next_membership_append_sequence: AppendSequence,
+    ) -> Self {
+        Self {
+            next_fact_append_sequence,
+            next_episode_append_sequence,
+            next_membership_append_sequence,
+        }
+    }
+
+    pub fn plan_for_slice(
+        &self,
+        slice: &IdentityWorkflowSlice,
+    ) -> EncryptedWorkflowAppendSequencePlan {
+        EncryptedWorkflowAppendSequencePlan {
+            fact_append_sequence_start: self.next_fact_append_sequence,
+            episode_append_sequence: self.next_episode_append_sequence,
+            membership_append_sequence_start: self.next_membership_append_sequence,
+            fact_count: slice.facts.len(),
+            membership_count: slice.memberships.len(),
+        }
+    }
+
+    pub fn advance_by_plan(&mut self, plan: &EncryptedWorkflowAppendSequencePlan) {
+        self.next_fact_append_sequence += plan.fact_count as AppendSequence;
+        self.next_episode_append_sequence += 1;
+        self.next_membership_append_sequence += plan.membership_count as AppendSequence;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EncryptedWorkflowAppendSequencePlan {
+    pub fact_append_sequence_start: AppendSequence,
+    pub episode_append_sequence: AppendSequence,
+    pub membership_append_sequence_start: AppendSequence,
+    pub fact_count: usize,
+    pub membership_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EncryptionAwareWorkflowRepositoryError {
+    Encryption(FactEncryptionError),
+    Repository(RepositoryError),
+}
+
+impl From<FactEncryptionError> for EncryptionAwareWorkflowRepositoryError {
+    fn from(error: FactEncryptionError) -> Self {
+        Self::Encryption(error)
+    }
+}
+
+pub trait FactEncryptionMetadataPlanner {
+    fn metadata_for_fact(
+        &mut self,
+        fact: &Fact,
+        append_sequence: AppendSequence,
+    ) -> FactEncryptionMetadata;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeterministicTestFactEncryptionMetadataPlanner {
+    key_id: FactEncryptionKeyId,
+    nonce_prefix: String,
+}
+
+impl DeterministicTestFactEncryptionMetadataPlanner {
+    pub fn new(key_id: impl Into<FactEncryptionKeyId>, nonce_prefix: impl Into<String>) -> Self {
+        Self {
+            key_id: key_id.into(),
+            nonce_prefix: nonce_prefix.into(),
+        }
+    }
+}
+
+impl FactEncryptionMetadataPlanner for DeterministicTestFactEncryptionMetadataPlanner {
+    fn metadata_for_fact(
+        &mut self,
+        fact: &Fact,
+        append_sequence: AppendSequence,
+    ) -> FactEncryptionMetadata {
+        FactEncryptionMetadata::deterministic_test(
+            self.key_id.clone(),
+            format!("{}:{}:{}", self.nonce_prefix, append_sequence, fact.id.0).into_bytes(),
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Aes256GcmFactEncryptionMetadataPlanner {
+    key_id: FactEncryptionKeyId,
+    nonce_domain: [u8; 4],
+    wrapped_dek_ref: Option<String>,
+}
+
+impl Aes256GcmFactEncryptionMetadataPlanner {
+    pub fn new(
+        key_id: impl Into<FactEncryptionKeyId>,
+        nonce_domain: [u8; 4],
+        wrapped_dek_ref: Option<String>,
+    ) -> Self {
+        Self {
+            key_id: key_id.into(),
+            nonce_domain,
+            wrapped_dek_ref,
+        }
+    }
+}
+
+impl FactEncryptionMetadataPlanner for Aes256GcmFactEncryptionMetadataPlanner {
+    fn metadata_for_fact(
+        &mut self,
+        _fact: &Fact,
+        append_sequence: AppendSequence,
+    ) -> FactEncryptionMetadata {
+        let mut nonce = Vec::with_capacity(12);
+        nonce.extend_from_slice(&self.nonce_domain);
+        nonce.extend_from_slice(&append_sequence.to_be_bytes());
+        FactEncryptionMetadata::aes_256_gcm(
+            self.key_id.clone(),
+            nonce,
+            self.wrapped_dek_ref.clone(),
+        )
+    }
+}
+
+pub trait StoredEncryptedWorkflowRepository {
+    fn append_stored_workflow_slice(
+        &mut self,
+        workflow_slice: StoredIdentityWorkflowSlice,
+    ) -> Result<(), RepositoryError>;
+    fn encrypted_facts_for_subject(&self, subject_id: &SubjectId) -> Vec<StoredEncryptedFact>;
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InMemoryStoredEncryptedWorkflowRepository {
+    workflow_slices: Vec<StoredIdentityWorkflowSlice>,
+}
+
+impl InMemoryStoredEncryptedWorkflowRepository {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn workflow_slices(&self) -> Vec<StoredIdentityWorkflowSlice> {
+        self.workflow_slices.clone()
+    }
+
+    pub fn all_encrypted_facts(&self) -> Vec<StoredEncryptedFact> {
+        let mut facts: Vec<StoredEncryptedFact> = self
+            .workflow_slices
+            .iter()
+            .flat_map(|slice| slice.encrypted_facts.clone())
+            .collect();
+        facts.sort_by_key(|fact| fact.append_sequence);
+        facts
+    }
+}
+
+impl StoredEncryptedWorkflowRepository for InMemoryStoredEncryptedWorkflowRepository {
+    fn append_stored_workflow_slice(
+        &mut self,
+        workflow_slice: StoredIdentityWorkflowSlice,
+    ) -> Result<(), RepositoryError> {
+        self.validate_workflow_slice_append(&workflow_slice)?;
+        self.workflow_slices.push(workflow_slice);
+        Ok(())
+    }
+
+    fn encrypted_facts_for_subject(&self, subject_id: &SubjectId) -> Vec<StoredEncryptedFact> {
+        self.all_encrypted_facts()
+            .into_iter()
+            .filter(|fact| &fact.subject_id == subject_id)
+            .collect()
+    }
+}
+
+impl InMemoryStoredEncryptedWorkflowRepository {
+    fn validate_workflow_slice_append(
+        &self,
+        workflow_slice: &StoredIdentityWorkflowSlice,
+    ) -> Result<(), RepositoryError> {
+        let existing_episodes = self.workflow_slices.iter().map(|slice| &slice.episode);
+        if existing_episodes
+            .into_iter()
+            .any(|existing| existing.episode.id == workflow_slice.episode.episode.id)
+        {
+            return Err(RepositoryError::DuplicateEpisodeId);
+        }
+
+        for (index, fact) in workflow_slice.encrypted_facts.iter().enumerate() {
+            if self
+                .workflow_slices
+                .iter()
+                .flat_map(|slice| &slice.encrypted_facts)
+                .any(|existing| existing.fact_id == fact.fact_id)
+                || workflow_slice.encrypted_facts[..index]
+                    .iter()
+                    .any(|existing| existing.fact_id == fact.fact_id)
+            {
+                return Err(RepositoryError::DuplicateFactId);
+            }
+            if self
+                .workflow_slices
+                .iter()
+                .flat_map(|slice| &slice.encrypted_facts)
+                .any(|existing| existing.append_sequence == fact.append_sequence)
+                || workflow_slice.encrypted_facts[..index]
+                    .iter()
+                    .any(|existing| existing.append_sequence == fact.append_sequence)
+            {
+                return Err(RepositoryError::DuplicateAppendSequence);
+            }
+        }
+
+        for (index, membership) in workflow_slice.memberships.iter().enumerate() {
+            if self
+                .workflow_slices
+                .iter()
+                .flat_map(|slice| &slice.memberships)
+                .any(|existing| existing.membership.id == membership.membership.id)
+                || workflow_slice.memberships[..index]
+                    .iter()
+                    .any(|existing| existing.membership.id == membership.membership.id)
+            {
+                return Err(RepositoryError::DuplicateMembershipId);
+            }
+            if self
+                .workflow_slices
+                .iter()
+                .flat_map(|slice| &slice.memberships)
+                .any(|existing| existing.append_sequence == membership.append_sequence)
+                || workflow_slice.memberships[..index]
+                    .iter()
+                    .any(|existing| existing.append_sequence == membership.append_sequence)
+            {
+                return Err(RepositoryError::DuplicateAppendSequence);
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub fn encrypt_fact_envelope(
+    fact: &Fact,
+    append_sequence: AppendSequence,
+    transaction_id: PersistenceTransactionId,
+    committed_at: Timestamp,
+    materialization_policy_refs: Vec<PolicyRef>,
+    encryption: FactEncryptionMetadata,
+    key: &FactDataEncryptionKey,
+    encryptor: &impl FactPayloadEncryptor,
+) -> Result<StoredEncryptedFact, FactEncryptionError> {
+    if encryption.key_id != key.key_id {
+        return Err(FactEncryptionError::KeyIdMismatch);
+    }
+    if key.status != FactKeyStatus::Active {
+        return Err(FactEncryptionError::KeyNotActive);
+    }
+
+    let mut envelope = StoredEncryptedFact {
+        append_sequence,
+        transaction_id,
+        committed_at,
+        fact_id: fact.id.clone(),
+        subject_id: fact.subject_id.clone(),
+        occurred_at: fact.occurred_at.clone(),
+        payload_type: FactPayloadType::from_payload(&fact.payload),
+        status: fact.status.clone(),
+        materialization_policy_refs,
+        encryption,
+        ciphertext: Vec::new(),
+    };
+    let associated_data = canonical_encrypted_fact_associated_data(&envelope);
+    let plaintext = EncryptedFactPlaintext::from_fact(fact);
+    envelope.ciphertext = encryptor.encrypt_fact_plaintext(
+        key,
+        &envelope.encryption,
+        &associated_data,
+        &plaintext,
+    )?;
+    Ok(envelope)
+}
+
+pub fn build_stored_encrypted_workflow_slice(
+    slice: IdentityWorkflowSlice,
+    transaction_id: PersistenceTransactionId,
+    committed_at: Timestamp,
+    sequence_plan: &EncryptedWorkflowAppendSequencePlan,
+    materialization_policy_refs: Vec<PolicyRef>,
+    key: &FactDataEncryptionKey,
+    metadata_planner: &mut impl FactEncryptionMetadataPlanner,
+    encryptor: &impl FactPayloadEncryptor,
+) -> Result<StoredIdentityWorkflowSlice, FactEncryptionError> {
+    let encrypted_facts = slice
+        .facts
+        .iter()
+        .enumerate()
+        .map(|(index, fact)| {
+            let append_sequence =
+                sequence_plan.fact_append_sequence_start + index as AppendSequence;
+            let encryption = metadata_planner.metadata_for_fact(fact, append_sequence);
+            encrypt_fact_envelope(
+                fact,
+                append_sequence,
+                transaction_id.clone(),
+                committed_at.clone(),
+                materialization_policy_refs.clone(),
+                encryption,
+                key,
+                encryptor,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let memberships = slice
+        .memberships
+        .into_iter()
+        .enumerate()
+        .map(|(index, membership)| StoredEpisodeMembership {
+            append_sequence: sequence_plan.membership_append_sequence_start
+                + index as AppendSequence,
+            transaction_id: transaction_id.clone(),
+            committed_at: committed_at.clone(),
+            membership,
+        })
+        .collect();
+
+    Ok(StoredIdentityWorkflowSlice {
+        transaction_id: transaction_id.clone(),
+        committed_at: committed_at.clone(),
+        episode: StoredProblemEpisode {
+            append_sequence: sequence_plan.episode_append_sequence,
+            transaction_id,
+            committed_at,
+            episode: slice.episode,
+        },
+        encrypted_facts,
+        memberships,
+    })
+}
+
+pub fn materialize_encrypted_fact(
+    envelope: &StoredEncryptedFact,
+    policy_evaluation: &PolicyEvaluation,
+    key_resolver: &impl FactKeyResolver,
+    encryptor: &impl FactPayloadEncryptor,
+) -> Result<Fact, FactMaterializationError> {
+    let mut audit_sink = NoopFactMaterializationAuditSink;
+    materialize_encrypted_fact_with_audit(
+        envelope,
+        policy_evaluation,
+        key_resolver,
+        encryptor,
+        &FactMaterializationAuditContext::default(),
+        &mut audit_sink,
+    )
+}
+
+pub fn materialize_encrypted_fact_with_audit(
+    envelope: &StoredEncryptedFact,
+    policy_evaluation: &PolicyEvaluation,
+    key_resolver: &impl FactKeyResolver,
+    encryptor: &impl FactPayloadEncryptor,
+    audit_context: &FactMaterializationAuditContext,
+    audit_sink: &mut impl FactMaterializationAuditSink,
+) -> Result<Fact, FactMaterializationError> {
+    record_audit_event(
+        envelope,
+        policy_evaluation,
+        audit_context,
+        audit_sink,
+        FactMaterializationAuditOutcome::Attempted,
+        None,
+    );
+
+    if policy_evaluation.decision != AccessDecisionResult::Allowed {
+        return fail_materialization(
+            envelope,
+            policy_evaluation,
+            audit_context,
+            audit_sink,
+            FactMaterializationAuditOutcome::PolicyDenied,
+            FactMaterializationError::PolicyDenied,
+        );
+    }
+    if !envelope
+        .materialization_policy_refs
+        .iter()
+        .all(|required| policy_evaluation.policy_refs.contains(required))
+    {
+        return fail_materialization(
+            envelope,
+            policy_evaluation,
+            audit_context,
+            audit_sink,
+            FactMaterializationAuditOutcome::PolicyDenied,
+            FactMaterializationError::MaterializationPolicyRefsNotSatisfied,
+        );
+    }
+
+    record_audit_event(
+        envelope,
+        policy_evaluation,
+        audit_context,
+        audit_sink,
+        FactMaterializationAuditOutcome::KeyAccessAttempted,
+        None,
+    );
+    let key = match key_resolver.resolve_fact_key(&envelope.encryption.key_id) {
+        Ok(key) => key,
+        Err(_) => {
+            return fail_materialization(
+                envelope,
+                policy_evaluation,
+                audit_context,
+                audit_sink,
+                FactMaterializationAuditOutcome::KeyAccessFailed,
+                FactMaterializationError::MissingKey,
+            );
+        }
+    };
+    if key.status != FactKeyStatus::Active {
+        return fail_materialization(
+            envelope,
+            policy_evaluation,
+            audit_context,
+            audit_sink,
+            FactMaterializationAuditOutcome::KeyAccessFailed,
+            FactMaterializationError::RetiredKey,
+        );
+    }
+    record_audit_event(
+        envelope,
+        policy_evaluation,
+        audit_context,
+        audit_sink,
+        FactMaterializationAuditOutcome::KeyAccessSucceeded,
+        None,
+    );
+
+    record_audit_event(
+        envelope,
+        policy_evaluation,
+        audit_context,
+        audit_sink,
+        FactMaterializationAuditOutcome::DecryptionAttempted,
+        None,
+    );
+    let associated_data = canonical_encrypted_fact_associated_data(envelope);
+    let plaintext = match encryptor.decrypt_fact_plaintext(
+        &key,
+        &envelope.encryption,
+        &associated_data,
+        &envelope.ciphertext,
+    ) {
+        Ok(plaintext) => plaintext,
+        Err(error) => {
+            return fail_materialization(
+                envelope,
+                policy_evaluation,
+                audit_context,
+                audit_sink,
+                FactMaterializationAuditOutcome::DecryptionFailed,
+                error,
+            );
+        }
+    };
+    if FactPayloadType::from_payload(&plaintext.payload) != envelope.payload_type {
+        return fail_materialization(
+            envelope,
+            policy_evaluation,
+            audit_context,
+            audit_sink,
+            FactMaterializationAuditOutcome::DecryptionFailed,
+            FactMaterializationError::AuthenticationFailed,
+        );
+    }
+
+    record_audit_event(
+        envelope,
+        policy_evaluation,
+        audit_context,
+        audit_sink,
+        FactMaterializationAuditOutcome::Succeeded,
+        None,
+    );
+    Ok(plaintext.into_fact(envelope))
+}
+
+pub fn materialize_encrypted_facts(
+    envelopes: &[StoredEncryptedFact],
+    policy_evaluation: &PolicyEvaluation,
+    key_resolver: &impl FactKeyResolver,
+    encryptor: &impl FactPayloadEncryptor,
+) -> Result<Vec<Fact>, FactMaterializationError> {
+    envelopes
+        .iter()
+        .map(|envelope| {
+            materialize_encrypted_fact(envelope, policy_evaluation, key_resolver, encryptor)
+        })
+        .collect()
+}
+
+pub fn canonical_encrypted_fact_associated_data(envelope: &StoredEncryptedFact) -> Vec<u8> {
+    let mut canonical = String::new();
+    push_field(&mut canonical, "profile", ENCRYPTED_FACT_AAD_PROFILE_NAME);
+    push_field(
+        &mut canonical,
+        "profile_version",
+        ENCRYPTED_FACT_AAD_PROFILE_VERSION_V1,
+    );
+    push_field(
+        &mut canonical,
+        "aad_version",
+        envelope.encryption.aad_version.as_str(),
+    );
+    push_field(
+        &mut canonical,
+        "schema_version",
+        ENCRYPTED_FACT_SCHEMA_VERSION_V1,
+    );
+    push_field(
+        &mut canonical,
+        "append_sequence",
+        &envelope.append_sequence.to_string(),
+    );
+    push_field(&mut canonical, "transaction_id", &envelope.transaction_id.0);
+    push_field(&mut canonical, "committed_at", &envelope.committed_at.0);
+    push_field(&mut canonical, "fact_id", &envelope.fact_id.0);
+    push_field(&mut canonical, "subject_id", &envelope.subject_id.0);
+    push_field(
+        &mut canonical,
+        "occurred_at",
+        &canonical_temporal_anchor(&envelope.occurred_at),
+    );
+    push_field(
+        &mut canonical,
+        "payload_type",
+        envelope.payload_type.as_str(),
+    );
+    push_field(
+        &mut canonical,
+        "status",
+        &canonical_fact_status(&envelope.status),
+    );
+    push_field(
+        &mut canonical,
+        "materialization_policy_refs",
+        &canonical_policy_refs(&envelope.materialization_policy_refs),
+    );
+    push_field(
+        &mut canonical,
+        "encryption_algorithm",
+        envelope.encryption.algorithm.as_str(),
+    );
+    push_field(&mut canonical, "key_id", &envelope.encryption.key_id);
+    push_field(
+        &mut canonical,
+        "wrapped_dek_ref",
+        envelope.encryption.wrapped_dek_ref.as_deref().unwrap_or(""),
+    );
+    push_field(
+        &mut canonical,
+        "nonce",
+        &canonical_bytes(&envelope.encryption.nonce),
+    );
+
+    canonical.into_bytes()
+}
+
+fn record_audit_event(
+    envelope: &StoredEncryptedFact,
+    policy_evaluation: &PolicyEvaluation,
+    audit_context: &FactMaterializationAuditContext,
+    audit_sink: &mut impl FactMaterializationAuditSink,
+    outcome: FactMaterializationAuditOutcome,
+    error: Option<FactMaterializationError>,
+) {
+    audit_sink.record_materialization_event(FactMaterializationAuditEvent {
+        subject_id: envelope.subject_id.clone(),
+        fact_ids: vec![envelope.fact_id.clone()],
+        materialization_policy_refs: envelope.materialization_policy_refs.clone(),
+        evaluated_policy_refs: policy_evaluation.policy_refs.clone(),
+        caller: audit_context.caller.clone(),
+        purpose: audit_context.purpose.clone(),
+        requested_at: audit_context.requested_at.clone(),
+        outcome,
+        error,
+    });
+}
+
+fn fail_materialization<T>(
+    envelope: &StoredEncryptedFact,
+    policy_evaluation: &PolicyEvaluation,
+    audit_context: &FactMaterializationAuditContext,
+    audit_sink: &mut impl FactMaterializationAuditSink,
+    outcome: FactMaterializationAuditOutcome,
+    error: FactMaterializationError,
+) -> Result<T, FactMaterializationError> {
+    record_audit_event(
+        envelope,
+        policy_evaluation,
+        audit_context,
+        audit_sink,
+        outcome,
+        Some(error),
+    );
+    Err(error)
+}
+
+fn push_field(target: &mut String, name: &str, value: &str) {
+    target.push_str(name);
+    target.push('=');
+    target.push_str(&value.len().to_string());
+    target.push(':');
+    target.push_str(value);
+    target.push('\n');
+}
+
+fn canonical_temporal_anchor(anchor: &TemporalAnchor) -> String {
+    let mut canonical = String::new();
+    match anchor {
+        TemporalAnchor::Point(timestamp) => {
+            push_field(&mut canonical, "kind", "point");
+            push_field(&mut canonical, "timestamp", &timestamp.0);
+        }
+        TemporalAnchor::Period(period) => {
+            push_field(&mut canonical, "kind", "period");
+            push_field(&mut canonical, "start", &period.start.0);
+            push_field(&mut canonical, "end", &period.end.0);
+        }
+    }
+    canonical
+}
+
+fn canonical_fact_status(status: &FactStatus) -> String {
+    let mut canonical = String::new();
+    match status {
+        FactStatus::Active => {
+            push_field(&mut canonical, "kind", "active");
+        }
+        FactStatus::Superseded {
+            superseded_by,
+            superseded_at,
+            replaced_by,
+            reason,
+        } => {
+            push_field(&mut canonical, "kind", "superseded");
+            push_field(
+                &mut canonical,
+                "superseded_by",
+                &canonical_author(superseded_by),
+            );
+            push_field(
+                &mut canonical,
+                "superseded_at",
+                &canonical_temporal_anchor(superseded_at),
+            );
+            push_field(
+                &mut canonical,
+                "replaced_by",
+                replaced_by.as_ref().map(|id| id.0.as_str()).unwrap_or(""),
+            );
+            push_field(&mut canonical, "reason", supersession_reason_label(reason));
+        }
+        FactStatus::EnteredInError {
+            corrected_by,
+            corrected_at,
+            replaced_by,
+        } => {
+            push_field(&mut canonical, "kind", "entered_in_error");
+            push_field(
+                &mut canonical,
+                "corrected_by",
+                &canonical_author(corrected_by),
+            );
+            push_field(
+                &mut canonical,
+                "corrected_at",
+                &canonical_temporal_anchor(corrected_at),
+            );
+            push_field(
+                &mut canonical,
+                "replaced_by",
+                replaced_by.as_ref().map(|id| id.0.as_str()).unwrap_or(""),
+            );
+        }
+    }
+    canonical
+}
+
+fn canonical_author(author: &Author) -> String {
+    let mut canonical = String::new();
+    push_field(
+        &mut canonical,
+        "author_type",
+        author_type_label(&author.author_type),
+    );
+    push_field(
+        &mut canonical,
+        "author_id",
+        author
+            .author_id
+            .as_ref()
+            .map(|id| id.0.as_str())
+            .unwrap_or(""),
+    );
+    push_field(
+        &mut canonical,
+        "display_name",
+        author.display_name.as_deref().unwrap_or(""),
+    );
+    canonical
+}
+
+fn canonical_policy_refs(policy_refs: &[PolicyRef]) -> String {
+    let mut canonical = String::new();
+    push_field(&mut canonical, "count", &policy_refs.len().to_string());
+    for (index, policy_ref) in policy_refs.iter().enumerate() {
+        push_field(
+            &mut canonical,
+            &format!("policy_ref_{index}"),
+            &policy_ref.0,
+        );
+    }
+    canonical
+}
+
+fn canonical_bytes(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        hex.push(HEX[(byte >> 4) as usize] as char);
+        hex.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    hex
+}
+
+fn author_type_label(author_type: &AuthorType) -> &'static str {
+    match author_type {
+        AuthorType::Patient => "patient",
+        AuthorType::Clinician => "clinician",
+        AuthorType::System => "system",
+        AuthorType::AiAssisted => "ai_assisted",
+    }
+}
+
+fn supersession_reason_label(reason: &SupersessionReason) -> &'static str {
+    match reason {
+        SupersessionReason::AiEnrichment => "ai_enrichment",
+        SupersessionReason::ClinicalRefinement => "clinical_refinement",
+        SupersessionReason::StrongerIdentityEvidence => "stronger_identity_evidence",
+        SupersessionReason::AdministrativeCorrection => "administrative_correction",
+    }
+}
+
+fn push_bytes(target: &mut Vec<u8>, bytes: &[u8]) {
+    target.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+    target.extend_from_slice(bytes);
+}
+
+fn push_u64(target: &mut Vec<u8>, value: u64) {
+    target.extend_from_slice(&value.to_be_bytes());
+}
+
+fn fnv64<'a>(parts: impl IntoIterator<Item = &'a [u8]>) -> u64 {
+    let mut state = 0xcbf2_9ce4_8422_2325_u64;
+    for part in parts {
+        for byte in (part.len() as u64).to_be_bytes().iter().chain(part.iter()) {
+            state ^= u64::from(*byte);
+            state = state.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    state
+}
+
+struct CiphertextReader<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> CiphertextReader<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn read_bytes(&mut self) -> Result<Vec<u8>, FactMaterializationError> {
+        let length = self.read_u64()? as usize;
+        let end = self
+            .offset
+            .checked_add(length)
+            .ok_or(FactMaterializationError::AuthenticationFailed)?;
+        if end > self.bytes.len() {
+            return Err(FactMaterializationError::AuthenticationFailed);
+        }
+        let value = self.bytes[self.offset..end].to_vec();
+        self.offset = end;
+        Ok(value)
+    }
+
+    fn read_u64(&mut self) -> Result<u64, FactMaterializationError> {
+        let end = self
+            .offset
+            .checked_add(8)
+            .ok_or(FactMaterializationError::AuthenticationFailed)?;
+        let bytes: [u8; 8] = self
+            .bytes
+            .get(self.offset..end)
+            .ok_or(FactMaterializationError::AuthenticationFailed)?
+            .try_into()
+            .map_err(|_| FactMaterializationError::AuthenticationFailed)?;
+        self.offset = end;
+        Ok(u64::from_be_bytes(bytes))
+    }
+
+    fn is_finished(&self) -> bool {
+        self.offset == self.bytes.len()
+    }
+}

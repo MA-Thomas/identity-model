@@ -1,0 +1,886 @@
+{
+  "schema": "openai.presentation.layout/v4",
+  "unit": "px",
+  "slide": {
+    "aid": "sl/wfazzp",
+    "id": "wfazzp",
+    "slide": 1,
+    "layoutId": "54110cc9-41e5-4f88-8660-a18ed48758ef",
+    "layoutName": "Title Slide",
+    "layoutType": "title",
+    "masterLayoutId": "11406d48-1f32-4429-947d-6cfe005413df",
+    "masterLayoutName": "Master",
+    "backgroundColor": "#FBFAF5",
+    "frame": {
+      "left": 0,
+      "top": 0,
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "theme": {
+    "colorSchemeName": "ChatGPT",
+    "colors": {
+      "accent1": "#156082",
+      "accent2": "#E97132",
+      "accent3": "#196B24",
+      "accent4": "#0F9ED5",
+      "accent5": "#A02B93",
+      "accent6": "#4EA72E",
+      "bg1": "#FFFFFF",
+      "bg2": "#000000",
+      "tx1": "#1F1F1F",
+      "tx2": "#FFFFFF",
+      "dk1": "#000000",
+      "lt1": "#FFFFFF",
+      "dk2": "#0E2841",
+      "lt2": "#E8E8E8",
+      "hlink": "#467886",
+      "folHlink": "#96607D"
+    },
+    "typefaces": [
+      "Aptos",
+      "Aptos Display"
+    ]
+  },
+  "inheritedLayers": [
+    {
+      "scope": "layout",
+      "id": "54110cc9-41e5-4f88-8660-a18ed48758ef",
+      "name": "Title Slide",
+      "type": "title",
+      "parentLayoutId": "11406d48-1f32-4429-947d-6cfe005413df",
+      "elements": []
+    },
+    {
+      "scope": "master",
+      "id": "11406d48-1f32-4429-947d-6cfe005413df",
+      "name": "Master",
+      "type": "master",
+      "elements": []
+    }
+  ],
+  "elements": [
+    {
+      "order": 1,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/2p8nqxs7",
+      "id": "1",
+      "bbox": [
+        72,
+        92,
+        650,
+        72
+      ],
+      "geometry": "rect",
+      "text": "Identity as Evidence",
+      "textPreview": "Identity as Evidence",
+      "resolvedFontSize": 50,
+      "resolvedTextStyle": {
+        "fontSize": 50,
+        "typeface": "Aptos Display",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Identity as Evidence"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Identity as Evidence",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Identity as Evidence",
+              "fontSize": 50,
+              "typeface": "Aptos Display",
+              "color": "#1F2933",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 2,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/9gr2p8nq",
+      "id": "2",
+      "bbox": [
+        72,
+        176,
+        680,
+        86
+      ],
+      "geometry": "rect",
+      "text": "A Rust-based FEN framework for biological continuity, institutional linkage, and auditable trust",
+      "textPreview": "A Rust-based FEN framework for biological continuity, institutional linkage, and auditable trust",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "Aptos",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "A Rust-based FEN framework for biological continuity,"
+          },
+          {
+            "index": 2,
+            "text": "institutional linkage, and auditable trust"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "A Rust-based FEN framework for biological continuity, institutional linkage, and auditable trust",
+          "runs": [
+            {
+              "index": 1,
+              "text": "A Rust-based FEN framework for biological continuity, institutional linkage, and auditable trust",
+              "fontSize": 24,
+              "typeface": "Aptos",
+              "color": "#5E6B75"
+            }
+          ]
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 3,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/gvy90je9",
+      "id": "3",
+      "bbox": [
+        72,
+        305,
+        260,
+        26
+      ],
+      "geometry": "rect",
+      "text": "Team briefing",
+      "textPreview": "Team briefing",
+      "resolvedFontSize": 15,
+      "resolvedTextStyle": {
+        "fontSize": 15,
+        "typeface": "Aptos",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Team briefing"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Team briefing",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Team briefing",
+              "fontSize": 15,
+              "typeface": "Aptos",
+              "color": "#0F766E",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 4,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/r2p8nqxs",
+      "id": "4",
+      "bbox": [
+        72,
+        334,
+        520,
+        28
+      ],
+      "geometry": "rect",
+      "text": "Programmer | UX researcher/designer | cancer lab scientist",
+      "textPreview": "Programmer | UX researcher/designer | cancer lab scientist",
+      "resolvedFontSize": 15,
+      "resolvedTextStyle": {
+        "fontSize": 15,
+        "typeface": "Aptos",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Programmer | UX researcher/designer | cancer lab scientist"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Programmer | UX researcher/designer | cancer lab scientist",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Programmer | UX researcher/designer | cancer lab scientist",
+              "fontSize": 15,
+              "typeface": "Aptos",
+              "color": "#5E6B75"
+            }
+          ]
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 5,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/2hwfyxob",
+      "id": "5",
+      "bbox": [
+        790,
+        108,
+        360,
+        110
+      ],
+      "geometry": "rect",
+      "fillColor": "#E4ECFF",
+      "lineColor": "#2563EB",
+      "lineWidth": 1
+    },
+    {
+      "order": 6,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/94fu18jq",
+      "id": "6",
+      "bbox": [
+        790,
+        108,
+        360,
+        5
+      ],
+      "geometry": "rect",
+      "fillColor": "#2563EB",
+      "lineColor": "#2563EB",
+      "lineWidth": 0
+    },
+    {
+      "order": 7,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/kjm1cfa9",
+      "id": "7",
+      "bbox": [
+        808,
+        126,
+        324,
+        28
+      ],
+      "geometry": "rect",
+      "text": "Initial binding",
+      "textPreview": "Initial binding",
+      "resolvedFontSize": 17,
+      "resolvedTextStyle": {
+        "fontSize": 17,
+        "typeface": "Aptos",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Initial binding"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Initial binding",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Initial binding",
+              "fontSize": 17,
+              "typeface": "Aptos",
+              "color": "#1F2933",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 8,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/rqd4vmtw",
+      "id": "8",
+      "bbox": [
+        808,
+        160,
+        324,
+        44
+      ],
+      "geometry": "rect",
+      "text": "First bind account, person, device, evidence, and records.",
+      "textPreview": "First bind account, person, device, evidence, and records.",
+      "resolvedFontSize": 14,
+      "resolvedTextStyle": {
+        "fontSize": 14,
+        "typeface": "Aptos",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "First bind account, person, device, evidence, and"
+          },
+          {
+            "index": 2,
+            "text": "records."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "First bind account, person, device, evidence, and records.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "First bind account, person, device, evidence, and records.",
+              "fontSize": 14,
+              "typeface": "Aptos",
+              "color": "#5E6B75"
+            }
+          ]
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 9,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/25kb6xkf",
+      "id": "9",
+      "bbox": [
+        950,
+        234,
+        36,
+        2
+      ],
+      "geometry": "rect",
+      "fillColor": "#D8D2C4",
+      "lineColor": "#D8D2C4",
+      "lineWidth": 0
+    },
+    {
+      "order": 10,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/4fu18jqh",
+      "id": "10",
+      "bbox": [
+        982,
+        225,
+        14,
+        18
+      ],
+      "geometry": "rect",
+      "text": ">",
+      "textPreview": ">",
+      "resolvedFontSize": 14,
+      "resolvedTextStyle": {
+        "fontSize": 14,
+        "typeface": "Aptos",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": ">"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": ">",
+          "runs": [
+            {
+              "index": 1,
+              "text": ">",
+              "fontSize": 14,
+              "typeface": "Aptos",
+              "color": "#D8D2C4",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 11,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/x0nuxc3y",
+      "id": "11",
+      "bbox": [
+        790,
+        258,
+        360,
+        110
+      ],
+      "geometry": "rect",
+      "fillColor": "#DDEFEA",
+      "lineColor": "#0F766E",
+      "lineWidth": 1
+    },
+    {
+      "order": 12,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/m94fu18j",
+      "id": "12",
+      "bbox": [
+        790,
+        258,
+        360,
+        5
+      ],
+      "geometry": "rect",
+      "fillColor": "#0F766E",
+      "lineColor": "#0F766E",
+      "lineWidth": 0
+    },
+    {
+      "order": 13,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/fu18jqh0",
+      "id": "13",
+      "bbox": [
+        808,
+        276,
+        324,
+        28
+      ],
+      "geometry": "rect",
+      "text": "Continuity",
+      "textPreview": "Continuity",
+      "resolvedFontSize": 17,
+      "resolvedTextStyle": {
+        "fontSize": 17,
+        "typeface": "Aptos",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Continuity"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Continuity",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Continuity",
+              "fontSize": 17,
+              "typeface": "Aptos",
+              "color": "#1F2933",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 14,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/83itgfml",
+      "id": "14",
+      "bbox": [
+        808,
+        310,
+        324,
+        44
+      ],
+      "geometry": "rect",
+      "text": "Later prove the current actor is continuous with that subject.",
+      "textPreview": "Later prove the current actor is continuous with that subject.",
+      "resolvedFontSize": 14,
+      "resolvedTextStyle": {
+        "fontSize": 14,
+        "typeface": "Aptos",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Later prove the current actor is continuous with that"
+          },
+          {
+            "index": 2,
+            "text": "subject."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Later prove the current actor is continuous with that subject.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Later prove the current actor is continuous with that subject.",
+              "fontSize": 14,
+              "typeface": "Aptos",
+              "color": "#5E6B75"
+            }
+          ]
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 15,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/xobm58z2",
+      "id": "15",
+      "bbox": [
+        950,
+        384,
+        36,
+        2
+      ],
+      "geometry": "rect",
+      "fillColor": "#D8D2C4",
+      "lineColor": "#D8D2C4",
+      "lineWidth": 0
+    },
+    {
+      "order": 16,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/qxs72x4n",
+      "id": "16",
+      "bbox": [
+        982,
+        375,
+        14,
+        18
+      ],
+      "geometry": "rect",
+      "text": ">",
+      "textPreview": ">",
+      "resolvedFontSize": 14,
+      "resolvedTextStyle": {
+        "fontSize": 14,
+        "typeface": "Aptos",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": ">"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": ">",
+          "runs": [
+            {
+              "index": 1,
+              "text": ">",
+              "fontSize": 14,
+              "typeface": "Aptos",
+              "color": "#D8D2C4",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 17,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/fil0rqd4",
+      "id": "17",
+      "bbox": [
+        790,
+        408,
+        360,
+        110
+      ],
+      "geometry": "rect",
+      "fillColor": "#F6E8C8",
+      "lineColor": "#B7791F",
+      "lineWidth": 1
+    },
+    {
+      "order": 18,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/4zidonyd",
+      "id": "18",
+      "bbox": [
+        790,
+        408,
+        360,
+        5
+      ],
+      "geometry": "rect",
+      "fillColor": "#B7791F",
+      "lineColor": "#B7791F",
+      "lineWidth": 0
+    },
+    {
+      "order": 19,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/xkf6dcbu",
+      "id": "19",
+      "bbox": [
+        808,
+        426,
+        324,
+        28
+      ],
+      "geometry": "rect",
+      "text": "Policy decision",
+      "textPreview": "Policy decision",
+      "resolvedFontSize": 17,
+      "resolvedTextStyle": {
+        "fontSize": 17,
+        "typeface": "Aptos",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Policy decision"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Policy decision",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Policy decision",
+              "fontSize": 17,
+              "typeface": "Aptos",
+              "color": "#1F2933",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 20,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/xczed8v6",
+      "id": "20",
+      "bbox": [
+        808,
+        460,
+        324,
+        44
+      ],
+      "geometry": "rect",
+      "text": "Materialize only what the caller and purpose are allowed to rely on.",
+      "textPreview": "Materialize only what the caller and purpose are allowed to rely on.",
+      "resolvedFontSize": 14,
+      "resolvedTextStyle": {
+        "fontSize": 14,
+        "typeface": "Aptos",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Materialize only what the caller and purpose are"
+          },
+          {
+            "index": 2,
+            "text": "allowed to rely on."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Materialize only what the caller and purpose are allowed to rely on.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Materialize only what the caller and purpose are allowed to rely on.",
+              "fontSize": 14,
+              "typeface": "Aptos",
+              "color": "#5E6B75"
+            }
+          ]
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 21,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/8v6psfil",
+      "id": "21",
+      "bbox": [
+        72,
+        660,
+        1136,
+        1
+      ],
+      "geometry": "rect",
+      "fillColor": "#D8D2C4",
+      "lineColor": "#D8D2C4",
+      "lineWidth": 0
+    },
+    {
+      "order": 22,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/fa9w3m94",
+      "id": "22",
+      "bbox": [
+        72,
+        674,
+        600,
+        18
+      ],
+      "geometry": "rect",
+      "text": "Source: FEN Identity Model and current Rust implementation",
+      "textPreview": "Source: FEN Identity Model and current Rust implementation",
+      "resolvedFontSize": 10,
+      "resolvedTextStyle": {
+        "fontSize": 10,
+        "typeface": "Aptos",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Source: FEN Identity Model and current Rust implementation"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Source: FEN Identity Model and current Rust implementation",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Source: FEN Identity Model and current Rust implementation",
+              "fontSize": 10,
+              "typeface": "Aptos",
+              "color": "#5E6B75"
+            }
+          ]
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    }
+  ],
+  "composeRuns": []
+}

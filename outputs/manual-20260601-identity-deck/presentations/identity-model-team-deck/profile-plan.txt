@@ -1,0 +1,21 @@
+Task mode: create
+Primary deck profile: engineering-platform
+Secondary gates: product-platform and UX trust journey
+
+Required proof objects:
+- Architecture / workflow maps for evidence -> facts -> policy decisions
+- Biological binding versus biological continuity distinction
+- Trust-domain diagram for client device, continuity vault, and FEN graph
+- Product-facing workflow implications for onboarding, step-up, recovery, delegation, and disputes
+- Current implementation proof and MVP next steps
+
+Design system:
+- Spacious scientific systems brief
+- Warm off-white background, graphite text, teal trusted-state accent, amber uncertainty, rose contested/failure, blue external systems
+- One claim per slide; diagrams as proof objects
+- Avoid dense schemas, generic card grids, and decorative gradients
+
+Known source:
+- FEN_Identity_Model.pdf sections 10 and 21
+- NEXT_STEPS.md implementation snapshot and MVP priority order
+- Rust source model names for SubjectId, Fact, ProblemEpisode, EpisodeMembership, MaterializedIdentityState

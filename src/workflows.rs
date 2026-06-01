@@ -95,3 +95,28 @@ pub enum FactRole {
     DisputeEvidence,
     Other,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpisodeRelation {
+    pub id: RelationId,
+    pub source_episode_id: ProblemEpisodeId,
+    pub target_episode_id: ProblemEpisodeId,
+    pub relation_type: EpisodeRelationType,
+    pub asserted_by: Author,
+    pub asserted_at: TemporalAnchor,
+    pub status: EpisodeRelationStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EpisodeRelationType {
+    PartOf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EpisodeRelationStatus {
+    Active,
+    Retracted {
+        retracted_by: Author,
+        retracted_at: TemporalAnchor,
+    },
+}

@@ -1,5 +1,7 @@
 use crate::fen::*;
 use crate::identity::*;
+use crate::time;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MaterializedIdentityState {
@@ -88,6 +90,7 @@ fn materialize_identity_state_for(
         .filter(|fact| fact.subject_id == subject_id)
         .filter(|fact| matches!(fact.status, FactStatus::Active))
         .collect();
+    let fact_index = MaterializationFactIndex::from_active_facts(&active_facts);
 
     for fact in &active_facts {
         match &fact.payload {
@@ -120,10 +123,18 @@ fn materialize_identity_state_for(
         }
     }
 
+    let mut emitted_devices = HashSet::new();
+    let mut emitted_clinical_links = HashSet::new();
+    let mut emitted_payer_links = HashSet::new();
+    let mut emitted_authorities = HashSet::new();
+    let mut emitted_unresolved_disputes = HashSet::new();
+
     for fact in &active_facts {
         match &fact.payload {
             FactPayload::DeviceBindingEstablished { device_ref, .. } => {
-                if !is_device_revoked(device_ref, &active_facts) {
+                if fact_index.is_device_active(device_ref)
+                    && emitted_devices.insert(device_ref.clone())
+                {
                     state.active_devices.push(device_ref.clone());
                 }
             }
@@ -132,7 +143,9 @@ fn materialize_identity_state_for(
                 external_patient_ref,
                 match_confidence,
             } => {
-                if is_link_active(&fact.id, &active_facts) {
+                if fact_index.is_link_active(&fact.id)
+                    && emitted_clinical_links.insert(fact.id.clone())
+                {
                     state.active_clinical_links.push(ClinicalIdentityLinkView {
                         provider_org: provider_org.clone(),
                         external_patient_ref: external_patient_ref.clone(),
@@ -146,8 +159,9 @@ fn materialize_identity_state_for(
                 member_ref,
                 effective_period,
             } => {
-                if is_link_active(&fact.id, &active_facts)
+                if fact_index.is_link_active(&fact.id)
                     && is_optional_period_active(effective_period, as_of)
+                    && emitted_payer_links.insert(fact.id.clone())
                 {
                     state.active_payer_links.push(PayerIdentityLinkView {
                         payer: payer.clone(),
@@ -165,8 +179,9 @@ fn materialize_identity_state_for(
                 valid_period,
                 ..
             } => {
-                if !is_authority_revoked(&fact.id, &active_facts)
+                if fact_index.is_authority_active(&fact.id)
                     && is_optional_period_active(valid_period, as_of)
+                    && emitted_authorities.insert(fact.id.clone())
                 {
                     state.active_authorities.push(AuthorityRelationshipView {
                         actor_subject_id: actor_subject_id.clone(),
@@ -180,7 +195,9 @@ fn materialize_identity_state_for(
             }
             FactPayload::ClinicalIdentityLinkContested { link_fact_id, .. }
             | FactPayload::PayerIdentityLinkContested { link_fact_id, .. } => {
-                if link_resolution_outcome(link_fact_id, &active_facts).is_none() {
+                if fact_index.is_unresolved_dispute(link_fact_id)
+                    && emitted_unresolved_disputes.insert(link_fact_id.clone())
+                {
                     state.unresolved_disputes.push(link_fact_id.clone());
                 }
             }
@@ -229,66 +246,83 @@ pub fn authority_permits_action(
     })
 }
 
-fn is_device_revoked(device_ref: &DeviceRef, facts: &[&Fact]) -> bool {
-    facts.iter().any(|fact| {
-        matches!(
-            &fact.payload,
-            FactPayload::DeviceBindingRevoked { device_ref: revoked, .. } if revoked == device_ref
-        )
-    })
+#[derive(Debug, Default)]
+struct MaterializationFactIndex {
+    revoked_devices: HashSet<DeviceRef>,
+    contested_links: HashSet<FactId>,
+    link_resolution_outcomes: HashMap<FactId, DisputeResolutionOutcome>,
+    revoked_authorities: HashSet<FactId>,
 }
 
-fn is_link_active(link_fact_id: &FactId, facts: &[&Fact]) -> bool {
-    match link_resolution_outcome(link_fact_id, facts) {
-        Some(DisputeResolutionOutcome::Confirmed) => true,
-        Some(DisputeResolutionOutcome::Rejected | DisputeResolutionOutcome::Inconclusive) => false,
-        None => !is_link_contested(link_fact_id, facts),
-    }
-}
-
-fn is_link_contested(link_fact_id: &FactId, facts: &[&Fact]) -> bool {
-    facts.iter().any(|fact| {
-        matches!(
-            &fact.payload,
-            FactPayload::ClinicalIdentityLinkContested { link_fact_id: contested, .. }
-                | FactPayload::PayerIdentityLinkContested { link_fact_id: contested, .. }
-                if contested == link_fact_id
-        )
-    })
-}
-
-fn link_resolution_outcome(
-    link_fact_id: &FactId,
-    facts: &[&Fact],
-) -> Option<DisputeResolutionOutcome> {
-    facts.iter().rev().find_map(|fact| match &fact.payload {
-        FactPayload::ClinicalIdentityLinkDisputeResolved {
-            link_fact_id: resolved,
-            outcome,
-            ..
+impl MaterializationFactIndex {
+    fn from_active_facts(facts: &[&Fact]) -> Self {
+        let mut index = Self::default();
+        for fact in facts {
+            match &fact.payload {
+                FactPayload::DeviceBindingRevoked { device_ref, .. } => {
+                    index.revoked_devices.insert(device_ref.clone());
+                }
+                FactPayload::ClinicalIdentityLinkContested { link_fact_id, .. }
+                | FactPayload::PayerIdentityLinkContested { link_fact_id, .. } => {
+                    index.contested_links.insert(link_fact_id.clone());
+                }
+                FactPayload::ClinicalIdentityLinkDisputeResolved {
+                    link_fact_id,
+                    outcome,
+                    ..
+                }
+                | FactPayload::PayerIdentityLinkDisputeResolved {
+                    link_fact_id,
+                    outcome,
+                    ..
+                } => {
+                    index
+                        .link_resolution_outcomes
+                        .insert(link_fact_id.clone(), *outcome);
+                }
+                FactPayload::AuthorityRelationshipRevoked {
+                    relationship_fact_id,
+                    ..
+                } => {
+                    index
+                        .revoked_authorities
+                        .insert(relationship_fact_id.clone());
+                }
+                _ => {}
+            }
         }
-        | FactPayload::PayerIdentityLinkDisputeResolved {
-            link_fact_id: resolved,
-            outcome,
-            ..
-        } if resolved == link_fact_id => Some(*outcome),
-        _ => None,
-    })
-}
+        index
+    }
 
-fn is_authority_revoked(relationship_fact_id: &FactId, facts: &[&Fact]) -> bool {
-    facts.iter().any(|fact| {
-        matches!(
-            &fact.payload,
-            FactPayload::AuthorityRelationshipRevoked { relationship_fact_id: revoked, .. }
-                if revoked == relationship_fact_id
-        )
-    })
+    fn is_device_active(&self, device_ref: &DeviceRef) -> bool {
+        !self.revoked_devices.contains(device_ref)
+    }
+
+    fn is_link_active(&self, link_fact_id: &FactId) -> bool {
+        match self.link_resolution_outcomes.get(link_fact_id) {
+            Some(DisputeResolutionOutcome::Confirmed) => true,
+            Some(DisputeResolutionOutcome::Rejected | DisputeResolutionOutcome::Inconclusive) => {
+                false
+            }
+            None => !self.contested_links.contains(link_fact_id),
+        }
+    }
+
+    fn is_unresolved_dispute(&self, link_fact_id: &FactId) -> bool {
+        self.contested_links.contains(link_fact_id)
+            && !self.link_resolution_outcomes.contains_key(link_fact_id)
+    }
+
+    fn is_authority_active(&self, relationship_fact_id: &FactId) -> bool {
+        !self.revoked_authorities.contains(relationship_fact_id)
+    }
 }
 
 fn is_optional_period_active(period: &Option<TimeInterval>, as_of: Option<&Timestamp>) -> bool {
     match (period, as_of) {
-        (Some(period), Some(as_of)) => &period.start <= as_of && as_of <= &period.end,
+        (Some(period), Some(as_of)) => {
+            time::timestamp_in_closed_interval(as_of, &period.start, &period.end).unwrap_or(false)
+        }
         (None, _) => true,
         (_, None) => true,
     }
@@ -299,7 +333,9 @@ fn is_optional_expiration_active(
     as_of: Option<&Timestamp>,
 ) -> bool {
     match (expires_at, as_of) {
-        (Some(expires_at), Some(as_of)) => as_of <= expires_at,
+        (Some(expires_at), Some(as_of)) => {
+            time::timestamp_at_or_after(expires_at, as_of).unwrap_or(false)
+        }
         (None, _) => true,
         (_, None) => true,
     }

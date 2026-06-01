@@ -368,6 +368,7 @@ pub enum PolicyEvaluationReason {
     PolicyArtifactNotActive,
     PolicyNotYetEffective,
     PolicyExpired,
+    PolicyTimestampInvalid,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -523,10 +524,14 @@ fn policy_artifact_reasons(
     }
 
     if let (Some(period), Some(evaluated_at)) = (&artifact.effective_period, evaluated_at) {
-        if evaluated_at < &period.start {
-            reasons.push(PolicyEvaluationReason::PolicyNotYetEffective);
-        } else if evaluated_at > &period.end {
-            reasons.push(PolicyEvaluationReason::PolicyExpired);
+        match (
+            time::timestamp_before(evaluated_at, &period.start),
+            time::timestamp_after(evaluated_at, &period.end),
+        ) {
+            (Ok(true), _) => reasons.push(PolicyEvaluationReason::PolicyNotYetEffective),
+            (Ok(false), Ok(true)) => reasons.push(PolicyEvaluationReason::PolicyExpired),
+            (Ok(false), Ok(false)) => {}
+            _ => reasons.push(PolicyEvaluationReason::PolicyTimestampInvalid),
         }
     }
 
@@ -618,7 +623,7 @@ fn is_stale(
     match (observed_at, evaluated_at, requirement) {
         (Some(observed_at), Some(evaluated_at), Some(requirement)) => {
             time::seconds_between(observed_at, evaluated_at)
-                .is_ok_and(|age| age > requirement.max_age_seconds)
+                .map_or(true, |age| age > requirement.max_age_seconds)
         }
         (None, Some(_), Some(_)) => true,
         _ => false,

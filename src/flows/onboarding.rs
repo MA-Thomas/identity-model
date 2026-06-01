@@ -192,6 +192,46 @@ impl EnrollContinuityRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GovernmentIdWitnessInput {
+    pub source_system: Option<String>,
+    pub provider_event_id: Option<String>,
+    pub evidence_ref: Option<DocumentRef>,
+    pub assurance_level: AssuranceLevel,
+    pub expires_at: Option<Timestamp>,
+    pub retention_policy_refs: Vec<PolicyRef>,
+}
+
+impl GovernmentIdWitnessInput {
+    pub fn external_refs(&self) -> Vec<ExternalRef> {
+        self.provider_event_id
+            .as_ref()
+            .map(|provider_event_id| {
+                vec![ExternalRef {
+                    system: ExternalSystem::Other(
+                        self.source_system
+                            .clone()
+                            .unwrap_or_else(|| "IdentityProofingProvider".to_string()),
+                    ),
+                    resource_type: Some("government_id_verification_event".to_string()),
+                    resource_id: provider_event_id.clone(),
+                    uri: None,
+                }]
+            })
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OnboardingIdentityWitnessesRequest {
+    pub subject_id: SubjectId,
+    pub authored_by: Author,
+    pub started_at: Timestamp,
+    pub id_plan: WorkflowIdPlan,
+    pub government_id: GovernmentIdWitnessInput,
+    pub liveness: VerifiedLivenessCeremony,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkProviderIdentityRequest {
     pub subject_id: SubjectId,
     pub authored_by: Author,
@@ -433,6 +473,49 @@ pub fn enroll_continuity_slice_from_request(
         request.started_at,
         &request.id_plan,
     ))
+}
+
+pub fn onboarding_identity_witnesses_slice_from_request(
+    request: OnboardingIdentityWitnessesRequest,
+    translator: &FenTranslator,
+) -> IdentityWorkflowSlice {
+    let episode = identity_verification_episode(
+        request.id_plan.episode_id.clone(),
+        request.subject_id.clone(),
+        request.authored_by.clone(),
+        request.started_at.clone(),
+    );
+
+    let mut government_id = translator.identity_witness_recorded(
+        request.subject_id.clone(),
+        request.started_at.clone(),
+        IdentityWitnessType::GovernmentIdVerification,
+        request.subject_id.clone(),
+        request.government_id.assurance_level,
+        request.government_id.evidence_ref.clone(),
+        request.government_id.expires_at.clone(),
+        request.government_id.source_system.clone(),
+    );
+    government_id.external_refs = request.government_id.external_refs();
+    if !request.government_id.retention_policy_refs.is_empty() {
+        if let FactPayload::IdentityWitnessRecorded { context, .. } = &mut government_id.payload {
+            context.retention_policy_refs = request.government_id.retention_policy_refs.clone();
+        }
+    }
+
+    let liveness = translator.selfie_liveness_witness_recorded(
+        request.subject_id.clone(),
+        request.liveness,
+    );
+
+    slice_from_drafts_with_id_plan(
+        episode,
+        vec![government_id, liveness],
+        vec![FactRole::IdentityWitness, FactRole::IdentityWitness],
+        request.authored_by,
+        request.started_at,
+        &request.id_plan,
+    )
 }
 
 pub fn link_provider_identity_slice_from_request(

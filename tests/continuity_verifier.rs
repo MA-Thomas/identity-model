@@ -230,7 +230,7 @@ fn registry_backed_signature_verifier_handles_key_rotation_and_replay() {
 
     assert!(canonical_continuity_assertion_bytes(&assertion)
         .expect("assertion should serialize")
-        .starts_with(b"enrollment_ref="));
+        .starts_with(b"profile=24:fen-continuity-assertion\nprofile_version=2:v1\n"));
     let mut lifecycle = InMemoryNonceLifecycle::new();
     lifecycle
         .issue_challenge(ContinuityChallenge {
@@ -300,5 +300,118 @@ fn registry_backed_signature_verifier_handles_key_rotation_and_replay() {
             key_id,
         });
         assert_eq!(verifier_result, Err(reason));
+    }
+}
+
+#[cfg(feature = "ed25519-dalek-verifier")]
+#[test]
+fn ed25519_strict_verifier_checks_canonical_profile_and_key_registry() {
+    use ed25519_dalek::{Signer, SigningKey};
+
+    let signing_key = SigningKey::from_bytes(&[7; 32]);
+    let verification_key = VerificationKey {
+        key_id: "ed25519-key-active".to_string(),
+        provider_name: "Ed25519Vault".to_string(),
+        key_material: signing_key.verifying_key().to_bytes().to_vec(),
+        status: VerificationKeyStatus::Active,
+    };
+    let mut registry = VerificationKeyRegistry::new();
+    registry.register(verification_key.clone());
+    registry.register(VerificationKey {
+        key_id: "ed25519-key-retired".to_string(),
+        provider_name: "Ed25519Vault".to_string(),
+        key_material: signing_key.verifying_key().to_bytes().to_vec(),
+        status: VerificationKeyStatus::Retired,
+    });
+    registry.register(VerificationKey {
+        key_id: "ed25519-key-wrong-provider".to_string(),
+        provider_name: "OtherVault".to_string(),
+        key_material: signing_key.verifying_key().to_bytes().to_vec(),
+        status: VerificationKeyStatus::Active,
+    });
+    registry.register(VerificationKey {
+        key_id: "ed25519-key-malformed".to_string(),
+        provider_name: "Ed25519Vault".to_string(),
+        key_material: vec![1, 2, 3],
+        status: VerificationKeyStatus::Active,
+    });
+
+    let assertion = ContinuityAssertion {
+        enrollment_ref: "ed25519-enrollment".to_string(),
+        challenge_nonce: "ed25519-nonce".to_string(),
+        timestamp: ts("2026-05-29T00:01:00Z"),
+        result: ContinuityCheckResult::Passed,
+        derived_assurance: AssuranceLevel::High,
+        modality: BiometricModality::Face,
+        model_version: Some("model-ed25519".to_string()),
+        pad_result: PresentationAttackDetectionResult::Passed,
+        provider_metadata: ContinuityProviderMetadata {
+            provider_name: "Ed25519Vault".to_string(),
+            provider_event_id: Some("event-ed25519".to_string()),
+            provider_subject_ref: Some("subject-ed25519".to_string()),
+            sdk_or_api_version: Some("v1".to_string()),
+        },
+    };
+    let canonical = canonical_continuity_assertion_bytes(&assertion)
+        .expect("assertion should serialize for signing");
+    let signature = signing_key.sign(&canonical).to_bytes().to_vec();
+    let signed = SignedContinuityAssertion {
+        assertion: assertion.clone(),
+        signature: signature.clone(),
+        key_id: verification_key.key_id.clone(),
+    };
+    let verifier = Ed25519StrictSignatureVerifier {
+        key_registry: registry,
+    };
+
+    assert_eq!(verifier.verify_signature(&signed), Ok(()));
+
+    let mut tampered = signed.clone();
+    tampered.assertion.challenge_nonce = "tampered-nonce".to_string();
+    assert_eq!(
+        verifier.verify_signature(&tampered),
+        Err(ContinuityAssertionRejectionReason::InvalidSignature)
+    );
+
+    for (key_id, signature, reason) in [
+        (
+            "missing-key".to_string(),
+            signature.clone(),
+            ContinuityAssertionRejectionReason::UnknownVerificationKey,
+        ),
+        (
+            "ed25519-key-retired".to_string(),
+            signature.clone(),
+            ContinuityAssertionRejectionReason::UnknownVerificationKey,
+        ),
+        (
+            "ed25519-key-wrong-provider".to_string(),
+            signature.clone(),
+            ContinuityAssertionRejectionReason::KeyNotAuthorizedForProvider,
+        ),
+        (
+            "ed25519-key-malformed".to_string(),
+            signature.clone(),
+            ContinuityAssertionRejectionReason::MalformedAssertion,
+        ),
+        (
+            verification_key.key_id.clone(),
+            vec![1, 2, 3],
+            ContinuityAssertionRejectionReason::MalformedAssertion,
+        ),
+        (
+            verification_key.key_id.clone(),
+            [42; 64].to_vec(),
+            ContinuityAssertionRejectionReason::InvalidSignature,
+        ),
+    ] {
+        assert_eq!(
+            verifier.verify_signature(&SignedContinuityAssertion {
+                assertion: assertion.clone(),
+                signature,
+                key_id,
+            }),
+            Err(reason)
+        );
     }
 }

@@ -133,6 +133,26 @@ pub fn identity_verification_episode(
     }
 }
 
+pub fn parent_onboarding_episode(
+    id: ProblemEpisodeId,
+    subject_id: SubjectId,
+    authored_by: Author,
+    authored_at: Timestamp,
+) -> ProblemEpisode {
+    ProblemEpisode {
+        id,
+        subject_id,
+        episode_kind: EpisodeKind::IdentityVerificationWorkflow,
+        label: "Initial identity onboarding".to_string(),
+        problem_code: None,
+        status: EpisodeStatus::Active,
+        onset: None,
+        authored_by,
+        authored_at,
+        notes: None,
+    }
+}
+
 pub fn access_authorization_episode(
     id: ProblemEpisodeId,
     subject_id: SubjectId,
@@ -230,5 +250,24 @@ pub fn episode_membership(
         asserted_by,
         asserted_at: TemporalAnchor::Point(asserted_at),
         status: MembershipStatus::Active,
+    }
+}
+
+pub fn episode_relation(
+    id: RelationId,
+    source_episode_id: ProblemEpisodeId,
+    target_episode_id: ProblemEpisodeId,
+    relation_type: EpisodeRelationType,
+    asserted_by: Author,
+    asserted_at: Timestamp,
+) -> EpisodeRelation {
+    EpisodeRelation {
+        id,
+        source_episode_id,
+        target_episode_id,
+        relation_type,
+        asserted_by,
+        asserted_at: TemporalAnchor::Point(asserted_at),
+        status: EpisodeRelationStatus::Active,
     }
 }

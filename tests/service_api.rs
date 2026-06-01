@@ -172,6 +172,191 @@ fn service_core_onboarding_uses_generated_ids_without_provider_or_payer_links() 
 }
 
 #[test]
+fn service_core_onboarding_returns_parent_episode_with_child_part_of_relations() {
+    let author = system_author();
+    let service = IdentityWorkflowService::new(FenTranslator {
+        system_author: author.clone(),
+    });
+    let provider = MockPhase1ContinuityProvider::successful();
+    let mut ids = DeterministicIdGenerator::new();
+
+    let outcome = service
+        .onboard_core_identity(
+            CoreIdentityOnboardingRequest {
+                subject_id: Some(id("subject-composed-onboarding")),
+                subject_id_prefix: "subject-unused".to_string(),
+                id_namespace: "composed-onboarding".to_string(),
+                authored_by: author,
+                registered_at: ts("2026-05-29T00:00:00Z"),
+                device_bound_at: ts("2026-05-29T00:01:00Z"),
+                continuity_enrolled_at: ts("2026-05-29T00:02:00Z"),
+                subject_kind: SubjectKind::HumanPerson,
+                stable_profile: StableIdentityProfile {
+                    legal_name: Some("Composed Patient".to_string()),
+                    date_of_birth: None,
+                    demographic_attributes: Vec::new(),
+                },
+                device_ref: "device-composed-passkey".to_string(),
+                authenticator_type: AuthenticatorType::Passkey,
+                device_assurance_level: AssuranceLevel::Medium,
+                device_source_system: Some("AccountBootstrap".to_string()),
+                modality: BiometricModality::Face,
+            },
+            &provider,
+            &mut ids,
+        )
+        .expect("core onboarding should build");
+
+    let parent_id = id("episode-composed-onboarding-parent-0");
+    let child_episode_ids = vec![
+        outcome.registration.workflow.slice.episode.id.clone(),
+        outcome.device_binding.workflow.slice.episode.id.clone(),
+        outcome
+            .continuity_enrollment
+            .workflow
+            .slice
+            .episode
+            .id
+            .clone(),
+    ];
+
+    assert_eq!(outcome.parent_episode.id, parent_id);
+    assert_eq!(
+        outcome.parent_episode.label,
+        "Initial identity onboarding".to_string()
+    );
+    assert_eq!(
+        outcome
+            .episode_relations
+            .iter()
+            .map(|relation| relation.id.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            id("relation-composed-onboarding-0"),
+            id("relation-composed-onboarding-1"),
+            id("relation-composed-onboarding-2"),
+        ]
+    );
+    assert_eq!(
+        outcome
+            .episode_relations
+            .iter()
+            .map(|relation| relation.source_episode_id.clone())
+            .collect::<Vec<_>>(),
+        child_episode_ids
+    );
+    assert!(outcome.episode_relations.iter().all(|relation| {
+        relation.target_episode_id == parent_id
+            && relation.relation_type == EpisodeRelationType::PartOf
+            && matches!(relation.status, EpisodeRelationStatus::Active)
+    }));
+
+    let mut facts = Vec::new();
+    facts.extend(outcome.registration.workflow.slice.facts.clone());
+    facts.extend(outcome.device_binding.workflow.slice.facts.clone());
+    facts.extend(outcome.continuity_enrollment.workflow.slice.facts.clone());
+    assert_eq!(
+        outcome.projection,
+        materialize_identity_state(id("subject-composed-onboarding"), &facts)
+    );
+
+    let mut repository = InMemoryIdentityRepository::new();
+    repository
+        .append_episode(outcome.parent_episode.clone())
+        .expect("parent episode should append");
+    repository
+        .append_workflow_slice(outcome.registration.workflow.slice.clone())
+        .expect("registration slice should append");
+    repository
+        .append_workflow_slice(outcome.device_binding.workflow.slice.clone())
+        .expect("device slice should append");
+    repository
+        .append_workflow_slice(outcome.continuity_enrollment.workflow.slice.clone())
+        .expect("continuity slice should append");
+    for relation in outcome.episode_relations.clone() {
+        repository
+            .append_episode_relation(relation)
+            .expect("episode relation should append");
+    }
+
+    assert_eq!(
+        repository.child_episode_ids_for_parent(&parent_id, EpisodeRelationType::PartOf),
+        child_episode_ids
+    );
+    assert_eq!(
+        replay_identity_state_from_repository(id("subject-composed-onboarding"), &repository),
+        outcome.projection
+    );
+}
+
+#[test]
+fn service_can_append_core_onboarding_composition_and_replay_repository_state() {
+    let author = system_author();
+    let service = IdentityWorkflowService::new(FenTranslator {
+        system_author: author.clone(),
+    });
+    let provider = MockPhase1ContinuityProvider::successful();
+    let mut ids = DeterministicIdGenerator::new();
+    let mut repository = InMemoryIdentityRepository::new();
+
+    let onboarding = service
+        .onboard_core_identity(
+            CoreIdentityOnboardingRequest {
+                subject_id: Some(id("subject-service-composition-append")),
+                subject_id_prefix: "subject-unused".to_string(),
+                id_namespace: "service-composition-append".to_string(),
+                authored_by: author,
+                registered_at: ts("2026-05-29T00:00:00Z"),
+                device_bound_at: ts("2026-05-29T00:01:00Z"),
+                continuity_enrolled_at: ts("2026-05-29T00:02:00Z"),
+                subject_kind: SubjectKind::HumanPerson,
+                stable_profile: StableIdentityProfile {
+                    legal_name: Some("Composition Patient".to_string()),
+                    date_of_birth: None,
+                    demographic_attributes: Vec::new(),
+                },
+                device_ref: "device-service-composition".to_string(),
+                authenticator_type: AuthenticatorType::Passkey,
+                device_assurance_level: AssuranceLevel::Medium,
+                device_source_system: Some("AccountBootstrap".to_string()),
+                modality: BiometricModality::Face,
+            },
+            &provider,
+            &mut ids,
+        )
+        .expect("core onboarding should build");
+    let parent_id = onboarding.parent_episode.id.clone();
+    let child_episode_ids = vec![
+        onboarding.registration.workflow.slice.episode.id.clone(),
+        onboarding.device_binding.workflow.slice.episode.id.clone(),
+        onboarding
+            .continuity_enrollment
+            .workflow
+            .slice
+            .episode
+            .id
+            .clone(),
+    ];
+
+    let persisted = service
+        .append_core_onboarding_and_replay(onboarding, &mut repository)
+        .expect("composition should append and replay");
+
+    assert_eq!(
+        persisted.replayed_projection,
+        persisted.onboarding.projection
+    );
+    assert_eq!(
+        repository.child_episode_ids_for_parent(&parent_id, EpisodeRelationType::PartOf),
+        child_episode_ids
+    );
+    assert_eq!(
+        repository.all_episode_relations(),
+        persisted.onboarding.episode_relations
+    );
+}
+
+#[test]
 fn service_can_append_workflows_and_replay_repository_state() {
     let author = system_author();
     let subject_id = id("subject-service-repository-replay");

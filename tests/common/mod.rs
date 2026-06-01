@@ -67,3 +67,68 @@ pub fn access_decision_shape(
         _ => None,
     })
 }
+
+pub struct MobileEvidenceFixture {
+    pub oidc_config: OidcClientConfig,
+    pub oidc_verifier: StaticOidcSessionVerifier,
+    pub app_attest_config: AppAttestClientConfig,
+    pub app_attest_verifier: StaticAppAttestAssertionVerifier,
+    pub app_attest_assertion: String,
+    pub app_attest_challenge_nonce: String,
+    pub device_ref: DeviceRef,
+}
+
+pub fn mobile_evidence_fixture(
+    id_namespace: &str,
+    token: &str,
+    app_attest_assertion: &str,
+    device_ref: &str,
+) -> MobileEvidenceFixture {
+    let oidc_config =
+        OidcClientConfig::keycloak("https://id.example.test/realms/fen", "fen-identity");
+    let oidc_verifier = StaticOidcSessionVerifier::new(
+        token,
+        VerifiedOidcSession::keycloak(
+            oidc_config.issuer.clone(),
+            format!("keycloak-{id_namespace}"),
+            oidc_config.client_id.clone(),
+            format!("session-{id_namespace}"),
+            ts("2026-05-29T00:00:00Z"),
+            ts("2026-05-29T01:00:00Z"),
+        )
+        .with_amr(vec!["pwd".to_string(), "webauthn".to_string()])
+        .with_verified_email(format!("{id_namespace}@example.test")),
+    );
+    let app_attest_config = AppAttestClientConfig::ios_app(
+        "TEAMID1234",
+        "com.fen.identity",
+        AppAttestEnvironment::Development,
+    );
+    let app_attest_challenge_nonce = format!("app-attest-nonce-{id_namespace}");
+    let app_attest_verifier = StaticAppAttestAssertionVerifier::new(
+        app_attest_assertion,
+        VerifiedAppAttestAssertion {
+            team_id: app_attest_config.team_id.clone(),
+            bundle_id: app_attest_config.bundle_id.clone(),
+            app_id: app_attest_config.app_id.clone(),
+            environment: app_attest_config.environment,
+            device_ref: device_ref.to_string(),
+            key_id: format!("app-attest-key-{id_namespace}"),
+            challenge_nonce: app_attest_challenge_nonce.clone(),
+            sign_count: 12,
+            asserted_at: ts("2026-05-29T00:05:00Z"),
+            expires_at: ts("2026-05-29T00:06:00Z"),
+            assurance_level: AssuranceLevel::Medium,
+        },
+    );
+
+    MobileEvidenceFixture {
+        oidc_config,
+        oidc_verifier,
+        app_attest_config,
+        app_attest_verifier,
+        app_attest_assertion: app_attest_assertion.to_string(),
+        app_attest_challenge_nonce,
+        device_ref: device_ref.to_string(),
+    }
+}

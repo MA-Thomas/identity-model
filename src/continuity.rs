@@ -3,7 +3,11 @@ use crate::identity::*;
 use std::collections::HashMap;
 
 mod canonical;
+#[cfg(feature = "ed25519-dalek-verifier")]
+mod ed25519;
 pub use canonical::*;
+#[cfg(feature = "ed25519-dalek-verifier")]
+pub use ed25519::*;
 
 pub type ChallengeId = Id;
 pub type Nonce = String;
@@ -65,21 +69,57 @@ impl VerificationKeyRegistry {
         Self::default()
     }
 
+    pub fn from_keys(keys: impl IntoIterator<Item = VerificationKey>) -> Self {
+        let mut registry = Self::new();
+        registry.register_many(keys);
+        registry
+    }
+
     pub fn register(&mut self, key: VerificationKey) {
         self.keys_by_id.insert(key.key_id.clone(), key);
+    }
+
+    pub fn register_many(&mut self, keys: impl IntoIterator<Item = VerificationKey>) {
+        for key in keys {
+            self.register(key);
+        }
     }
 
     pub fn get(&self, key_id: &VerificationKeyId) -> Option<&VerificationKey> {
         self.keys_by_id.get(key_id)
     }
-}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PresentationAttackDetectionResult {
-    Passed,
-    Failed,
-    Inconclusive,
-    NotPerformed,
+    pub fn retire(
+        &mut self,
+        key_id: &VerificationKeyId,
+    ) -> Result<(), ContinuityAssertionRejectionReason> {
+        let key = self
+            .keys_by_id
+            .get_mut(key_id)
+            .ok_or(ContinuityAssertionRejectionReason::UnknownVerificationKey)?;
+        key.status = VerificationKeyStatus::Retired;
+        Ok(())
+    }
+
+    pub fn active_keys_for_provider(&self, provider_name: &str) -> Vec<VerificationKey> {
+        self.keys_for_provider_with_status(provider_name, VerificationKeyStatus::Active)
+    }
+
+    pub fn retired_keys_for_provider(&self, provider_name: &str) -> Vec<VerificationKey> {
+        self.keys_for_provider_with_status(provider_name, VerificationKeyStatus::Retired)
+    }
+
+    fn keys_for_provider_with_status(
+        &self,
+        provider_name: &str,
+        status: VerificationKeyStatus,
+    ) -> Vec<VerificationKey> {
+        self.keys_by_id
+            .values()
+            .filter(|key| key.provider_name == provider_name && key.status == status)
+            .cloned()
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

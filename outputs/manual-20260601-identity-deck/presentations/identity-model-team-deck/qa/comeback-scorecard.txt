@@ -1,0 +1,26 @@
+Profile gate: engineering-platform
+Status: pass
+
+Rendered QA:
+- Exported 14-slide editable PPTX through artifact-tool.
+- Rendered all slide previews and contact sheet.
+- Reviewed contact sheet after two visual iterations.
+- Ran layout quality checker on final layout JSON.
+- Final checker result: 0 errors, 17 conservative padding/tight-text warnings.
+
+Rubric:
+- story: 5
+- specificity: 5
+- rhythm: 4
+- whitespace: 4
+- chart clarity: 4
+- typography: 4
+- restraint: 5
+- precision: 4
+- coherence: 5
+- reference delta: n/a
+
+Total: 40 / 45, reference delta n/a
+
+Residual caveat:
+- Some diagram boxes intentionally use compact technical labels; the checker flags them as tight, but the rendered contact sheet remains readable and uncluttered.

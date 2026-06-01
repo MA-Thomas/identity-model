@@ -1,7 +1,8 @@
 use crate::continuity::*;
+use crate::device::*;
 use crate::fen::*;
-use crate::fixtures::workflow_narrative_lines;
 use crate::flows::*;
+use crate::iam::*;
 use crate::identity::*;
 use crate::ids::*;
 use crate::materialized::*;
@@ -9,6 +10,12 @@ use crate::persistence::*;
 use crate::policy::*;
 use crate::provider::*;
 use crate::translation::*;
+use crate::workflows::*;
+
+mod outcomes;
+use outcomes::{
+    fact_ids_matching, first_fact_id_matching, required_fact_id_matching, workflow_outcome,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdentityWorkflowService {
@@ -25,6 +32,18 @@ pub struct WorkflowOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositoryBackedWorkflowOutcome {
     pub workflow: WorkflowOutcome,
+    pub replayed_projection: MaterializedIdentityState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositoryBackedCoreIdentityOnboardingOutcome {
+    pub onboarding: CoreIdentityOnboardingOutcome,
+    pub replayed_projection: MaterializedIdentityState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositoryBackedAccountSessionBootstrapOutcome {
+    pub bootstrap: AccountSessionBootstrapOutcome,
     pub replayed_projection: MaterializedIdentityState,
 }
 
@@ -49,10 +68,83 @@ pub struct CoreIdentityOnboardingRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreIdentityOnboardingOutcome {
     pub subject_id: SubjectId,
+    pub parent_episode: ProblemEpisode,
     pub registration: SubjectRegistrationOutcome,
     pub device_binding: DeviceBindingOutcome,
     pub continuity_enrollment: ContinuityEnrollmentOutcome,
+    pub episode_relations: Vec<EpisodeRelation>,
     pub projection: MaterializedIdentityState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountSessionBootstrapOutcome {
+    pub workflow: WorkflowOutcome,
+    pub credential_fact_id: FactId,
+    pub portal_login_witness_fact_id: FactId,
+    pub verified_email_attribute_fact_id: Option<FactId>,
+    pub device_binding_fact_id: Option<FactId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountTokenBootstrapRequest {
+    pub subject_id: SubjectId,
+    pub authored_by: Author,
+    pub observed_at: Timestamp,
+    pub id_namespace: String,
+    pub token: String,
+    pub oidc_config: OidcClientConfig,
+    pub device_ref: Option<DeviceRef>,
+    pub assurance_policy: OidcAssurancePolicy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountTokenWithAppAttestBootstrapRequest {
+    pub account: AccountTokenBootstrapRequest,
+    pub app_attest: AppAttestAssertionVerificationRequest,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountTokenBootstrapError {
+    Verification(OidcSessionVerificationError),
+    Repository(RepositoryError),
+}
+
+impl From<OidcSessionVerificationError> for AccountTokenBootstrapError {
+    fn from(error: OidcSessionVerificationError) -> Self {
+        Self::Verification(error)
+    }
+}
+
+impl From<RepositoryError> for AccountTokenBootstrapError {
+    fn from(error: RepositoryError) -> Self {
+        Self::Repository(error)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountTokenWithAppAttestBootstrapError {
+    Verification(OidcSessionVerificationError),
+    AppAttest(AppAttestAssertionVerificationError),
+    DeviceRefMismatch,
+    Repository(RepositoryError),
+}
+
+impl From<OidcSessionVerificationError> for AccountTokenWithAppAttestBootstrapError {
+    fn from(error: OidcSessionVerificationError) -> Self {
+        Self::Verification(error)
+    }
+}
+
+impl From<AppAttestAssertionVerificationError> for AccountTokenWithAppAttestBootstrapError {
+    fn from(error: AppAttestAssertionVerificationError) -> Self {
+        Self::AppAttest(error)
+    }
+}
+
+impl From<RepositoryError> for AccountTokenWithAppAttestBootstrapError {
+    fn from(error: RepositoryError) -> Self {
+        Self::Repository(error)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -231,6 +323,29 @@ impl IdentityWorkflowService {
         })
     }
 
+    pub fn append_core_onboarding_and_replay(
+        &self,
+        onboarding: CoreIdentityOnboardingOutcome,
+        repository: &mut impl IdentityWorkflowRepository,
+    ) -> Result<RepositoryBackedCoreIdentityOnboardingOutcome, RepositoryError> {
+        let subject_id = onboarding.subject_id.clone();
+        repository.append_episode_composition(
+            onboarding.parent_episode.clone(),
+            vec![
+                onboarding.registration.workflow.slice.clone(),
+                onboarding.device_binding.workflow.slice.clone(),
+                onboarding.continuity_enrollment.workflow.slice.clone(),
+            ],
+            onboarding.episode_relations.clone(),
+        )?;
+        let replayed_projection = replay_identity_state_from_repository(subject_id, repository);
+
+        Ok(RepositoryBackedCoreIdentityOnboardingOutcome {
+            onboarding,
+            replayed_projection,
+        })
+    }
+
     pub fn enroll_subject(
         &self,
         request: OnboardingRequest,
@@ -286,6 +401,13 @@ impl IdentityWorkflowService {
         let register_namespace = format!("{}-register-subject", request.id_namespace);
         let device_namespace = format!("{}-bind-device", request.id_namespace);
         let continuity_namespace = format!("{}-enroll-continuity", request.id_namespace);
+        let relation_namespace = format!("relation-{}", request.id_namespace);
+        let parent_episode = parent_onboarding_episode(
+            id_generator.next_episode_id(&format!("episode-{}-parent", request.id_namespace)),
+            subject_id.clone(),
+            request.authored_by.clone(),
+            request.registered_at.clone(),
+        );
 
         let registration = self.register_subject(RegisterSubjectRequest::with_generated_ids(
             subject_id.clone(),
@@ -310,7 +432,7 @@ impl IdentityWorkflowService {
         let continuity_enrollment = self.enroll_continuity_reference(
             EnrollContinuityRequest::with_generated_ids(
                 subject_id.clone(),
-                request.authored_by,
+                request.authored_by.clone(),
                 request.continuity_enrolled_at,
                 request.modality,
                 &continuity_namespace,
@@ -318,6 +440,37 @@ impl IdentityWorkflowService {
             ),
             provider,
         )?;
+        let episode_relations = vec![
+            episode_relation(
+                id_generator.next_relation_id(&relation_namespace),
+                registration.workflow.slice.episode.id.clone(),
+                parent_episode.id.clone(),
+                EpisodeRelationType::PartOf,
+                request.authored_by.clone(),
+                registration.workflow.slice.episode.authored_at.clone(),
+            ),
+            episode_relation(
+                id_generator.next_relation_id(&relation_namespace),
+                device_binding.workflow.slice.episode.id.clone(),
+                parent_episode.id.clone(),
+                EpisodeRelationType::PartOf,
+                request.authored_by.clone(),
+                device_binding.workflow.slice.episode.authored_at.clone(),
+            ),
+            episode_relation(
+                id_generator.next_relation_id(&relation_namespace),
+                continuity_enrollment.workflow.slice.episode.id.clone(),
+                parent_episode.id.clone(),
+                EpisodeRelationType::PartOf,
+                request.authored_by,
+                continuity_enrollment
+                    .workflow
+                    .slice
+                    .episode
+                    .authored_at
+                    .clone(),
+            ),
+        ];
 
         let mut facts = Vec::new();
         facts.extend(registration.workflow.slice.facts.clone());
@@ -327,9 +480,11 @@ impl IdentityWorkflowService {
 
         Ok(CoreIdentityOnboardingOutcome {
             subject_id,
+            parent_episode,
             registration,
             device_binding,
             continuity_enrollment,
+            episode_relations,
             projection,
         })
     }
@@ -384,6 +539,150 @@ impl IdentityWorkflowService {
             workflow,
             device_binding_fact_id,
         }
+    }
+
+    pub fn accept_account_session(
+        &self,
+        request: AccountSessionBootstrapRequest,
+    ) -> AccountSessionBootstrapOutcome {
+        let subject_id = request.subject_id.clone();
+        let workflow = workflow_outcome(
+            subject_id,
+            account_session_bootstrap_slice_from_request(request, &self.translator),
+        );
+
+        AccountSessionBootstrapOutcome {
+            credential_fact_id: required_fact_id_matching(&workflow.slice, |payload| {
+                matches!(payload, FactPayload::CredentialAssertion { .. })
+            }),
+            portal_login_witness_fact_id: required_fact_id_matching(&workflow.slice, |payload| {
+                matches!(
+                    payload,
+                    FactPayload::IdentityWitnessRecorded {
+                        witness_type: IdentityWitnessType::PatientPortalLoginProof,
+                        ..
+                    }
+                )
+            }),
+            verified_email_attribute_fact_id: first_fact_id_matching(&workflow.slice, |payload| {
+                matches!(
+                    payload,
+                    FactPayload::IdentityAttributeAsserted {
+                        attribute: IdentityAttribute::Email,
+                        ..
+                    }
+                )
+            }),
+            device_binding_fact_id: first_fact_id_matching(&workflow.slice, |payload| {
+                matches!(payload, FactPayload::DeviceBindingEstablished { .. })
+            }),
+            workflow,
+        }
+    }
+
+    pub fn accept_account_token(
+        &self,
+        request: AccountTokenBootstrapRequest,
+        verifier: &impl OidcSessionVerifier,
+        id_generator: &mut impl IdGenerator,
+    ) -> Result<AccountSessionBootstrapOutcome, AccountTokenBootstrapError> {
+        let session =
+            verifier.verify_session(&request.token, &request.oidc_config, &request.observed_at)?;
+
+        Ok(
+            self.accept_account_session(AccountSessionBootstrapRequest::with_generated_ids(
+                request.subject_id,
+                request.authored_by,
+                request.observed_at,
+                session,
+                request.device_ref,
+                request.assurance_policy,
+                &request.id_namespace,
+                id_generator,
+            )),
+        )
+    }
+
+    pub fn accept_account_token_with_app_attest(
+        &self,
+        request: AccountTokenWithAppAttestBootstrapRequest,
+        verifier: &impl OidcSessionVerifier,
+        app_attest_verifier: &impl AppAttestAssertionVerifier,
+        id_generator: &mut impl IdGenerator,
+    ) -> Result<AccountSessionBootstrapOutcome, AccountTokenWithAppAttestBootstrapError> {
+        let session = verifier.verify_session(
+            &request.account.token,
+            &request.account.oidc_config,
+            &request.account.observed_at,
+        )?;
+        let app_attest_assertion = app_attest_verifier
+            .verify_app_attest_assertion(&request.app_attest, &request.account.observed_at)?;
+        if request
+            .account
+            .device_ref
+            .as_ref()
+            .is_some_and(|device_ref| device_ref != &app_attest_assertion.device_ref)
+        {
+            return Err(AccountTokenWithAppAttestBootstrapError::DeviceRefMismatch);
+        }
+
+        Ok(self.accept_account_session(
+            AccountSessionBootstrapRequest::with_generated_ids_and_app_attest(
+                request.account.subject_id,
+                request.account.authored_by,
+                request.account.observed_at,
+                session,
+                app_attest_assertion,
+                request.account.assurance_policy,
+                &request.account.id_namespace,
+                id_generator,
+            ),
+        ))
+    }
+
+    pub fn accept_account_token_with_app_attest_append_and_replay(
+        &self,
+        request: AccountTokenWithAppAttestBootstrapRequest,
+        verifier: &impl OidcSessionVerifier,
+        app_attest_verifier: &impl AppAttestAssertionVerifier,
+        id_generator: &mut impl IdGenerator,
+        repository: &mut impl IdentityWorkflowRepository,
+    ) -> Result<
+        RepositoryBackedAccountSessionBootstrapOutcome,
+        AccountTokenWithAppAttestBootstrapError,
+    > {
+        let bootstrap = self.accept_account_token_with_app_attest(
+            request,
+            verifier,
+            app_attest_verifier,
+            id_generator,
+        )?;
+        let subject_id = bootstrap.workflow.slice.episode.subject_id.clone();
+        repository.append_workflow_slice(bootstrap.workflow.slice.clone())?;
+        let replayed_projection = replay_identity_state_from_repository(subject_id, repository);
+
+        Ok(RepositoryBackedAccountSessionBootstrapOutcome {
+            bootstrap,
+            replayed_projection,
+        })
+    }
+
+    pub fn accept_account_token_append_and_replay(
+        &self,
+        request: AccountTokenBootstrapRequest,
+        verifier: &impl OidcSessionVerifier,
+        id_generator: &mut impl IdGenerator,
+        repository: &mut impl IdentityWorkflowRepository,
+    ) -> Result<RepositoryBackedAccountSessionBootstrapOutcome, AccountTokenBootstrapError> {
+        let bootstrap = self.accept_account_token(request, verifier, id_generator)?;
+        let subject_id = bootstrap.workflow.slice.episode.subject_id.clone();
+        repository.append_workflow_slice(bootstrap.workflow.slice.clone())?;
+        let replayed_projection = replay_identity_state_from_repository(subject_id, repository);
+
+        Ok(RepositoryBackedAccountSessionBootstrapOutcome {
+            bootstrap,
+            replayed_projection,
+        })
     }
 
     pub fn enroll_continuity_reference(
@@ -702,46 +1001,4 @@ impl IdentityWorkflowService {
             &request.context,
         )
     }
-}
-
-fn workflow_outcome(subject_id: SubjectId, slice: IdentityWorkflowSlice) -> WorkflowOutcome {
-    let projection = materialize_identity_state(subject_id, &slice.facts);
-    let narrative = workflow_narrative_lines(&slice);
-
-    WorkflowOutcome {
-        slice,
-        projection,
-        narrative,
-    }
-}
-
-fn first_fact_id_matching(
-    slice: &IdentityWorkflowSlice,
-    matches_payload: impl Fn(&FactPayload) -> bool,
-) -> Option<FactId> {
-    slice
-        .facts
-        .iter()
-        .find(|fact| matches_payload(&fact.payload))
-        .map(|fact| fact.id.clone())
-}
-
-fn required_fact_id_matching(
-    slice: &IdentityWorkflowSlice,
-    matches_payload: impl Fn(&FactPayload) -> bool,
-) -> FactId {
-    first_fact_id_matching(slice, matches_payload)
-        .expect("workflow should include expected fact payload")
-}
-
-fn fact_ids_matching(
-    slice: &IdentityWorkflowSlice,
-    matches_payload: impl Fn(&FactPayload) -> bool,
-) -> Vec<FactId> {
-    slice
-        .facts
-        .iter()
-        .filter(|fact| matches_payload(&fact.payload))
-        .map(|fact| fact.id.clone())
-        .collect()
 }

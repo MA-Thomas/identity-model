@@ -160,6 +160,280 @@ fn membership_repository_finds_episode_edges_for_a_fact() {
 }
 
 #[test]
+fn episode_relation_repository_tracks_part_of_children_for_parent_episode() {
+    let subject_id = id("subject-relation-lookup");
+    let author = system_author();
+    let parent = identity_verification_episode(
+        id("episode-onboarding-parent"),
+        subject_id.clone(),
+        author.clone(),
+        ts("2026-05-29T00:00:00Z"),
+    );
+    let registration = identity_verification_episode(
+        id("episode-register-subject"),
+        subject_id.clone(),
+        author.clone(),
+        ts("2026-05-29T00:01:00Z"),
+    );
+    let device = identity_verification_episode(
+        id("episode-bind-device"),
+        subject_id,
+        author.clone(),
+        ts("2026-05-29T00:02:00Z"),
+    );
+    let registration_part_of = episode_relation(
+        id("relation-registration-parent"),
+        registration.id.clone(),
+        parent.id.clone(),
+        EpisodeRelationType::PartOf,
+        author.clone(),
+        ts("2026-05-29T00:01:00Z"),
+    );
+    let device_part_of = episode_relation(
+        id("relation-device-parent"),
+        device.id.clone(),
+        parent.id.clone(),
+        EpisodeRelationType::PartOf,
+        author,
+        ts("2026-05-29T00:02:00Z"),
+    );
+    let mut repository = InMemoryIdentityRepository::new();
+
+    repository
+        .append_episode(parent.clone())
+        .expect("parent episode should append");
+    repository
+        .append_episode(registration.clone())
+        .expect("registration episode should append");
+    repository
+        .append_episode(device.clone())
+        .expect("device episode should append");
+    repository
+        .append_episode_relation(registration_part_of.clone())
+        .expect("registration relation should append");
+    repository
+        .append_episode_relation(device_part_of.clone())
+        .expect("device relation should append");
+
+    assert_eq!(
+        repository.relations_for_parent_episode(&parent.id),
+        vec![registration_part_of.clone(), device_part_of]
+    );
+    assert_eq!(
+        repository.relations_for_child_episode(&registration.id),
+        vec![registration_part_of]
+    );
+    assert_eq!(
+        repository.child_episode_ids_for_parent(&parent.id, EpisodeRelationType::PartOf),
+        vec![registration.id, device.id]
+    );
+}
+
+#[test]
+fn episode_relation_repository_rejects_duplicate_relation_ids_without_mutating_history() {
+    let author = system_author();
+    let first = episode_relation(
+        id("relation-duplicate"),
+        id("episode-child-a"),
+        id("episode-parent"),
+        EpisodeRelationType::PartOf,
+        author.clone(),
+        ts("2026-05-29T00:00:00Z"),
+    );
+    let duplicate = episode_relation(
+        id("relation-duplicate"),
+        id("episode-child-b"),
+        id("episode-parent"),
+        EpisodeRelationType::PartOf,
+        author,
+        ts("2026-05-29T00:01:00Z"),
+    );
+    let mut repository = InMemoryIdentityRepository::new();
+
+    assert_eq!(repository.append_episode_relation(first.clone()), Ok(()));
+    assert_eq!(
+        repository.append_episode_relation(duplicate),
+        Err(RepositoryError::DuplicateRelationId)
+    );
+    assert_eq!(repository.all_episode_relations(), vec![first]);
+}
+
+#[test]
+fn episode_composition_append_persists_parent_children_and_relations_atomically() {
+    let subject_id = id("subject-composition-append");
+    let author = system_author();
+    let translator = FenTranslator {
+        system_author: author.clone(),
+    };
+    let parent = parent_onboarding_episode(
+        id("episode-composition-parent"),
+        subject_id.clone(),
+        author.clone(),
+        ts("2026-05-29T00:00:00Z"),
+    );
+    let registration = register_subject_slice_from_request(
+        RegisterSubjectRequest::fixture(
+            subject_id.clone(),
+            author.clone(),
+            ts("2026-05-29T00:01:00Z"),
+        ),
+        &translator,
+    );
+    let device = bind_device_slice_from_request(
+        BindDeviceRequest::fixture(
+            subject_id.clone(),
+            author.clone(),
+            ts("2026-05-29T00:02:00Z"),
+        ),
+        &translator,
+    );
+    let relations = vec![
+        episode_relation(
+            id("relation-registration-composition"),
+            registration.episode.id.clone(),
+            parent.id.clone(),
+            EpisodeRelationType::PartOf,
+            author.clone(),
+            ts("2026-05-29T00:01:00Z"),
+        ),
+        episode_relation(
+            id("relation-device-composition"),
+            device.episode.id.clone(),
+            parent.id.clone(),
+            EpisodeRelationType::PartOf,
+            author,
+            ts("2026-05-29T00:02:00Z"),
+        ),
+    ];
+    let expected_projection = materialize_identity_state(
+        subject_id.clone(),
+        &[registration.facts.clone(), device.facts.clone()].concat(),
+    );
+    let mut repository = InMemoryIdentityRepository::new();
+
+    repository
+        .append_episode_composition(
+            parent.clone(),
+            vec![registration.clone(), device.clone()],
+            relations.clone(),
+        )
+        .expect("composition should append");
+
+    assert_eq!(
+        repository.all_episodes(),
+        vec![
+            parent.clone(),
+            registration.episode.clone(),
+            device.episode.clone()
+        ]
+    );
+    assert_eq!(repository.all_episode_relations(), relations);
+    assert_eq!(
+        repository.child_episode_ids_for_parent(&parent.id, EpisodeRelationType::PartOf),
+        vec![registration.episode.id, device.episode.id]
+    );
+    assert_eq!(
+        replay_identity_state_from_repository(subject_id, &repository),
+        expected_projection
+    );
+}
+
+#[test]
+fn episode_composition_append_rejects_duplicate_parent_episode_without_mutating_history() {
+    let subject_id = id("subject-composition-parent-duplicate");
+    let author = system_author();
+    let translator = FenTranslator {
+        system_author: author.clone(),
+    };
+    let parent = parent_onboarding_episode(
+        id("episode-composition-duplicate-parent"),
+        subject_id.clone(),
+        author.clone(),
+        ts("2026-05-29T00:00:00Z"),
+    );
+    let registration = register_subject_slice_from_request(
+        RegisterSubjectRequest::fixture(
+            subject_id.clone(),
+            author.clone(),
+            ts("2026-05-29T00:01:00Z"),
+        ),
+        &translator,
+    );
+    let relation = episode_relation(
+        id("relation-duplicate-parent-composition"),
+        registration.episode.id.clone(),
+        parent.id.clone(),
+        EpisodeRelationType::PartOf,
+        author,
+        ts("2026-05-29T00:01:00Z"),
+    );
+    let mut repository = InMemoryIdentityRepository::new();
+    repository
+        .append_episode(parent.clone())
+        .expect("existing parent should append");
+    let original_episodes = repository.all_episodes();
+    let original_facts = repository.all_facts();
+    let original_memberships = repository.all_memberships();
+    let original_relations = repository.all_episode_relations();
+
+    assert_eq!(
+        repository.append_episode_composition(parent, vec![registration], vec![relation]),
+        Err(RepositoryError::DuplicateEpisodeId)
+    );
+    assert_eq!(repository.all_episodes(), original_episodes);
+    assert_eq!(repository.all_facts(), original_facts);
+    assert_eq!(repository.all_memberships(), original_memberships);
+    assert_eq!(repository.all_episode_relations(), original_relations);
+}
+
+#[test]
+fn episode_composition_append_rejects_duplicate_relation_ids_without_mutating_history() {
+    let subject_id = id("subject-composition-relation-duplicate");
+    let author = system_author();
+    let translator = FenTranslator {
+        system_author: author.clone(),
+    };
+    let parent = parent_onboarding_episode(
+        id("episode-composition-relation-parent"),
+        subject_id.clone(),
+        author.clone(),
+        ts("2026-05-29T00:00:00Z"),
+    );
+    let registration = register_subject_slice_from_request(
+        RegisterSubjectRequest::fixture(subject_id, author.clone(), ts("2026-05-29T00:01:00Z")),
+        &translator,
+    );
+    let relations = vec![
+        episode_relation(
+            id("relation-duplicate-in-composition"),
+            registration.episode.id.clone(),
+            parent.id.clone(),
+            EpisodeRelationType::PartOf,
+            author.clone(),
+            ts("2026-05-29T00:01:00Z"),
+        ),
+        episode_relation(
+            id("relation-duplicate-in-composition"),
+            registration.episode.id.clone(),
+            parent.id.clone(),
+            EpisodeRelationType::PartOf,
+            author,
+            ts("2026-05-29T00:02:00Z"),
+        ),
+    ];
+    let mut repository = InMemoryIdentityRepository::new();
+
+    assert_eq!(
+        repository.append_episode_composition(parent, vec![registration], relations),
+        Err(RepositoryError::DuplicateRelationId)
+    );
+    assert!(repository.all_episodes().is_empty());
+    assert!(repository.all_facts().is_empty());
+    assert!(repository.all_memberships().is_empty());
+    assert!(repository.all_episode_relations().is_empty());
+}
+
+#[test]
 fn replay_respects_revoked_contested_expired_and_superseded_history() {
     let subject_id = id("subject-replay-history");
     let clinical_link_id = id("clinical-link-replay");
@@ -172,6 +446,7 @@ fn replay_respects_revoked_contested_expired_and_superseded_history() {
             assurance_level: AssuranceLevel::High,
             evidence_ref: None,
             expires_at: None,
+            context: IdentityWitnessContext::default(),
         },
     );
     let mut superseded_witness = fact(
@@ -183,6 +458,7 @@ fn replay_respects_revoked_contested_expired_and_superseded_history() {
             assurance_level: AssuranceLevel::Medium,
             evidence_ref: None,
             expires_at: None,
+            context: IdentityWitnessContext::default(),
         },
     );
     superseded_witness.status = FactStatus::Superseded {

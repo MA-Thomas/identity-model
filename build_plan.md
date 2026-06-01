@@ -238,6 +238,12 @@ The assertion should include at least:
 
 ### Notes for Later Phases
 
+FEN should control the FEN-native continuity assertion profile: required fields, nonce binding, canonical bytes, accepted signature profile, key identity, provider authorization, and rejection semantics.
+
+That does not require every Phase 1 provider to emit that profile natively. A vendor may emit its own signed payload, webhook, SDK result, JWS, RSA/ECDSA signature, or other evidence envelope. In that case, the provider adapter verifies the vendor-native envelope at the edge and only then translates or re-signs normalized evidence into the FEN-facing assertion contract.
+
+The preferred first FEN-native production verifier is strict Ed25519 over canonical FEN assertion bytes, behind the `ContinuitySignatureVerifier` seam. The current feature-gated hosted adapter proves provider-issued Ed25519 signatures, active/retired key publication, and service-level nonce rejection semantics. Broader crypto backends belong in provider adapters or production trust-boundary crates when vendor or compliance requirements demand them.
+
 This is the main portability boundary. Everything left of signed assertion verification can move from vendor to hosted SDK to enclave service without changing FEN.
 
 ## Milestone 6: Continuity Vault Provider Interface
@@ -380,6 +386,21 @@ Implement initial patient identity binding as a FEN workflow.
 
 Onboarding is an identity verification workflow. It creates facts, links them with memberships, and summarizes state in a narrative or materialized view.
 
+The onboarding liveness ceremony should be motivated explicitly because it is easy to mislabel it as "face authentication." A YouTube-style guided video-selfie ceremony is useful because it creates live-presence evidence: a physically present human completed a fresh challenge at onboarding time, under liveness/PAD and capture-path controls. It can also produce or support the biometric enrollment capture used later by the continuity substrate.
+
+That ceremony is not identity by itself. It should be represented as a `SelfieLivenessCheck` identity witness, usually alongside government ID, clinical registration, payer, or provider evidence. The later biological-continuity claim is narrower and stronger in a different way: a signed, nonce-bound 1:1 check against this subject's enrollment reference, translated into a `BiometricContinuityCheck` fact.
+
+The motivated accounting for onboarding evidence is:
+
+- account/session evidence proves control of an account session
+- app or hardware attestation helps bind the capture path to a genuine app/device context
+- guided video-selfie liveness proves fresh physical presence and presentation-attack resistance
+- government ID, clinic, provider, or payer evidence supports civil or institutional identity
+- biometric enrollment stores an opaque reference for later 1:1 continuity checks
+- signed continuity assertions are used for later step-up, recovery, delegation, and high-risk access decisions
+
+Product language should reflect this distinction. Prefer "live presence check," "video-selfie check," or "confirm you are physically present." Avoid "face authentication" or "prove identity with your face."
+
 ### Build Target
 
 Create an onboarding flow that records:
@@ -388,6 +409,7 @@ Create an onboarding flow that records:
 - account bootstrap
 - device binding
 - identity witnesses
+- guided live-presence or video-selfie liveness witness
 - biometric enrollment reference
 - provider or payer links when available
 - episode memberships
@@ -396,8 +418,12 @@ Create an onboarding flow that records:
 ### Acceptance Criteria
 
 - Sign in with Apple, Google, or another account mechanism is treated as bootstrap evidence only.
-- Government ID and liveness checks are represented as witnesses.
+- Government ID and liveness checks are represented as distinct witnesses.
+- The live-presence ceremony records `IdentityWitnessRecorded` with `IdentityWitnessType::SelfieLivenessCheck`; it does not collapse into `SubjectCreated`, `DeviceBindingEstablished`, or a mutable profile field.
+- A later signed 1:1 match against the enrollment reference records `BiometricContinuityCheck`; onboarding liveness and post-enrollment biological continuity remain separate evidence types.
 - Biometric enrollment stores only a reference.
+- Raw frames, captures, templates, embeddings, and liveness artifacts stay outside ordinary FEN facts; FEN stores provider references, assurance, result, provenance, challenge binding, and retention/consent policy references where needed.
+- Failed or inconclusive liveness is represented as evidence that can drive retry, manual review, lockout, or recovery episodes rather than a silent onboarding denial.
 - The onboarding narrative summarizes evidence without becoming the source of truth.
 
 ### Notes for Later Phases
@@ -589,12 +615,15 @@ Create a Phase 1 adapter that maps vendor responses into:
 
 - Vendor code is isolated at the edge.
 - FEN translation consumes canonical provider outputs.
+- Vendor-native signatures are verified before provider outputs are trusted as FEN evidence.
 - Vendor-specific IDs do not become primary FEN identity keys.
 - Mocked vendor responses can drive onboarding and step-up flows.
 
 ### Notes for Later Phases
 
 This adapter should be deletable or replaceable without changing core identity facts, policy, or materialized state.
+
+If the vendor cannot emit FEN-native signed assertions, the adapter may either translate verified vendor evidence directly into FEN fact drafts or hand normalized evidence to a trusted gateway that re-signs the FEN-native continuity assertion profile.
 
 ## Milestone 17: Provider Swap Test
 
@@ -630,6 +659,8 @@ Check the implementation against the security model.
 
 Facts are the cryptographic unit. Operational representations support indexing and policy evaluation but do not contain full plaintext payloads. Derived objects inherit constraints from constituent facts.
 
+For production persistence, this means fact payloads can be separately encrypted while append sequence, IDs, payload type, status, and materialization policy refs remain available as operational metadata. Rust remains responsible for policy-gated semantic materialization.
+
 ### Build Target
 
 Review and test:
@@ -641,17 +672,23 @@ Review and test:
 - revocation behavior
 - contested-link behavior
 - operational/materialized view boundaries
+- encrypted fact-payload envelopes and materialization policy refs
+- associated-data binding so ciphertext cannot be moved across facts, subjects, policies, or append positions without detection
 
 ### Acceptance Criteria
 
 - No raw biometric capture, template, or embedding is stored in ordinary FEN facts.
+- Production storage can keep `FactPayload` values encrypted until Rust policy and key access permit materialization.
 - Access decisions are explainable after the fact.
 - Revocation prevents future reliance without deleting history.
 - Materialized state can be rebuilt from source facts.
+- Cached projections and derived views do not become plaintext bypasses around encrypted source facts.
 
 ### Notes for Later Phases
 
 This is where Phase 3 requirements such as template isolation, enclave matching, and threshold governance remain clearly outside FEN but connected through policy and assertions.
+
+See `FACT_ENCRYPTION_AND_MATERIALIZATION_CONTRACT.md` for the encrypted fact-payload storage and policy-gated materialization contract.
 
 ## Milestone 19: Phase 2 and Phase 3 Transition Notes
 
@@ -676,12 +713,14 @@ Create transition notes for:
 - PAD evaluation
 - FAR/FRR monitoring
 - threshold governance
+- encrypted fact-payload persistence and policy-gated materialization
 
 ### Acceptance Criteria
 
 - Each later-phase change is assigned to the continuity substrate, policy layer, or FEN graph.
 - The notes identify what should not change in FEN.
 - The notes identify new risks introduced by owning more of the substrate.
+- The notes distinguish database storage access from semantic plaintext materialization.
 
 ### Notes for Later Phases
 

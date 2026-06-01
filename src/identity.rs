@@ -108,6 +108,30 @@ pub enum IdentityWitnessType {
     LegalDocument,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentityWitnessResult {
+    Passed,
+    Failed,
+    Inconclusive,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresentationAttackDetectionResult {
+    Passed,
+    Failed,
+    Inconclusive,
+    NotPerformed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct IdentityWitnessContext {
+    pub witness_result: Option<IdentityWitnessResult>,
+    pub challenge_nonce: Option<String>,
+    pub device_ref: Option<DeviceRef>,
+    pub pad_result: Option<PresentationAttackDetectionResult>,
+    pub retention_policy_refs: Vec<PolicyRef>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthenticatorType {
     Passkey,

@@ -1,0 +1,782 @@
+{
+  "schema": "openai.presentation.layout/v4",
+  "unit": "px",
+  "slide": {
+    "aid": "sl/3a2yw0",
+    "id": "3a2yw0",
+    "slide": 13,
+    "layoutId": "54110cc9-41e5-4f88-8660-a18ed48758ef",
+    "layoutName": "Title Slide",
+    "layoutType": "title",
+    "masterLayoutId": "11406d48-1f32-4429-947d-6cfe005413df",
+    "masterLayoutName": "Master",
+    "backgroundColor": "#FBFAF5",
+    "frame": {
+      "left": 0,
+      "top": 0,
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "theme": {
+    "colorSchemeName": "ChatGPT",
+    "colors": {
+      "accent1": "#156082",
+      "accent2": "#E97132",
+      "accent3": "#196B24",
+      "accent4": "#0F9ED5",
+      "accent5": "#A02B93",
+      "accent6": "#4EA72E",
+      "bg1": "#FFFFFF",
+      "bg2": "#000000",
+      "tx1": "#1F1F1F",
+      "tx2": "#FFFFFF",
+      "dk1": "#000000",
+      "lt1": "#FFFFFF",
+      "dk2": "#0E2841",
+      "lt2": "#E8E8E8",
+      "hlink": "#467886",
+      "folHlink": "#96607D"
+    },
+    "typefaces": [
+      "Aptos",
+      "Aptos Display"
+    ]
+  },
+  "inheritedLayers": [
+    {
+      "scope": "layout",
+      "id": "54110cc9-41e5-4f88-8660-a18ed48758ef",
+      "name": "Title Slide",
+      "type": "title",
+      "parentLayoutId": "11406d48-1f32-4429-947d-6cfe005413df",
+      "elements": []
+    },
+    {
+      "scope": "master",
+      "id": "11406d48-1f32-4429-947d-6cfe005413df",
+      "name": "Master",
+      "type": "master",
+      "elements": []
+    }
+  ],
+  "elements": [
+    {
+      "order": 1,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/0z61032l",
+      "id": "1",
+      "bbox": [
+        72,
+        44,
+        760,
+        24
+      ],
+      "geometry": "rect",
+      "text": "RUST PROOF",
+      "textPreview": "RUST PROOF",
+      "resolvedFontSize": 12,
+      "resolvedTextStyle": {
+        "fontSize": 12,
+        "typeface": "Aptos",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "RUST PROOF"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "RUST PROOF",
+          "runs": [
+            {
+              "index": 1,
+              "text": "RUST PROOF",
+              "fontSize": 12,
+              "typeface": "Aptos",
+              "color": "#0F766E",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 2,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/7ed8bat4",
+      "id": "2",
+      "bbox": [
+        72,
+        76,
+        820,
+        112
+      ],
+      "geometry": "rect",
+      "text": "The current framework already exercises the architectural boundary.",
+      "textPreview": "The current framework already exercises the architectural boundary.",
+      "resolvedFontSize": 38,
+      "resolvedTextStyle": {
+        "fontSize": 38,
+        "typeface": "Aptos Display",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "The current framework already exercises the"
+          },
+          {
+            "index": 2,
+            "text": "architectural boundary."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "The current framework already exercises the architectural boundary.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "The current framework already exercises the architectural boundary.",
+              "fontSize": 38,
+              "typeface": "Aptos Display",
+              "color": "#1F2933",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 3,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/itgfmlkj",
+      "id": "3",
+      "bbox": [
+        72,
+        198,
+        760,
+        52
+      ],
+      "geometry": "rect",
+      "text": "The codebase has enough working slices to make this a concrete MVP path rather than a theory deck.",
+      "textPreview": "The codebase has enough working slices to make this a concrete MVP path rather than a theory deck.",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "fontSize": 20,
+        "typeface": "Aptos",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "The codebase has enough working slices to make this a concrete MVP path rather"
+          },
+          {
+            "index": 2,
+            "text": "than a theory deck."
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "The codebase has enough working slices to make this a concrete MVP path rather than a theory deck.",
+          "runs": [
+            {
+              "index": 1,
+              "text": "The codebase has enough working slices to make this a concrete MVP path rather than a theory deck.",
+              "fontSize": 20,
+              "typeface": "Aptos",
+              "color": "#5E6B75"
+            }
+          ]
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 4,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/p8nqxs72",
+      "id": "4",
+      "bbox": [
+        1176,
+        46,
+        40,
+        20
+      ],
+      "geometry": "rect",
+      "text": "13",
+      "textPreview": "13",
+      "resolvedFontSize": 11,
+      "resolvedTextStyle": {
+        "fontSize": 11,
+        "typeface": "Aptos",
+        "alignment": "right"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "13"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "13",
+          "runs": [
+            {
+              "index": 1,
+              "text": "13",
+              "fontSize": 11,
+              "typeface": "Aptos",
+              "color": "#5E6B75"
+            }
+          ]
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 5,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/0nuxc3yl",
+      "id": "5",
+      "bbox": [
+        72,
+        660,
+        1136,
+        1
+      ],
+      "geometry": "rect",
+      "fillColor": "#D8D2C4",
+      "lineColor": "#D8D2C4",
+      "lineWidth": 0
+    },
+    {
+      "order": 6,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/72x4nap4",
+      "id": "6",
+      "bbox": [
+        72,
+        674,
+        460,
+        18
+      ],
+      "geometry": "rect",
+      "text": "FEN identity model | team briefing",
+      "textPreview": "FEN identity model | team briefing",
+      "resolvedFontSize": 10,
+      "resolvedTextStyle": {
+        "fontSize": 10,
+        "typeface": "Aptos",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "FEN identity model | team briefing"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "FEN identity model | team briefing",
+          "runs": [
+            {
+              "index": 1,
+              "text": "FEN identity model | team briefing",
+              "fontSize": 10,
+              "typeface": "Aptos",
+              "color": "#5E6B75"
+            }
+          ]
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 7,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/ih4byhgn",
+      "id": "7",
+      "bbox": [
+        96,
+        280,
+        500,
+        270
+      ],
+      "geometry": "rect",
+      "fillColor": "#E4F1DE",
+      "lineColor": "#3F7D47",
+      "lineWidth": 1
+    },
+    {
+      "order": 8,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/p4r65wju",
+      "id": "8",
+      "bbox": [
+        96,
+        280,
+        500,
+        5
+      ],
+      "geometry": "rect",
+      "fillColor": "#3F7D47",
+      "lineColor": "#3F7D47",
+      "lineWidth": 0
+    },
+    {
+      "order": 9,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/wjudg7ad",
+      "id": "9",
+      "bbox": [
+        114,
+        298,
+        464,
+        28
+      ],
+      "geometry": "rect",
+      "text": "Already built and tested",
+      "textPreview": "Already built and tested",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "Aptos",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Already built and tested"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Already built and tested",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Already built and tested",
+              "fontSize": 24,
+              "typeface": "Aptos",
+              "color": "#1F2933",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 10,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/6tovahoz",
+      "id": "10",
+      "bbox": [
+        114,
+        332,
+        464,
+        204
+      ],
+      "geometry": "rect",
+      "text": "Typed FEN facts and identity primitives\nWorkflow slices for onboarding, recovery, delegation, access, disputes\nOIDC / Keycloak evidence boundary\nApp Attest-shaped device evidence guard\nEncrypted persistence and PostgreSQL replay\nPolicy-gated materialized projections",
+      "textPreview": "Typed FEN facts and identity primitives | Workflow slices for onboarding, recovery, delegation, access, disputes | OIDC / Keycloak eviden...",
+      "resolvedFontSize": 17,
+      "resolvedTextStyle": {
+        "fontSize": 17,
+        "typeface": "Aptos",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 7,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Typed FEN facts and identity primitives"
+          },
+          {
+            "index": 2,
+            "text": "Workflow slices for onboarding, recovery, delegation,"
+          },
+          {
+            "index": 3,
+            "text": "access, disputes"
+          },
+          {
+            "index": 4,
+            "text": "OIDC / Keycloak evidence boundary"
+          },
+          {
+            "index": 5,
+            "text": "App Attest-shaped device evidence guard"
+          },
+          {
+            "index": 6,
+            "text": "Encrypted persistence and PostgreSQL replay"
+          },
+          {
+            "index": 7,
+            "text": "Policy-gated materialized projections"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Typed FEN facts and identity primitives",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Typed FEN facts and identity primitives",
+              "fontSize": 17,
+              "typeface": "Aptos",
+              "color": "#5E6B75"
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "text": "Workflow slices for onboarding, recovery, delegation, access, disputes",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Workflow slices for onboarding, recovery, delegation, access, disputes",
+              "fontSize": 17,
+              "typeface": "Aptos",
+              "color": "#5E6B75"
+            }
+          ]
+        },
+        {
+          "index": 3,
+          "text": "OIDC / Keycloak evidence boundary",
+          "runs": [
+            {
+              "index": 1,
+              "text": "OIDC / Keycloak evidence boundary",
+              "fontSize": 17,
+              "typeface": "Aptos",
+              "color": "#5E6B75"
+            }
+          ]
+        },
+        {
+          "index": 4,
+          "text": "App Attest-shaped device evidence guard",
+          "runs": [
+            {
+              "index": 1,
+              "text": "App Attest-shaped device evidence guard",
+              "fontSize": 17,
+              "typeface": "Aptos",
+              "color": "#5E6B75"
+            }
+          ]
+        },
+        {
+          "index": 5,
+          "text": "Encrypted persistence and PostgreSQL replay",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Encrypted persistence and PostgreSQL replay",
+              "fontSize": 17,
+              "typeface": "Aptos",
+              "color": "#5E6B75"
+            }
+          ]
+        },
+        {
+          "index": 6,
+          "text": "Policy-gated materialized projections",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Policy-gated materialized projections",
+              "fontSize": 17,
+              "typeface": "Aptos",
+              "color": "#5E6B75"
+            }
+          ]
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 11,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/vahoza1g",
+      "id": "11",
+      "bbox": [
+        684,
+        280,
+        500,
+        270
+      ],
+      "geometry": "rect",
+      "fillColor": "#F6E8C8",
+      "lineColor": "#B7791F",
+      "lineWidth": 1
+    },
+    {
+      "order": 12,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/ovahoza1",
+      "id": "12",
+      "bbox": [
+        684,
+        280,
+        500,
+        5
+      ],
+      "geometry": "rect",
+      "fillColor": "#B7791F",
+      "lineColor": "#B7791F",
+      "lineWidth": 0
+    },
+    {
+      "order": 13,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/dg7adsji",
+      "id": "13",
+      "bbox": [
+        702,
+        298,
+        464,
+        28
+      ],
+      "geometry": "rect",
+      "text": "Next MVP proof",
+      "textPreview": "Next MVP proof",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "fontSize": 24,
+        "typeface": "Aptos",
+        "bold": true,
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Next MVP proof"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Next MVP proof",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Next MVP proof",
+              "fontSize": 24,
+              "typeface": "Aptos",
+              "color": "#1F2933",
+              "bold": true
+            }
+          ]
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 14,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/6hcrmhk3",
+      "id": "14",
+      "bbox": [
+        702,
+        332,
+        464,
+        204
+      ],
+      "geometry": "rect",
+      "text": "Real Apple App Attest adapter\nProduction key management / wrapping\nOperational PostgreSQL deployment\nDurable policy artifact lifecycle\nMinimal iPhone path against production HTTP runtime\nHardening: audit, replay, failure taxonomy, observability",
+      "textPreview": "Real Apple App Attest adapter | Production key management / wrapping | Operational PostgreSQL deployment | Durable policy artifact lifecy...",
+      "resolvedFontSize": 17,
+      "resolvedTextStyle": {
+        "fontSize": 17,
+        "typeface": "Aptos",
+        "alignment": "left"
+      },
+      "textLayout": {
+        "lineCount": 6,
+        "lines": [
+          {
+            "index": 1,
+            "text": "Real Apple App Attest adapter"
+          },
+          {
+            "index": 2,
+            "text": "Production key management / wrapping"
+          },
+          {
+            "index": 3,
+            "text": "Operational PostgreSQL deployment"
+          },
+          {
+            "index": 4,
+            "text": "Durable policy artifact lifecycle"
+          },
+          {
+            "index": 5,
+            "text": "Minimal iPhone path against production HTTP runtime"
+          },
+          {
+            "index": 6,
+            "text": "Hardening: audit, replay, failure taxonomy, observability"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "Real Apple App Attest adapter",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Real Apple App Attest adapter",
+              "fontSize": 17,
+              "typeface": "Aptos",
+              "color": "#5E6B75"
+            }
+          ]
+        },
+        {
+          "index": 2,
+          "text": "Production key management / wrapping",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Production key management / wrapping",
+              "fontSize": 17,
+              "typeface": "Aptos",
+              "color": "#5E6B75"
+            }
+          ]
+        },
+        {
+          "index": 3,
+          "text": "Operational PostgreSQL deployment",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Operational PostgreSQL deployment",
+              "fontSize": 17,
+              "typeface": "Aptos",
+              "color": "#5E6B75"
+            }
+          ]
+        },
+        {
+          "index": 4,
+          "text": "Durable policy artifact lifecycle",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Durable policy artifact lifecycle",
+              "fontSize": 17,
+              "typeface": "Aptos",
+              "color": "#5E6B75"
+            }
+          ]
+        },
+        {
+          "index": 5,
+          "text": "Minimal iPhone path against production HTTP runtime",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Minimal iPhone path against production HTTP runtime",
+              "fontSize": 17,
+              "typeface": "Aptos",
+              "color": "#5E6B75"
+            }
+          ]
+        },
+        {
+          "index": 6,
+          "text": "Hardening: audit, replay, failure taxonomy, observability",
+          "runs": [
+            {
+              "index": 1,
+              "text": "Hardening: audit, replay, failure taxonomy, observability",
+              "fontSize": 17,
+              "typeface": "Aptos",
+              "color": "#5E6B75"
+            }
+          ]
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    }
+  ],
+  "composeRuns": []
+}

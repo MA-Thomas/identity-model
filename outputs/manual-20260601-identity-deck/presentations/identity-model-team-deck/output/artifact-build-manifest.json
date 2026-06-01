@@ -1,0 +1,158 @@
+{
+  "output": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/output/fen-identity-as-evidence.pptx",
+  "outputBytes": 68504,
+  "slideCount": 14,
+  "slideSize": {
+    "width": 1280,
+    "height": 720
+  },
+  "previewDir": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/preview",
+  "previewPaths": [
+    "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/preview/slide-01.png",
+    "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/preview/slide-02.png",
+    "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/preview/slide-03.png",
+    "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/preview/slide-04.png",
+    "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/preview/slide-05.png",
+    "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/preview/slide-06.png",
+    "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/preview/slide-07.png",
+    "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/preview/slide-08.png",
+    "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/preview/slide-09.png",
+    "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/preview/slide-10.png",
+    "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/preview/slide-11.png",
+    "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/preview/slide-12.png",
+    "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/preview/slide-13.png",
+    "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/preview/slide-14.png"
+  ],
+  "layoutDir": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/layout/final",
+  "layoutResults": [
+    {
+      "layoutPath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/layout/final/slide-01.layout.json"
+    },
+    {
+      "layoutPath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/layout/final/slide-02.layout.json"
+    },
+    {
+      "layoutPath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/layout/final/slide-03.layout.json"
+    },
+    {
+      "layoutPath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/layout/final/slide-04.layout.json"
+    },
+    {
+      "layoutPath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/layout/final/slide-05.layout.json"
+    },
+    {
+      "layoutPath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/layout/final/slide-06.layout.json"
+    },
+    {
+      "layoutPath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/layout/final/slide-07.layout.json"
+    },
+    {
+      "layoutPath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/layout/final/slide-08.layout.json"
+    },
+    {
+      "layoutPath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/layout/final/slide-09.layout.json"
+    },
+    {
+      "layoutPath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/layout/final/slide-10.layout.json"
+    },
+    {
+      "layoutPath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/layout/final/slide-11.layout.json"
+    },
+    {
+      "layoutPath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/layout/final/slide-12.layout.json"
+    },
+    {
+      "layoutPath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/layout/final/slide-13.layout.json"
+    },
+    {
+      "layoutPath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/layout/final/slide-14.layout.json"
+    }
+  ],
+  "contactSheet": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/preview/contact-sheet.png",
+  "slides": [
+    {
+      "index": 1,
+      "requestedSlideNumber": 1,
+      "modulePath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/slides/slide-01.mjs",
+      "exportName": "slide01"
+    },
+    {
+      "index": 2,
+      "requestedSlideNumber": 2,
+      "modulePath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/slides/slide-02.mjs",
+      "exportName": "slide02"
+    },
+    {
+      "index": 3,
+      "requestedSlideNumber": 3,
+      "modulePath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/slides/slide-03.mjs",
+      "exportName": "slide03"
+    },
+    {
+      "index": 4,
+      "requestedSlideNumber": 4,
+      "modulePath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/slides/slide-04.mjs",
+      "exportName": "slide04"
+    },
+    {
+      "index": 5,
+      "requestedSlideNumber": 5,
+      "modulePath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/slides/slide-05.mjs",
+      "exportName": "slide05"
+    },
+    {
+      "index": 6,
+      "requestedSlideNumber": 6,
+      "modulePath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/slides/slide-06.mjs",
+      "exportName": "slide06"
+    },
+    {
+      "index": 7,
+      "requestedSlideNumber": 7,
+      "modulePath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/slides/slide-07.mjs",
+      "exportName": "slide07"
+    },
+    {
+      "index": 8,
+      "requestedSlideNumber": 8,
+      "modulePath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/slides/slide-08.mjs",
+      "exportName": "slide08"
+    },
+    {
+      "index": 9,
+      "requestedSlideNumber": 9,
+      "modulePath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/slides/slide-09.mjs",
+      "exportName": "slide09"
+    },
+    {
+      "index": 10,
+      "requestedSlideNumber": 10,
+      "modulePath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/slides/slide-10.mjs",
+      "exportName": "slide10"
+    },
+    {
+      "index": 11,
+      "requestedSlideNumber": 11,
+      "modulePath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/slides/slide-11.mjs",
+      "exportName": "slide11"
+    },
+    {
+      "index": 12,
+      "requestedSlideNumber": 12,
+      "modulePath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/slides/slide-12.mjs",
+      "exportName": "slide12"
+    },
+    {
+      "index": 13,
+      "requestedSlideNumber": 13,
+      "modulePath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/slides/slide-13.mjs",
+      "exportName": "slide13"
+    },
+    {
+      "index": 14,
+      "requestedSlideNumber": 14,
+      "modulePath": "/Users/marcus/Work_Data/identity-model/outputs/manual-20260601-identity-deck/presentations/identity-model-team-deck/slides/slide-14.mjs",
+      "exportName": "slide14"
+    }
+  ]
+}

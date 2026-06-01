@@ -6,6 +6,9 @@
 
 use super::*;
 
+pub const CONTINUITY_ASSERTION_PROFILE_NAME: &str = "fen-continuity-assertion";
+pub const CONTINUITY_ASSERTION_PROFILE_VERSION: &str = "v1";
+
 pub fn canonical_continuity_assertion_bytes(
     assertion: &ContinuityAssertion,
 ) -> Result<Vec<u8>, ContinuityAssertionRejectionReason> {
@@ -18,6 +21,12 @@ pub fn canonical_continuity_assertion_bytes(
     }
 
     let mut canonical = String::new();
+    push_field(&mut canonical, "profile", CONTINUITY_ASSERTION_PROFILE_NAME);
+    push_field(
+        &mut canonical,
+        "profile_version",
+        CONTINUITY_ASSERTION_PROFILE_VERSION,
+    );
     push_field(&mut canonical, "enrollment_ref", &assertion.enrollment_ref);
     push_field(
         &mut canonical,

@@ -230,6 +230,45 @@ fn policy_artifact_effective_period_and_status_gate_evaluation() {
 }
 
 #[test]
+fn policy_artifact_invalid_effective_period_forces_manual_review() {
+    let evidence = EvidenceSummary {
+        credential_fact_id: Some(id("credential-fact")),
+        credential_assurance: Some(AssuranceLevel::Medium),
+        credential_observed_at: Some(ts("2026-05-29T00:00:00Z")),
+        continuity_fact_id: Some(id("continuity-fact")),
+        continuity_assurance: Some(AssuranceLevel::High),
+        continuity_observed_at: Some(ts("2026-05-29T00:00:00Z")),
+        risk_fact_id: Some(id("risk-fact")),
+        risk_result: Some(RiskEvaluationResult::Passed),
+        risk_observed_at: Some(ts("2026-05-29T00:00:00Z")),
+    };
+    let artifact = PolicyArtifact::sensitive_action(
+        id("complete-record-export-policy"),
+        "v1",
+        SensitiveAction::ExportCompleteRecord,
+        Some(TimeInterval {
+            start: ts("2026-02-31T00:00:00Z"),
+            end: ts("2026-12-31T23:59:59Z"),
+        }),
+    );
+
+    let evaluation = evaluate_policy_artifact_with_context(
+        &artifact,
+        &evidence,
+        &PolicyEvaluationContext::new(Some(ts("2026-05-29T00:01:00Z"))),
+    );
+
+    assert_eq!(
+        evaluation.decision,
+        AccessDecisionResult::ManualReviewRequired
+    );
+    assert_eq!(
+        evaluation.reasons,
+        vec![PolicyEvaluationReason::PolicyTimestampInvalid]
+    );
+}
+
+#[test]
 fn policy_freshness_windows_force_step_up_for_stale_evidence() {
     let policy = default_policy_for_action(
         SensitiveAction::ExportCompleteRecord,
@@ -279,6 +318,18 @@ fn timestamp_helper_returns_explicit_errors_for_unsupported_shapes() {
     assert_eq!(
         timestamp_to_unix_seconds(&ts("2026-05-29 00:00:00Z")),
         Err(TimestampParseError::MissingDateTimeSeparator)
+    );
+    assert_eq!(
+        timestamp_to_unix_seconds(&ts("2026-02-31T00:00:00Z")),
+        Err(TimestampParseError::InvalidDate)
+    );
+    assert_eq!(
+        timestamp_in_closed_interval(
+            &ts("2026-02-31T00:00:00Z"),
+            &ts("2026-01-01T00:00:00Z"),
+            &ts("2026-12-31T23:59:59Z")
+        ),
+        Err(TimestampParseError::InvalidDate)
     );
     assert_eq!(
         seconds_between(&ts("2026-05-29T00:00:00Z"), &ts("2026-05-29T00:05:00Z")),
