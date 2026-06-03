@@ -56,7 +56,7 @@ fn mobile_onboarding_http_endpoint_accepts_valid_request() {
         &mut repository,
     );
 
-    assert_eq!(response.status_code, 200);
+    assert_eq!(response.status_code, 200, "{}", response.body);
     assert_eq!(response.content_type, APPLICATION_JSON);
     let body: MobileOnboardingHttpResponseBody =
         serde_json::from_str(&response.body).expect("accepted response should be JSON");
@@ -80,6 +80,221 @@ fn mobile_onboarding_http_endpoint_accepts_valid_request() {
         }
     );
     assert_eq!(repository.all_facts().len(), 4);
+}
+
+#[test]
+fn mobile_identity_onboarding_http_endpoint_accepts_composed_request() {
+    let author = system_author();
+    let service = IdentityWorkflowService::new(FenTranslator {
+        system_author: author.clone(),
+    });
+    let subject_id = id("subject-mobile-identity-http");
+    let fixture = mobile_evidence_fixture(
+        "identity-http",
+        "valid-identity-http-token",
+        "valid-identity-http-app-attest",
+        "iphone-identity-http-device",
+    );
+    let liveness_verifier = StaticLivenessCeremonyVerifier::new(
+        "valid-identity-http-live-presence",
+        http_liveness_ceremony(
+            "identity-http",
+            &fixture,
+            IdentityWitnessResult::Passed,
+            PresentationAttackDetectionResult::Passed,
+            AssuranceLevel::High,
+        ),
+    );
+    let challenge_store = InMemoryLivePresenceChallengeStore::new();
+    issue_http_live_presence_challenge(&challenge_store, "identity-http", &subject_id, &fixture);
+    let provider = MockPhase1ContinuityProvider::successful();
+    let mut ids = DeterministicIdGenerator::new();
+    let mut repository = InMemoryIdentityRepository::new();
+    let request_body = json!({
+        "subject_id": subject_id.0.clone(),
+        "observed_at": "2026-05-29T00:05:30Z",
+        "id_namespace": "identity-http",
+        "expected_device_ref": fixture.device_ref.clone(),
+        "oidc": {
+            "access_token": "valid-identity-http-token",
+            "issuer": fixture.oidc_config.issuer.clone(),
+            "client_id": fixture.oidc_config.client_id.clone(),
+            "provider_name": "Keycloak"
+        },
+        "app_attest": {
+            "assertion": fixture.app_attest_assertion.clone(),
+            "challenge_nonce": fixture.app_attest_challenge_nonce.clone(),
+            "team_id": fixture.app_attest_config.team_id.clone(),
+            "bundle_id": fixture.app_attest_config.bundle_id.clone(),
+            "environment": "development"
+        },
+        "liveness": {
+            "assertion": "valid-identity-http-live-presence",
+            "challenge_nonce": fixture.app_attest_challenge_nonce.clone()
+        },
+        "government_id": {
+            "source_system": "IdentityProofingVendor",
+            "provider_event_id": "government-id-event-identity-http",
+            "evidence_ref": "government-id-identity-http",
+            "assurance_level": "high",
+            "retention_policy_refs": ["identity-proof-retention@v1"]
+        },
+        "client_context": {
+            "platform": "iphone",
+            "request_id": "request-identity-http",
+            "app_version": "1.0.0",
+            "user_agent": "FENIdentity/1.0"
+        },
+        "subject_kind": "human_person",
+        "stable_profile": {
+            "legal_name": "Mobile Identity Patient",
+            "date_of_birth": "1990-01-01"
+        },
+        "continuity_modality": "face"
+    });
+
+    let response = handle_mobile_identity_onboarding_http_request(
+        MobileOnboardingHttpRequest::post(
+            MOBILE_IDENTITY_ONBOARDING_HTTP_PATH,
+            request_body.to_string(),
+        ),
+        &service,
+        author,
+        &fixture.oidc_verifier,
+        &fixture.app_attest_verifier,
+        &liveness_verifier,
+        &challenge_store,
+        &provider,
+        &mut ids,
+        &mut repository,
+    );
+
+    assert_eq!(response.status_code, 200, "{}", response.body);
+    assert_eq!(response.content_type, APPLICATION_JSON);
+    let body: MobileIdentityOnboardingHttpResponseBody =
+        serde_json::from_str(&response.body).expect("accepted response should be JSON");
+    assert_eq!(
+        body,
+        MobileIdentityOnboardingHttpResponseBody::Accepted {
+            request_id: Some("request-identity-http".to_string()),
+            summary: MobileIdentityOnboardingHttpSummary {
+                subject_id: "subject-mobile-identity-http".to_string(),
+                decision: "accepted".to_string(),
+                assurance_level: "high".to_string(),
+                active_devices: vec!["iphone-identity-http-device".to_string()],
+                parent_episode_id: "episode-identity-http-parent-0".to_string(),
+                fact_ids: MobileIdentityOnboardingHttpFactIds {
+                    subject_fact_id: "fact-identity-http-register-subject-0".to_string(),
+                    credential_fact_id: "fact-identity-http-account-session-0".to_string(),
+                    portal_login_witness_fact_id: "fact-identity-http-account-session-1"
+                        .to_string(),
+                    verified_email_attribute_fact_id: Some(
+                        "fact-identity-http-account-session-2".to_string()
+                    ),
+                    device_binding_fact_id: "fact-identity-http-account-session-3".to_string(),
+                    government_id_witness_fact_id: "fact-identity-http-identity-witnesses-0"
+                        .to_string(),
+                    selfie_liveness_witness_fact_id: "fact-identity-http-identity-witnesses-1"
+                        .to_string(),
+                    enrollment_fact_id: Some("fact-identity-http-enroll-continuity-0".to_string()),
+                },
+                committed_fact_count: 8,
+            },
+        }
+    );
+    assert_eq!(repository.all_facts().len(), 8);
+    assert_eq!(repository.all_episodes().len(), 5);
+    assert_eq!(repository.all_memberships().len(), 8);
+    assert_eq!(repository.all_episode_relations().len(), 4);
+    let challenge = challenge_store
+        .live_presence_challenge_by_nonce(&fixture.app_attest_challenge_nonce)
+        .expect("challenge lookup should succeed")
+        .expect("challenge should remain");
+    assert!(matches!(
+        challenge.status,
+        LivePresenceChallengeStatus::Used {
+            used_at,
+            provider_event_id: Some(ref provider_event_id)
+        } if used_at == ts("2026-05-29T00:05:30Z")
+            && provider_event_id == "liveness-event-identity-http"
+    ));
+}
+
+#[test]
+fn mobile_identity_onboarding_http_endpoint_rejects_missing_live_presence_challenge() {
+    let author = system_author();
+    let service = IdentityWorkflowService::new(FenTranslator {
+        system_author: author.clone(),
+    });
+    let subject_id = id("subject-mobile-identity-http-missing-challenge");
+    let fixture = mobile_evidence_fixture(
+        "identity-http-missing-challenge",
+        "valid-identity-http-missing-challenge-token",
+        "valid-identity-http-missing-challenge-app-attest",
+        "iphone-identity-http-missing-challenge-device",
+    );
+    let liveness_verifier = StaticLivenessCeremonyVerifier::new(
+        "valid-identity-http-missing-challenge-live-presence",
+        http_liveness_ceremony(
+            "identity-http-missing-challenge",
+            &fixture,
+            IdentityWitnessResult::Passed,
+            PresentationAttackDetectionResult::Passed,
+            AssuranceLevel::High,
+        ),
+    );
+    let challenge_store = InMemoryLivePresenceChallengeStore::new();
+    let provider = MockPhase1ContinuityProvider::successful();
+    let mut ids = DeterministicIdGenerator::new();
+    let mut repository = InMemoryIdentityRepository::new();
+    let request_body = json!({
+        "subject_id": subject_id.0.clone(),
+        "observed_at": "2026-05-29T00:05:30Z",
+        "id_namespace": "identity-http-missing-challenge",
+        "expected_device_ref": fixture.device_ref.clone(),
+        "oidc": {
+            "access_token": "valid-identity-http-missing-challenge-token",
+            "issuer": fixture.oidc_config.issuer.clone(),
+            "client_id": fixture.oidc_config.client_id.clone()
+        },
+        "app_attest": {
+            "assertion": fixture.app_attest_assertion.clone(),
+            "challenge_nonce": fixture.app_attest_challenge_nonce.clone(),
+            "team_id": fixture.app_attest_config.team_id.clone(),
+            "bundle_id": fixture.app_attest_config.bundle_id.clone(),
+            "environment": "development"
+        },
+        "liveness": {
+            "assertion": "valid-identity-http-missing-challenge-live-presence",
+            "challenge_nonce": fixture.app_attest_challenge_nonce.clone()
+        },
+        "government_id": {
+            "evidence_ref": "government-id-identity-http-missing-challenge",
+            "assurance_level": "high"
+        }
+    });
+
+    let response = handle_mobile_identity_onboarding_http_request(
+        MobileOnboardingHttpRequest::post(
+            MOBILE_IDENTITY_ONBOARDING_HTTP_PATH,
+            request_body.to_string(),
+        ),
+        &service,
+        author,
+        &fixture.oidc_verifier,
+        &fixture.app_attest_verifier,
+        &liveness_verifier,
+        &challenge_store,
+        &provider,
+        &mut ids,
+        &mut repository,
+    );
+
+    assert_identity_error_code(response, 409, "live_presence_challenge_unknown");
+    assert!(repository.all_facts().is_empty());
+    assert!(repository.all_episodes().is_empty());
+    assert!(repository.all_memberships().is_empty());
+    assert!(repository.all_episode_relations().is_empty());
 }
 
 #[test]
@@ -179,7 +394,7 @@ fn mobile_onboarding_http_endpoint_can_append_through_encrypted_facade() {
         &resolver,
     );
 
-    assert_eq!(response.status_code, 200);
+    assert_eq!(response.status_code, 200, "{}", response.body);
     let body: MobileOnboardingHttpResponseBody =
         serde_json::from_str(&response.body).expect("accepted response should be JSON");
     assert_eq!(
@@ -223,6 +438,164 @@ fn mobile_onboarding_http_endpoint_can_append_through_encrypted_facade() {
             .iter()
             .all(|fact| fact.materialization_policy_refs == policy_refs
                 && !fact.ciphertext.is_empty())
+    );
+}
+
+#[test]
+fn mobile_identity_onboarding_http_endpoint_can_append_composition_through_encrypted_facade() {
+    let author = system_author();
+    let service = IdentityWorkflowService::new(FenTranslator {
+        system_author: author.clone(),
+    });
+    let subject_id = id("subject-encrypted-identity-http");
+    let fixture = mobile_evidence_fixture(
+        "identity-encrypted-http",
+        "valid-encrypted-identity-http-token",
+        "valid-encrypted-identity-http-app-attest",
+        "iphone-encrypted-identity-http-device",
+    );
+    let liveness_verifier = StaticLivenessCeremonyVerifier::new(
+        "valid-encrypted-identity-http-live-presence",
+        http_liveness_ceremony(
+            "identity-encrypted-http",
+            &fixture,
+            IdentityWitnessResult::Passed,
+            PresentationAttackDetectionResult::Passed,
+            AssuranceLevel::High,
+        ),
+    );
+    let challenge_store = InMemoryLivePresenceChallengeStore::new();
+    issue_http_live_presence_challenge(
+        &challenge_store,
+        "identity-encrypted-http",
+        &subject_id,
+        &fixture,
+    );
+    let provider = MockPhase1ContinuityProvider::successful();
+    let mut ids = DeterministicIdGenerator::new();
+    let key = http_active_key();
+    let resolver = StaticFactKeyResolver::from_keys([key.clone()]);
+    let policy_refs = http_materialization_policy_refs();
+    let mut repository = EncryptionAwareWorkflowRepository::new(
+        InMemoryStoredEncryptedWorkflowRepository::new(),
+        DeterministicTestFactEncryptionMetadataPlanner::new(
+            "mobile-http-key",
+            "nonce-encrypted-mobile-identity-http",
+        ),
+        DeterministicTestFactEncryptor::new(),
+        key,
+        policy_refs.clone(),
+        EncryptedWorkflowAppendSequenceState::with_relation_append_sequence(1000, 2000, 3000, 4000),
+    );
+    let request_body = json!({
+        "subject_id": subject_id.0.clone(),
+        "observed_at": "2026-05-29T00:05:30Z",
+        "id_namespace": "identity-encrypted-http",
+        "expected_device_ref": fixture.device_ref.clone(),
+        "oidc": {
+            "access_token": "valid-encrypted-identity-http-token",
+            "issuer": fixture.oidc_config.issuer.clone(),
+            "client_id": fixture.oidc_config.client_id.clone(),
+            "provider_name": "Keycloak"
+        },
+        "app_attest": {
+            "assertion": fixture.app_attest_assertion.clone(),
+            "challenge_nonce": fixture.app_attest_challenge_nonce.clone(),
+            "team_id": fixture.app_attest_config.team_id.clone(),
+            "bundle_id": fixture.app_attest_config.bundle_id.clone(),
+            "environment": "development"
+        },
+        "liveness": {
+            "assertion": "valid-encrypted-identity-http-live-presence",
+            "challenge_nonce": fixture.app_attest_challenge_nonce.clone()
+        },
+        "government_id": {
+            "source_system": "IdentityProofingVendor",
+            "provider_event_id": "government-id-event-identity-encrypted-http",
+            "evidence_ref": "government-id-identity-encrypted-http",
+            "assurance_level": "high",
+            "retention_policy_refs": ["identity-proof-retention@v1"]
+        },
+        "client_context": {
+            "platform": "iphone",
+            "request_id": "request-encrypted-identity-http"
+        }
+    });
+
+    let response = handle_encrypted_mobile_identity_onboarding_http_request(
+        MobileOnboardingHttpRequest::post(
+            MOBILE_IDENTITY_ONBOARDING_HTTP_PATH,
+            request_body.to_string(),
+        ),
+        &service,
+        author,
+        &fixture.oidc_verifier,
+        &fixture.app_attest_verifier,
+        &liveness_verifier,
+        &challenge_store,
+        &provider,
+        &mut ids,
+        &mut repository,
+        MobileOnboardingEncryptedPersistenceContext {
+            transaction_id: id("tx-encrypted-mobile-identity-http"),
+            committed_at: ts("2026-05-29T00:05:31Z"),
+            materialization_policy: http_allowed_policy(policy_refs.clone()),
+            materialization_audit_context: FactMaterializationAuditContext::default(),
+        },
+        &resolver,
+    );
+
+    assert_eq!(response.status_code, 200, "{}", response.body);
+    let body: MobileIdentityOnboardingHttpResponseBody =
+        serde_json::from_str(&response.body).expect("accepted response should be JSON");
+    assert!(matches!(
+        body,
+        MobileIdentityOnboardingHttpResponseBody::Accepted { summary, request_id }
+            if request_id == Some("request-encrypted-identity-http".to_string())
+                && summary.subject_id == "subject-encrypted-identity-http"
+                && summary.decision == "accepted"
+                && summary.assurance_level == "high"
+                && summary.committed_fact_count == 8
+    ));
+
+    let compositions = repository.storage().episode_compositions();
+    assert_eq!(compositions.len(), 1);
+    assert_eq!(
+        compositions[0].transaction_id,
+        id("tx-encrypted-mobile-identity-http")
+    );
+    assert_eq!(compositions[0].parent_episode.append_sequence, 2000);
+    assert_eq!(compositions[0].child_slices.len(), 4);
+    assert_eq!(
+        compositions[0]
+            .child_slices
+            .iter()
+            .flat_map(|slice| slice
+                .encrypted_facts
+                .iter()
+                .map(|fact| fact.append_sequence))
+            .collect::<Vec<_>>(),
+        (1000..1008).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        compositions[0]
+            .episode_relations
+            .iter()
+            .map(|relation| relation.append_sequence)
+            .collect::<Vec<_>>(),
+        (4000..4004).collect::<Vec<_>>()
+    );
+    assert!(
+        compositions[0]
+            .child_slices
+            .iter()
+            .flat_map(|slice| slice.encrypted_facts.iter())
+            .all(|fact| fact.materialization_policy_refs == policy_refs
+                && !fact.ciphertext.is_empty())
+    );
+    assert_eq!(
+        repository.sequence_state(),
+        EncryptedWorkflowAppendSequenceState::with_relation_append_sequence(1008, 2005, 3008, 4004)
     );
 }
 
@@ -545,6 +918,72 @@ fn assert_error_code(response: MobileOnboardingHttpResponse, status_code: u16, c
         MobileOnboardingHttpResponseBody::Error { error }
             if error.code == code
     ));
+}
+
+fn assert_identity_error_code(
+    response: MobileOnboardingHttpResponse,
+    status_code: u16,
+    code: &str,
+) {
+    assert_eq!(response.status_code, status_code);
+    assert_eq!(response.content_type, APPLICATION_JSON);
+    let body: MobileIdentityOnboardingHttpResponseBody =
+        serde_json::from_str(&response.body).expect("error response should be JSON");
+    assert!(matches!(
+        body,
+        MobileIdentityOnboardingHttpResponseBody::Error { error }
+            if error.code == code
+    ));
+}
+
+fn issue_http_live_presence_challenge(
+    store: &impl LivePresenceChallengeStore,
+    challenge_label: &str,
+    subject_id: &SubjectId,
+    evidence: &MobileEvidenceFixture,
+) {
+    let mut challenge = LivePresenceChallenge::onboarding(
+        id(&format!("live-presence-{challenge_label}")),
+        evidence.app_attest_challenge_nonce.clone(),
+        Some(subject_id.clone()),
+        Some(evidence.device_ref.clone()),
+        Some(LivePresenceExpectedAppContext::from_app_attest_config(
+            &evidence.app_attest_config,
+        )),
+        ts("2026-05-29T00:04:55Z"),
+        ts("2026-05-29T00:06:00Z"),
+    );
+    challenge.retry_policy_refs = vec![id("live-presence-retry@v1")];
+    challenge.manual_review_policy_refs = vec![id("live-presence-manual-review@v1")];
+    challenge.retention_policy_refs = vec![id("live-presence-retention@v1")];
+    store
+        .issue_live_presence_challenge(challenge)
+        .expect("live-presence challenge should issue");
+}
+
+fn http_liveness_ceremony(
+    label: &str,
+    evidence: &MobileEvidenceFixture,
+    result: IdentityWitnessResult,
+    pad_result: PresentationAttackDetectionResult,
+    assurance_level: AssuranceLevel,
+) -> VerifiedLivenessCeremony {
+    VerifiedLivenessCeremony {
+        provider_metadata: ContinuityProviderMetadata {
+            provider_name: "MockLivePresenceProvider".to_string(),
+            provider_event_id: Some(format!("liveness-event-{label}")),
+            provider_subject_ref: Some(format!("liveness-subject-{label}")),
+            sdk_or_api_version: Some("mock-live-presence-v1".to_string()),
+        },
+        challenge_nonce: evidence.app_attest_challenge_nonce.clone(),
+        device_ref: evidence.device_ref.clone(),
+        observed_at: ts("2026-05-29T00:05:20Z"),
+        expires_at: ts("2026-05-29T00:06:00Z"),
+        result,
+        assurance_level,
+        pad_result,
+        retention_policy_refs: vec![id("live-presence-retention@v1")],
+    }
 }
 
 fn http_active_key() -> FactDataEncryptionKey {

@@ -392,6 +392,7 @@ fn mobile_identity_onboarding_records_government_id_liveness_and_enrollment() {
     let service = IdentityWorkflowService::new(FenTranslator {
         system_author: author.clone(),
     });
+    let subject_id = id("subject-mobile-identity");
     let evidence = mobile_evidence_fixture(
         "identity-onboarding",
         "valid-identity-token",
@@ -409,6 +410,13 @@ fn mobile_identity_onboarding_records_government_id_liveness_and_enrollment() {
         ),
     );
     let provider = MockPhase1ContinuityProvider::successful();
+    let challenge_store = InMemoryLivePresenceChallengeStore::new();
+    issue_live_presence_challenge(
+        &challenge_store,
+        "identity-onboarding",
+        &subject_id,
+        &evidence,
+    );
     let mut ids = DeterministicIdGenerator::new();
     let mut repository = InMemoryIdentityRepository::new();
 
@@ -416,7 +424,7 @@ fn mobile_identity_onboarding_records_government_id_liveness_and_enrollment() {
         &service,
         mobile_identity_onboarding_request(
             author,
-            "subject-mobile-identity",
+            &subject_id.0,
             "mobile-identity",
             &evidence,
             "valid-identity-token",
@@ -426,6 +434,7 @@ fn mobile_identity_onboarding_records_government_id_liveness_and_enrollment() {
         &evidence.oidc_verifier,
         &evidence.app_attest_verifier,
         &liveness_verifier,
+        &challenge_store,
         &provider,
         &mut ids,
         &mut repository,
@@ -447,14 +456,12 @@ fn mobile_identity_onboarding_records_government_id_liveness_and_enrollment() {
     assert_eq!(repository.all_episode_relations().len(), 4);
 
     let facts = repository.all_facts();
-    assert!(facts.iter().any(|fact| matches!(
-        fact.payload,
-        FactPayload::CredentialAssertion { .. }
-    )));
-    assert!(facts.iter().any(|fact| matches!(
-        fact.payload,
-        FactPayload::DeviceBindingEstablished { .. }
-    )));
+    assert!(facts
+        .iter()
+        .any(|fact| matches!(fact.payload, FactPayload::CredentialAssertion { .. })));
+    assert!(facts
+        .iter()
+        .any(|fact| matches!(fact.payload, FactPayload::DeviceBindingEstablished { .. })));
     assert!(facts.iter().any(|fact| matches!(
         fact.payload,
         FactPayload::BiometricEnrollmentReferenceAdded { .. }
@@ -500,6 +507,18 @@ fn mobile_identity_onboarding_records_government_id_liveness_and_enrollment() {
         external_ref.resource_type.as_deref() == Some("liveness_ceremony_event")
             && external_ref.resource_id == "liveness-event-identity-onboarding"
     }));
+    let challenge = challenge_store
+        .live_presence_challenge_by_nonce(&evidence.app_attest_challenge_nonce)
+        .expect("challenge lookup should succeed")
+        .expect("challenge should remain");
+    assert!(matches!(
+        challenge.status,
+        LivePresenceChallengeStatus::Used {
+            used_at,
+            provider_event_id: Some(ref provider_event_id)
+        } if used_at == ts("2026-05-29T00:05:30Z")
+            && provider_event_id == "liveness-event-identity-onboarding"
+    ));
 }
 
 #[test]
@@ -531,6 +550,14 @@ fn failed_or_inconclusive_mobile_liveness_creates_manual_review_evidence() {
             liveness_ceremony(label, &evidence, result, pad_result, AssuranceLevel::Low),
         );
         let provider = MockPhase1ContinuityProvider::successful();
+        let subject_id = id(&format!("subject-mobile-{label}"));
+        let challenge_store = InMemoryLivePresenceChallengeStore::new();
+        issue_live_presence_challenge(
+            &challenge_store,
+            &format!("challenge-{label}"),
+            &subject_id,
+            &evidence,
+        );
         let mut ids = DeterministicIdGenerator::new();
         let mut repository = InMemoryIdentityRepository::new();
 
@@ -538,7 +565,7 @@ fn failed_or_inconclusive_mobile_liveness_creates_manual_review_evidence() {
             &service,
             mobile_identity_onboarding_request(
                 author,
-                &format!("subject-mobile-{label}"),
+                &subject_id.0,
                 &format!("mobile-{label}"),
                 &evidence,
                 &format!("valid-{label}-token"),
@@ -548,6 +575,7 @@ fn failed_or_inconclusive_mobile_liveness_creates_manual_review_evidence() {
             &evidence.oidc_verifier,
             &evidence.app_attest_verifier,
             &liveness_verifier,
+            &challenge_store,
             &provider,
             &mut ids,
             &mut repository,
@@ -582,7 +610,86 @@ fn failed_or_inconclusive_mobile_liveness_creates_manual_review_evidence() {
                 && context.challenge_nonce == Some(evidence.app_attest_challenge_nonce.clone())
                 && context.device_ref == Some(evidence.device_ref.clone())
         ));
+        let challenge = challenge_store
+            .live_presence_challenge_by_nonce(&evidence.app_attest_challenge_nonce)
+            .expect("challenge lookup should succeed")
+            .expect("challenge should remain");
+        match (result, challenge.status) {
+            (
+                IdentityWitnessResult::Failed,
+                LivePresenceChallengeStatus::Failed {
+                    reason: LivePresenceChallengeFailureReason::PresentationAttackDetected,
+                    ..
+                },
+            ) => {}
+            (
+                IdentityWitnessResult::Inconclusive,
+                LivePresenceChallengeStatus::ManualReview {
+                    reason: LivePresenceChallengeManualReviewReason::LivenessInconclusive,
+                    ..
+                },
+            ) => {}
+            (_, status) => panic!("unexpected challenge status: {status:?}"),
+        }
     }
+}
+
+#[test]
+fn mobile_identity_onboarding_requires_issued_live_presence_challenge() {
+    let author = system_author();
+    let service = IdentityWorkflowService::new(FenTranslator {
+        system_author: author.clone(),
+    });
+    let evidence = mobile_evidence_fixture(
+        "missing-challenge",
+        "valid-missing-challenge-token",
+        "valid-missing-challenge-app-attest",
+        "iphone-missing-challenge-device",
+    );
+    let liveness_verifier = StaticLivenessCeremonyVerifier::new(
+        "valid-missing-challenge-live-presence",
+        liveness_ceremony(
+            "missing-challenge",
+            &evidence,
+            IdentityWitnessResult::Passed,
+            PresentationAttackDetectionResult::Passed,
+            AssuranceLevel::High,
+        ),
+    );
+    let provider = MockPhase1ContinuityProvider::successful();
+    let challenge_store = InMemoryLivePresenceChallengeStore::new();
+    let mut ids = DeterministicIdGenerator::new();
+    let mut repository = InMemoryIdentityRepository::new();
+
+    let result = execute_mobile_identity_onboarding_command(
+        &service,
+        mobile_identity_onboarding_request(
+            author,
+            "subject-mobile-missing-challenge",
+            "mobile-missing-challenge",
+            &evidence,
+            "valid-missing-challenge-token",
+            "valid-missing-challenge-app-attest",
+            "valid-missing-challenge-live-presence",
+        ),
+        &evidence.oidc_verifier,
+        &evidence.app_attest_verifier,
+        &liveness_verifier,
+        &challenge_store,
+        &provider,
+        &mut ids,
+        &mut repository,
+    );
+
+    assert_eq!(
+        result,
+        Err(MobileIdentityOnboardingCommandError::LivePresenceChallenge(
+            LivePresenceChallengeError::UnknownChallenge
+        ))
+    );
+    assert!(repository.all_facts().is_empty());
+    assert!(repository.all_episodes().is_empty());
+    assert!(repository.all_memberships().is_empty());
 }
 
 #[test]
@@ -608,6 +715,7 @@ fn mobile_liveness_must_bind_to_app_attest_challenge() {
     let liveness_verifier =
         StaticLivenessCeremonyVerifier::new("valid-binding-live-presence", ceremony);
     let provider = MockPhase1ContinuityProvider::successful();
+    let challenge_store = InMemoryLivePresenceChallengeStore::new();
     let mut ids = DeterministicIdGenerator::new();
     let mut repository = InMemoryIdentityRepository::new();
 
@@ -625,6 +733,7 @@ fn mobile_liveness_must_bind_to_app_attest_challenge() {
         &evidence.oidc_verifier,
         &evidence.app_attest_verifier,
         &liveness_verifier,
+        &challenge_store,
         &provider,
         &mut ids,
         &mut repository,
@@ -688,6 +797,31 @@ fn mobile_identity_onboarding_request(
         },
         continuity_modality: BiometricModality::Face,
     }
+}
+
+fn issue_live_presence_challenge(
+    store: &impl LivePresenceChallengeStore,
+    challenge_label: &str,
+    subject_id: &SubjectId,
+    evidence: &MobileEvidenceFixture,
+) {
+    let mut challenge = LivePresenceChallenge::onboarding(
+        id(&format!("live-presence-{challenge_label}")),
+        evidence.app_attest_challenge_nonce.clone(),
+        Some(subject_id.clone()),
+        Some(evidence.device_ref.clone()),
+        Some(LivePresenceExpectedAppContext::from_app_attest_config(
+            &evidence.app_attest_config,
+        )),
+        ts("2026-05-29T00:04:55Z"),
+        ts("2026-05-29T00:06:00Z"),
+    );
+    challenge.retry_policy_refs = vec![id("live-presence-retry@v1")];
+    challenge.manual_review_policy_refs = vec![id("live-presence-manual-review@v1")];
+    challenge.retention_policy_refs = vec![id("live-presence-retention@v1")];
+    store
+        .issue_live_presence_challenge(challenge)
+        .expect("live-presence challenge should issue");
 }
 
 fn liveness_ceremony(

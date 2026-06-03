@@ -141,9 +141,14 @@ pub enum MobileIdentityOnboardingCommandError {
     Verification(OidcSessionVerificationError),
     AppAttest(AppAttestAssertionVerificationError),
     Liveness(LivenessCeremonyVerificationError),
+    LivePresenceChallenge(LivePresenceChallengeError),
     DeviceRefMismatch,
     Provider(ContinuityProviderError),
     Repository(RepositoryError),
+    Encryption(FactEncryptionError),
+    #[cfg(feature = "postgres-adapter")]
+    Storage(PostgresAdapterError),
+    Materialization(FactMaterializationError),
 }
 
 impl From<AccountTokenWithAppAttestBootstrapError> for MobileOnboardingCommandError {
@@ -177,6 +182,12 @@ impl From<LivenessCeremonyVerificationError> for MobileIdentityOnboardingCommand
     }
 }
 
+impl From<LivePresenceChallengeError> for MobileIdentityOnboardingCommandError {
+    fn from(error: LivePresenceChallengeError) -> Self {
+        Self::LivePresenceChallenge(error)
+    }
+}
+
 impl From<ContinuityProviderError> for MobileIdentityOnboardingCommandError {
     fn from(error: ContinuityProviderError) -> Self {
         Self::Provider(error)
@@ -199,6 +210,46 @@ impl From<VerticalSliceError> for MobileIdentityOnboardingCommandError {
 impl From<RepositoryError> for MobileIdentityOnboardingCommandError {
     fn from(error: RepositoryError) -> Self {
         Self::Repository(error)
+    }
+}
+
+impl From<EncryptionAwareWorkflowRepositoryError> for MobileIdentityOnboardingCommandError {
+    fn from(error: EncryptionAwareWorkflowRepositoryError) -> Self {
+        match error {
+            EncryptionAwareWorkflowRepositoryError::Encryption(error) => Self::Encryption(error),
+            EncryptionAwareWorkflowRepositoryError::Repository(error) => Self::Repository(error),
+        }
+    }
+}
+
+#[cfg(feature = "postgres-adapter")]
+impl From<PostgresEncryptedWorkflowAppendError> for MobileIdentityOnboardingCommandError {
+    fn from(error: PostgresEncryptedWorkflowAppendError) -> Self {
+        match error {
+            PostgresEncryptedWorkflowAppendError::Encryption(error) => Self::Encryption(error),
+            PostgresEncryptedWorkflowAppendError::Storage(PostgresAdapterError::Repository(
+                error,
+            )) => Self::Repository(error),
+            PostgresEncryptedWorkflowAppendError::Storage(error) => Self::Storage(error),
+        }
+    }
+}
+
+#[cfg(feature = "postgres-adapter")]
+impl From<PostgresEncryptedWorkflowReplayError> for MobileIdentityOnboardingCommandError {
+    fn from(error: PostgresEncryptedWorkflowReplayError) -> Self {
+        match error {
+            PostgresEncryptedWorkflowReplayError::Storage(error) => Self::Storage(error),
+            PostgresEncryptedWorkflowReplayError::Materialization(error) => {
+                Self::Materialization(error)
+            }
+        }
+    }
+}
+
+impl From<FactMaterializationError> for MobileIdentityOnboardingCommandError {
+    fn from(error: FactMaterializationError) -> Self {
+        Self::Materialization(error)
     }
 }
 
@@ -283,10 +334,161 @@ pub fn execute_mobile_identity_onboarding_command(
     oidc_verifier: &impl OidcSessionVerifier,
     app_attest_verifier: &impl AppAttestAssertionVerifier,
     liveness_verifier: &impl LivenessCeremonyVerifier,
+    live_presence_challenge_store: &impl LivePresenceChallengeStore,
     continuity_provider: &impl ContinuityVaultProvider,
     id_generator: &mut impl IdGenerator,
     repository: &mut impl IdentityWorkflowRepository,
 ) -> Result<MobileIdentityOnboardingCommandOutcome, MobileIdentityOnboardingCommandError> {
+    let composition = build_verified_mobile_identity_onboarding_composition(
+        service,
+        request,
+        oidc_verifier,
+        app_attest_verifier,
+        liveness_verifier,
+        live_presence_challenge_store,
+        continuity_provider,
+        id_generator,
+    )?;
+
+    repository.append_episode_composition(
+        composition.parent_episode.clone(),
+        composition.child_slices.clone(),
+        composition.episode_relations.clone(),
+    )?;
+    let replayed_projection =
+        replay_identity_state_from_repository(composition.subject_id.clone(), repository);
+
+    Ok(mobile_identity_onboarding_outcome_from_composition(
+        composition,
+        replayed_projection,
+    ))
+}
+
+pub fn execute_encrypted_mobile_identity_onboarding_command<R, M, E>(
+    service: &IdentityWorkflowService,
+    request: MobileIdentityOnboardingCommandRequest,
+    oidc_verifier: &impl OidcSessionVerifier,
+    app_attest_verifier: &impl AppAttestAssertionVerifier,
+    liveness_verifier: &impl LivenessCeremonyVerifier,
+    live_presence_challenge_store: &impl LivePresenceChallengeStore,
+    continuity_provider: &impl ContinuityVaultProvider,
+    id_generator: &mut impl IdGenerator,
+    encrypted_repository: &mut EncryptionAwareWorkflowRepository<R, M, E>,
+    persistence_context: MobileOnboardingEncryptedPersistenceContext,
+    key_resolver: &impl FactKeyResolver,
+) -> Result<MobileIdentityOnboardingCommandOutcome, MobileIdentityOnboardingCommandError>
+where
+    R: StoredEncryptedWorkflowRepository,
+    M: FactEncryptionMetadataPlanner,
+    E: FactPayloadEncryptor,
+{
+    let composition = build_verified_mobile_identity_onboarding_composition(
+        service,
+        request,
+        oidc_verifier,
+        app_attest_verifier,
+        liveness_verifier,
+        live_presence_challenge_store,
+        continuity_provider,
+        id_generator,
+    )?;
+
+    encrypted_repository.append_episode_composition(
+        composition.parent_episode.clone(),
+        composition.child_slices.clone(),
+        composition.episode_relations.clone(),
+        persistence_context.transaction_id,
+        persistence_context.committed_at,
+    )?;
+    let replayed_projection = encrypted_repository.replay_identity_state(
+        composition.subject_id.clone(),
+        &persistence_context.materialization_policy,
+        key_resolver,
+    )?;
+
+    Ok(mobile_identity_onboarding_outcome_from_composition(
+        composition,
+        replayed_projection,
+    ))
+}
+
+#[cfg(feature = "postgres-adapter")]
+pub async fn execute_postgres_encrypted_mobile_identity_onboarding_command<M, E>(
+    service: &IdentityWorkflowService,
+    request: MobileIdentityOnboardingCommandRequest,
+    oidc_verifier: &impl OidcSessionVerifier,
+    app_attest_verifier: &impl AppAttestAssertionVerifier,
+    liveness_verifier: &impl LivenessCeremonyVerifier,
+    live_presence_challenge_store: &impl LivePresenceChallengeStore,
+    continuity_provider: &impl ContinuityVaultProvider,
+    id_generator: &mut impl IdGenerator,
+    encrypted_repository: &mut SqlxPostgresEncryptionAwareWorkflowRepository<M, E>,
+    persistence_context: MobileOnboardingEncryptedPersistenceContext,
+    key_resolver: &impl FactKeyResolver,
+) -> Result<MobileIdentityOnboardingCommandOutcome, MobileIdentityOnboardingCommandError>
+where
+    M: FactEncryptionMetadataPlanner,
+    E: FactPayloadEncryptor,
+{
+    let composition = build_verified_mobile_identity_onboarding_composition(
+        service,
+        request,
+        oidc_verifier,
+        app_attest_verifier,
+        liveness_verifier,
+        live_presence_challenge_store,
+        continuity_provider,
+        id_generator,
+    )?;
+
+    encrypted_repository
+        .append_episode_composition(
+            composition.parent_episode.clone(),
+            composition.child_slices.clone(),
+            composition.episode_relations.clone(),
+            persistence_context.transaction_id,
+            persistence_context.committed_at,
+        )
+        .await
+        .map_err(MobileIdentityOnboardingCommandError::from)?;
+    let replayed_projection = encrypted_repository
+        .replay_identity_state(
+            composition.subject_id.clone(),
+            &persistence_context.materialization_policy,
+            &persistence_context.materialization_audit_context,
+            key_resolver,
+        )
+        .await
+        .map_err(MobileIdentityOnboardingCommandError::from)?;
+
+    Ok(mobile_identity_onboarding_outcome_from_composition(
+        composition,
+        replayed_projection,
+    ))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MobileIdentityOnboardingComposition {
+    client_context: MobileOnboardingClientContext,
+    subject_id: SubjectId,
+    decision: MobileIdentityOnboardingDecision,
+    parent_episode: ProblemEpisode,
+    child_slices: Vec<IdentityWorkflowSlice>,
+    episode_relations: Vec<EpisodeRelation>,
+    fact_ids: MobileIdentityOnboardingFactIds,
+    committed_fact_count: usize,
+}
+
+fn build_verified_mobile_identity_onboarding_composition(
+    service: &IdentityWorkflowService,
+    request: MobileIdentityOnboardingCommandRequest,
+    oidc_verifier: &impl OidcSessionVerifier,
+    app_attest_verifier: &impl AppAttestAssertionVerifier,
+    liveness_verifier: &impl LivenessCeremonyVerifier,
+    live_presence_challenge_store: &impl LivePresenceChallengeStore,
+    continuity_provider: &impl ContinuityVaultProvider,
+    id_generator: &mut impl IdGenerator,
+) -> Result<MobileIdentityOnboardingComposition, MobileIdentityOnboardingCommandError> {
     let observed_at = request.account.observed_at.clone();
     let subject_id = request.account.subject_id.clone();
     let authored_by = request.account.authored_by.clone();
@@ -297,8 +499,8 @@ pub fn execute_mobile_identity_onboarding_command(
         &request.account.oidc_config,
         &observed_at,
     )?;
-    let app_attest_assertion = app_attest_verifier
-        .verify_app_attest_assertion(&request.app_attest, &observed_at)?;
+    let app_attest_assertion =
+        app_attest_verifier.verify_app_attest_assertion(&request.app_attest, &observed_at)?;
     if request
         .account
         .device_ref
@@ -310,6 +512,12 @@ pub fn execute_mobile_identity_onboarding_command(
 
     let liveness = liveness_verifier.verify_liveness_ceremony(&request.liveness, &observed_at)?;
     validate_liveness_bound_to_app_attest(&liveness, &app_attest_assertion)?;
+    live_presence_challenge_store.consume_verified_live_presence_challenge(
+        &liveness,
+        &app_attest_assertion,
+        &subject_id,
+        &observed_at,
+    )?;
 
     let parent_episode = parent_onboarding_episode(
         id_generator.next_episode_id(&format!("episode-{id_namespace}-parent")),
@@ -416,41 +624,31 @@ pub fn execute_mobile_identity_onboarding_command(
         .collect::<Vec<_>>();
 
     let committed_fact_count = child_slices.iter().map(|slice| slice.facts.len()).sum();
-    repository.append_episode_composition(
-        parent_episode.clone(),
+    Ok(MobileIdentityOnboardingComposition {
+        client_context: request.client_context,
+        subject_id,
+        decision: if liveness.passed() {
+            MobileIdentityOnboardingDecision::Accepted
+        } else {
+            MobileIdentityOnboardingDecision::ManualReviewRequired
+        },
+        parent_episode,
         child_slices,
         episode_relations,
-    )?;
-    let replayed_projection = replay_identity_state_from_repository(subject_id.clone(), repository);
-
-    Ok(MobileIdentityOnboardingCommandOutcome {
-        client_context: request.client_context,
-        summary: MobileIdentityOnboardingSummary {
-            subject_id: replayed_projection.subject_id,
-            decision: if liveness.passed() {
-                MobileIdentityOnboardingDecision::Accepted
-            } else {
-                MobileIdentityOnboardingDecision::ManualReviewRequired
-            },
-            assurance_level: replayed_projection.assurance_level,
-            active_devices: replayed_projection.active_devices,
-            parent_episode_id: parent_episode.id,
-            fact_ids: MobileIdentityOnboardingFactIds {
-                subject_fact_id: registration.subject_fact_id,
-                credential_fact_id: account_bootstrap.credential_fact_id,
-                portal_login_witness_fact_id: account_bootstrap.portal_login_witness_fact_id,
-                verified_email_attribute_fact_id: account_bootstrap
-                    .verified_email_attribute_fact_id,
-                device_binding_fact_id: account_bootstrap
-                    .device_binding_fact_id
-                    .expect("App Attest onboarding requires device binding"),
-                government_id_witness_fact_id,
-                selfie_liveness_witness_fact_id,
-                enrollment_fact_id: continuity_enrollment
-                    .map(|enrollment| enrollment.enrollment_fact_id),
-            },
-            committed_fact_count,
+        fact_ids: MobileIdentityOnboardingFactIds {
+            subject_fact_id: registration.subject_fact_id,
+            credential_fact_id: account_bootstrap.credential_fact_id,
+            portal_login_witness_fact_id: account_bootstrap.portal_login_witness_fact_id,
+            verified_email_attribute_fact_id: account_bootstrap.verified_email_attribute_fact_id,
+            device_binding_fact_id: account_bootstrap
+                .device_binding_fact_id
+                .expect("App Attest onboarding requires device binding"),
+            government_id_witness_fact_id,
+            selfie_liveness_witness_fact_id,
+            enrollment_fact_id: continuity_enrollment
+                .map(|enrollment| enrollment.enrollment_fact_id),
         },
+        committed_fact_count,
     })
 }
 
@@ -595,6 +793,24 @@ fn mobile_onboarding_outcome_from_bootstrap(
                 device_binding_fact_id,
             },
             committed_fact_count: bootstrap.workflow.slice.facts.len(),
+        },
+    }
+}
+
+fn mobile_identity_onboarding_outcome_from_composition(
+    composition: MobileIdentityOnboardingComposition,
+    replayed_projection: MaterializedIdentityState,
+) -> MobileIdentityOnboardingCommandOutcome {
+    MobileIdentityOnboardingCommandOutcome {
+        client_context: composition.client_context,
+        summary: MobileIdentityOnboardingSummary {
+            subject_id: replayed_projection.subject_id,
+            decision: composition.decision,
+            assurance_level: replayed_projection.assurance_level,
+            active_devices: replayed_projection.active_devices,
+            parent_episode_id: composition.parent_episode.id,
+            fact_ids: composition.fact_ids,
+            committed_fact_count: composition.committed_fact_count,
         },
     }
 }

@@ -583,6 +583,37 @@ where
         Ok(stored)
     }
 
+    pub async fn append_episode_composition(
+        &mut self,
+        parent_episode: ProblemEpisode,
+        child_slices: Vec<IdentityWorkflowSlice>,
+        episode_relations: Vec<EpisodeRelation>,
+        transaction_id: PersistenceTransactionId,
+        committed_at: Timestamp,
+    ) -> Result<StoredEpisodeComposition, PostgresEncryptedWorkflowAppendError> {
+        let mut transaction = self.storage.pool.begin().await.map_err(sqlx_error)?;
+        acquire_workflow_sequence_lock(&mut transaction).await?;
+        let sequence_state = next_workflow_sequence_state(&mut transaction).await?;
+        let sequence_plan =
+            sequence_state.plan_for_episode_composition(&child_slices, &episode_relations);
+        let stored = build_stored_encrypted_episode_composition(
+            parent_episode,
+            child_slices,
+            episode_relations,
+            transaction_id,
+            committed_at,
+            &sequence_plan,
+            self.materialization_policy_refs.clone(),
+            &self.key,
+            &mut self.metadata_planner,
+            &self.encryptor,
+        )?;
+
+        insert_stored_episode_composition_rows(&mut transaction, &stored).await?;
+        transaction.commit().await.map_err(sqlx_error)?;
+        Ok(stored)
+    }
+
     pub async fn materialize_subject_facts(
         &self,
         subject_id: &SubjectId,
@@ -997,47 +1028,7 @@ impl SqlxPostgresEncryptedFactRepository {
         composition: &StoredEpisodeComposition,
     ) -> Result<(), PostgresAdapterError> {
         let mut transaction = self.pool.begin().await.map_err(sqlx_error)?;
-        insert_workflow_transaction_row(
-            &mut transaction,
-            &PostgresWorkflowTransactionRow::episode_composition(
-                &composition.transaction_id,
-                &composition.committed_at,
-            ),
-        )
-        .await?;
-        insert_problem_episode_row(
-            &mut transaction,
-            &PostgresProblemEpisodeRow::try_from_stored(&composition.parent_episode)?,
-        )
-        .await?;
-        for child_slice in &composition.child_slices {
-            insert_problem_episode_row(
-                &mut transaction,
-                &PostgresProblemEpisodeRow::try_from_stored(&child_slice.episode)?,
-            )
-            .await?;
-            for envelope in &child_slice.encrypted_facts {
-                insert_encrypted_fact_row(
-                    &mut transaction,
-                    &PostgresEncryptedFactRow::try_from_envelope(envelope)?,
-                )
-                .await?;
-            }
-            for membership in &child_slice.memberships {
-                insert_episode_membership_row(
-                    &mut transaction,
-                    &PostgresEpisodeMembershipRow::try_from_stored(membership)?,
-                )
-                .await?;
-            }
-        }
-        for relation in &composition.episode_relations {
-            insert_episode_relation_row(
-                &mut transaction,
-                &PostgresEpisodeRelationRow::try_from_stored(relation)?,
-            )
-            .await?;
-        }
+        insert_stored_episode_composition_rows(&mut transaction, composition).await?;
         transaction.commit().await.map_err(sqlx_error)?;
         Ok(())
     }
@@ -1845,6 +1836,55 @@ async fn insert_stored_workflow_slice_rows(
 }
 
 #[cfg(feature = "postgres-adapter")]
+async fn insert_stored_episode_composition_rows(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    composition: &StoredEpisodeComposition,
+) -> Result<(), PostgresAdapterError> {
+    insert_workflow_transaction_row(
+        transaction,
+        &PostgresWorkflowTransactionRow::episode_composition(
+            &composition.transaction_id,
+            &composition.committed_at,
+        ),
+    )
+    .await?;
+    insert_problem_episode_row(
+        transaction,
+        &PostgresProblemEpisodeRow::try_from_stored(&composition.parent_episode)?,
+    )
+    .await?;
+    for child_slice in &composition.child_slices {
+        insert_problem_episode_row(
+            transaction,
+            &PostgresProblemEpisodeRow::try_from_stored(&child_slice.episode)?,
+        )
+        .await?;
+        for envelope in &child_slice.encrypted_facts {
+            insert_encrypted_fact_row(
+                transaction,
+                &PostgresEncryptedFactRow::try_from_envelope(envelope)?,
+            )
+            .await?;
+        }
+        for membership in &child_slice.memberships {
+            insert_episode_membership_row(
+                transaction,
+                &PostgresEpisodeMembershipRow::try_from_stored(membership)?,
+            )
+            .await?;
+        }
+    }
+    for relation in &composition.episode_relations {
+        insert_episode_relation_row(
+            transaction,
+            &PostgresEpisodeRelationRow::try_from_stored(relation)?,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "postgres-adapter")]
 async fn acquire_workflow_sequence_lock(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
 ) -> Result<(), PostgresAdapterError> {
@@ -1860,23 +1900,30 @@ async fn acquire_workflow_sequence_lock(
 async fn next_workflow_sequence_state(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
 ) -> Result<EncryptedWorkflowAppendSequenceState, PostgresAdapterError> {
-    Ok(EncryptedWorkflowAppendSequenceState::new(
-        next_append_sequence_from_sql(
-            transaction,
-            "SELECT COALESCE(MAX(append_sequence), -1) + 1 FROM identity_facts",
-        )
-        .await?,
-        next_append_sequence_from_sql(
-            transaction,
-            "SELECT COALESCE(MAX(append_sequence), -1) + 1 FROM identity_episodes",
-        )
-        .await?,
-        next_append_sequence_from_sql(
-            transaction,
-            "SELECT COALESCE(MAX(append_sequence), -1) + 1 FROM identity_episode_memberships",
-        )
-        .await?,
-    ))
+    Ok(
+        EncryptedWorkflowAppendSequenceState::with_relation_append_sequence(
+            next_append_sequence_from_sql(
+                transaction,
+                "SELECT COALESCE(MAX(append_sequence), -1) + 1 FROM identity_facts",
+            )
+            .await?,
+            next_append_sequence_from_sql(
+                transaction,
+                "SELECT COALESCE(MAX(append_sequence), -1) + 1 FROM identity_episodes",
+            )
+            .await?,
+            next_append_sequence_from_sql(
+                transaction,
+                "SELECT COALESCE(MAX(append_sequence), -1) + 1 FROM identity_episode_memberships",
+            )
+            .await?,
+            next_append_sequence_from_sql(
+                transaction,
+                "SELECT COALESCE(MAX(append_sequence), -1) + 1 FROM identity_episode_relations",
+            )
+            .await?,
+        ),
+    )
 }
 
 #[cfg(feature = "postgres-adapter")]

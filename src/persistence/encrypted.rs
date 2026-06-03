@@ -1,11 +1,13 @@
 use super::{
-    RepositoryError, StoredEpisodeMembership, StoredIdentityWorkflowSlice, StoredProblemEpisode,
+    RepositoryError, StoredEpisodeComposition, StoredEpisodeMembership, StoredEpisodeRelation,
+    StoredIdentityWorkflowSlice, StoredProblemEpisode,
 };
 use crate::fen::*;
 use crate::flows::IdentityWorkflowSlice;
 use crate::identity::AccessDecisionResult;
 use crate::materialized::{materialize_identity_state, MaterializedIdentityState};
 use crate::policy::PolicyEvaluation;
+use crate::workflows::{EpisodeRelation, ProblemEpisode};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
@@ -867,6 +869,39 @@ where
         Ok(stored)
     }
 
+    pub fn append_episode_composition(
+        &mut self,
+        parent_episode: ProblemEpisode,
+        child_slices: Vec<IdentityWorkflowSlice>,
+        episode_relations: Vec<EpisodeRelation>,
+        transaction_id: PersistenceTransactionId,
+        committed_at: Timestamp,
+    ) -> Result<StoredEpisodeComposition, EncryptionAwareWorkflowRepositoryError> {
+        let sequence_plan = self
+            .sequence_state
+            .plan_for_episode_composition(&child_slices, &episode_relations);
+        let stored = build_stored_encrypted_episode_composition(
+            parent_episode,
+            child_slices,
+            episode_relations,
+            transaction_id,
+            committed_at,
+            &sequence_plan,
+            self.materialization_policy_refs.clone(),
+            &self.key,
+            &mut self.metadata_planner,
+            &self.encryptor,
+        )?;
+
+        self.storage
+            .append_stored_episode_composition(stored.clone())
+            .map_err(EncryptionAwareWorkflowRepositoryError::Repository)?;
+        self.sequence_state
+            .advance_by_composition_plan(&sequence_plan);
+
+        Ok(stored)
+    }
+
     pub fn materialize_subject_facts(
         &self,
         subject_id: &SubjectId,
@@ -897,6 +932,7 @@ pub struct EncryptedWorkflowAppendSequenceState {
     pub next_fact_append_sequence: AppendSequence,
     pub next_episode_append_sequence: AppendSequence,
     pub next_membership_append_sequence: AppendSequence,
+    pub next_relation_append_sequence: AppendSequence,
 }
 
 impl EncryptedWorkflowAppendSequenceState {
@@ -909,6 +945,21 @@ impl EncryptedWorkflowAppendSequenceState {
             next_fact_append_sequence,
             next_episode_append_sequence,
             next_membership_append_sequence,
+            next_relation_append_sequence: 0,
+        }
+    }
+
+    pub fn with_relation_append_sequence(
+        next_fact_append_sequence: AppendSequence,
+        next_episode_append_sequence: AppendSequence,
+        next_membership_append_sequence: AppendSequence,
+        next_relation_append_sequence: AppendSequence,
+    ) -> Self {
+        Self {
+            next_fact_append_sequence,
+            next_episode_append_sequence,
+            next_membership_append_sequence,
+            next_relation_append_sequence,
         }
     }
 
@@ -925,10 +976,53 @@ impl EncryptedWorkflowAppendSequenceState {
         }
     }
 
+    pub fn plan_for_episode_composition(
+        &self,
+        child_slices: &[IdentityWorkflowSlice],
+        episode_relations: &[EpisodeRelation],
+    ) -> EncryptedEpisodeCompositionAppendSequencePlan {
+        let mut fact_sequence_start = self.next_fact_append_sequence;
+        let mut episode_sequence = self.next_episode_append_sequence + 1;
+        let mut membership_sequence_start = self.next_membership_append_sequence;
+        let child_slice_plans = child_slices
+            .iter()
+            .map(|slice| {
+                let plan = EncryptedWorkflowAppendSequencePlan {
+                    fact_append_sequence_start: fact_sequence_start,
+                    episode_append_sequence: episode_sequence,
+                    membership_append_sequence_start: membership_sequence_start,
+                    fact_count: slice.facts.len(),
+                    membership_count: slice.memberships.len(),
+                };
+                fact_sequence_start += plan.fact_count as AppendSequence;
+                episode_sequence += 1;
+                membership_sequence_start += plan.membership_count as AppendSequence;
+                plan
+            })
+            .collect();
+
+        EncryptedEpisodeCompositionAppendSequencePlan {
+            parent_episode_append_sequence: self.next_episode_append_sequence,
+            child_slice_plans,
+            relation_append_sequence_start: self.next_relation_append_sequence,
+            relation_count: episode_relations.len(),
+        }
+    }
+
     pub fn advance_by_plan(&mut self, plan: &EncryptedWorkflowAppendSequencePlan) {
         self.next_fact_append_sequence += plan.fact_count as AppendSequence;
         self.next_episode_append_sequence += 1;
         self.next_membership_append_sequence += plan.membership_count as AppendSequence;
+    }
+
+    pub fn advance_by_composition_plan(
+        &mut self,
+        plan: &EncryptedEpisodeCompositionAppendSequencePlan,
+    ) {
+        self.next_fact_append_sequence += plan.fact_count() as AppendSequence;
+        self.next_episode_append_sequence += 1 + plan.child_slice_plans.len() as AppendSequence;
+        self.next_membership_append_sequence += plan.membership_count() as AppendSequence;
+        self.next_relation_append_sequence += plan.relation_count as AppendSequence;
     }
 }
 
@@ -939,6 +1033,30 @@ pub struct EncryptedWorkflowAppendSequencePlan {
     pub membership_append_sequence_start: AppendSequence,
     pub fact_count: usize,
     pub membership_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncryptedEpisodeCompositionAppendSequencePlan {
+    pub parent_episode_append_sequence: AppendSequence,
+    pub child_slice_plans: Vec<EncryptedWorkflowAppendSequencePlan>,
+    pub relation_append_sequence_start: AppendSequence,
+    pub relation_count: usize,
+}
+
+impl EncryptedEpisodeCompositionAppendSequencePlan {
+    pub fn fact_count(&self) -> usize {
+        self.child_slice_plans
+            .iter()
+            .map(|plan| plan.fact_count)
+            .sum()
+    }
+
+    pub fn membership_count(&self) -> usize {
+        self.child_slice_plans
+            .iter()
+            .map(|plan| plan.membership_count)
+            .sum()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1032,12 +1150,17 @@ pub trait StoredEncryptedWorkflowRepository {
         &mut self,
         workflow_slice: StoredIdentityWorkflowSlice,
     ) -> Result<(), RepositoryError>;
+    fn append_stored_episode_composition(
+        &mut self,
+        composition: StoredEpisodeComposition,
+    ) -> Result<(), RepositoryError>;
     fn encrypted_facts_for_subject(&self, subject_id: &SubjectId) -> Vec<StoredEncryptedFact>;
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InMemoryStoredEncryptedWorkflowRepository {
     workflow_slices: Vec<StoredIdentityWorkflowSlice>,
+    episode_compositions: Vec<StoredEpisodeComposition>,
 }
 
 impl InMemoryStoredEncryptedWorkflowRepository {
@@ -1049,11 +1172,21 @@ impl InMemoryStoredEncryptedWorkflowRepository {
         self.workflow_slices.clone()
     }
 
+    pub fn episode_compositions(&self) -> Vec<StoredEpisodeComposition> {
+        self.episode_compositions.clone()
+    }
+
     pub fn all_encrypted_facts(&self) -> Vec<StoredEncryptedFact> {
         let mut facts: Vec<StoredEncryptedFact> = self
             .workflow_slices
             .iter()
             .flat_map(|slice| slice.encrypted_facts.clone())
+            .chain(self.episode_compositions.iter().flat_map(|composition| {
+                composition
+                    .child_slices
+                    .iter()
+                    .flat_map(|slice| slice.encrypted_facts.clone())
+            }))
             .collect();
         facts.sort_by_key(|fact| fact.append_sequence);
         facts
@@ -1070,6 +1203,15 @@ impl StoredEncryptedWorkflowRepository for InMemoryStoredEncryptedWorkflowReposi
         Ok(())
     }
 
+    fn append_stored_episode_composition(
+        &mut self,
+        composition: StoredEpisodeComposition,
+    ) -> Result<(), RepositoryError> {
+        self.validate_episode_composition_append(&composition)?;
+        self.episode_compositions.push(composition);
+        Ok(())
+    }
+
     fn encrypted_facts_for_subject(&self, subject_id: &SubjectId) -> Vec<StoredEncryptedFact> {
         self.all_encrypted_facts()
             .into_iter()
@@ -1079,13 +1221,34 @@ impl StoredEncryptedWorkflowRepository for InMemoryStoredEncryptedWorkflowReposi
 }
 
 impl InMemoryStoredEncryptedWorkflowRepository {
+    fn stored_slices(&self) -> impl Iterator<Item = &StoredIdentityWorkflowSlice> {
+        self.workflow_slices.iter().chain(
+            self.episode_compositions
+                .iter()
+                .flat_map(|composition| composition.child_slices.iter()),
+        )
+    }
+
+    fn stored_parent_episodes(&self) -> impl Iterator<Item = &StoredProblemEpisode> {
+        self.episode_compositions
+            .iter()
+            .map(|composition| &composition.parent_episode)
+    }
+
+    fn stored_relations(&self) -> impl Iterator<Item = &StoredEpisodeRelation> {
+        self.episode_compositions
+            .iter()
+            .flat_map(|composition| composition.episode_relations.iter())
+    }
+
     fn validate_workflow_slice_append(
         &self,
         workflow_slice: &StoredIdentityWorkflowSlice,
     ) -> Result<(), RepositoryError> {
-        let existing_episodes = self.workflow_slices.iter().map(|slice| &slice.episode);
-        if existing_episodes
-            .into_iter()
+        if self
+            .stored_slices()
+            .map(|slice| &slice.episode)
+            .chain(self.stored_parent_episodes())
             .any(|existing| existing.episode.id == workflow_slice.episode.episode.id)
         {
             return Err(RepositoryError::DuplicateEpisodeId);
@@ -1093,8 +1256,7 @@ impl InMemoryStoredEncryptedWorkflowRepository {
 
         for (index, fact) in workflow_slice.encrypted_facts.iter().enumerate() {
             if self
-                .workflow_slices
-                .iter()
+                .stored_slices()
                 .flat_map(|slice| &slice.encrypted_facts)
                 .any(|existing| existing.fact_id == fact.fact_id)
                 || workflow_slice.encrypted_facts[..index]
@@ -1104,8 +1266,7 @@ impl InMemoryStoredEncryptedWorkflowRepository {
                 return Err(RepositoryError::DuplicateFactId);
             }
             if self
-                .workflow_slices
-                .iter()
+                .stored_slices()
                 .flat_map(|slice| &slice.encrypted_facts)
                 .any(|existing| existing.append_sequence == fact.append_sequence)
                 || workflow_slice.encrypted_facts[..index]
@@ -1118,8 +1279,7 @@ impl InMemoryStoredEncryptedWorkflowRepository {
 
         for (index, membership) in workflow_slice.memberships.iter().enumerate() {
             if self
-                .workflow_slices
-                .iter()
+                .stored_slices()
                 .flat_map(|slice| &slice.memberships)
                 .any(|existing| existing.membership.id == membership.membership.id)
                 || workflow_slice.memberships[..index]
@@ -1129,13 +1289,126 @@ impl InMemoryStoredEncryptedWorkflowRepository {
                 return Err(RepositoryError::DuplicateMembershipId);
             }
             if self
-                .workflow_slices
-                .iter()
+                .stored_slices()
                 .flat_map(|slice| &slice.memberships)
                 .any(|existing| existing.append_sequence == membership.append_sequence)
                 || workflow_slice.memberships[..index]
                     .iter()
                     .any(|existing| existing.append_sequence == membership.append_sequence)
+            {
+                return Err(RepositoryError::DuplicateAppendSequence);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_episode_composition_append(
+        &self,
+        composition: &StoredEpisodeComposition,
+    ) -> Result<(), RepositoryError> {
+        if self
+            .stored_slices()
+            .map(|slice| &slice.episode)
+            .chain(self.stored_parent_episodes())
+            .any(|existing| existing.episode.id == composition.parent_episode.episode.id)
+        {
+            return Err(RepositoryError::DuplicateEpisodeId);
+        }
+
+        for (slice_index, slice) in composition.child_slices.iter().enumerate() {
+            if slice.episode.episode.id == composition.parent_episode.episode.id
+                || self
+                    .stored_slices()
+                    .map(|existing_slice| &existing_slice.episode)
+                    .chain(self.stored_parent_episodes())
+                    .any(|existing| existing.episode.id == slice.episode.episode.id)
+                || composition.child_slices[..slice_index]
+                    .iter()
+                    .any(|existing| existing.episode.episode.id == slice.episode.episode.id)
+            {
+                return Err(RepositoryError::DuplicateEpisodeId);
+            }
+
+            for (fact_index, fact) in slice.encrypted_facts.iter().enumerate() {
+                if self
+                    .stored_slices()
+                    .flat_map(|existing_slice| &existing_slice.encrypted_facts)
+                    .any(|existing| existing.fact_id == fact.fact_id)
+                    || slice.encrypted_facts[..fact_index]
+                        .iter()
+                        .any(|existing| existing.fact_id == fact.fact_id)
+                    || composition.child_slices[..slice_index]
+                        .iter()
+                        .flat_map(|previous_slice| &previous_slice.encrypted_facts)
+                        .any(|existing| existing.fact_id == fact.fact_id)
+                {
+                    return Err(RepositoryError::DuplicateFactId);
+                }
+                if self
+                    .stored_slices()
+                    .flat_map(|existing_slice| &existing_slice.encrypted_facts)
+                    .any(|existing| existing.append_sequence == fact.append_sequence)
+                    || slice.encrypted_facts[..fact_index]
+                        .iter()
+                        .any(|existing| existing.append_sequence == fact.append_sequence)
+                    || composition.child_slices[..slice_index]
+                        .iter()
+                        .flat_map(|previous_slice| &previous_slice.encrypted_facts)
+                        .any(|existing| existing.append_sequence == fact.append_sequence)
+                {
+                    return Err(RepositoryError::DuplicateAppendSequence);
+                }
+            }
+
+            for (membership_index, membership) in slice.memberships.iter().enumerate() {
+                if self
+                    .stored_slices()
+                    .flat_map(|existing_slice| &existing_slice.memberships)
+                    .any(|existing| existing.membership.id == membership.membership.id)
+                    || slice.memberships[..membership_index]
+                        .iter()
+                        .any(|existing| existing.membership.id == membership.membership.id)
+                    || composition.child_slices[..slice_index]
+                        .iter()
+                        .flat_map(|previous_slice| &previous_slice.memberships)
+                        .any(|existing| existing.membership.id == membership.membership.id)
+                {
+                    return Err(RepositoryError::DuplicateMembershipId);
+                }
+                if self
+                    .stored_slices()
+                    .flat_map(|existing_slice| &existing_slice.memberships)
+                    .any(|existing| existing.append_sequence == membership.append_sequence)
+                    || slice.memberships[..membership_index]
+                        .iter()
+                        .any(|existing| existing.append_sequence == membership.append_sequence)
+                    || composition.child_slices[..slice_index]
+                        .iter()
+                        .flat_map(|previous_slice| &previous_slice.memberships)
+                        .any(|existing| existing.append_sequence == membership.append_sequence)
+                {
+                    return Err(RepositoryError::DuplicateAppendSequence);
+                }
+            }
+        }
+
+        for (relation_index, relation) in composition.episode_relations.iter().enumerate() {
+            if self
+                .stored_relations()
+                .any(|existing| existing.relation.id == relation.relation.id)
+                || composition.episode_relations[..relation_index]
+                    .iter()
+                    .any(|existing| existing.relation.id == relation.relation.id)
+            {
+                return Err(RepositoryError::DuplicateRelationId);
+            }
+            if self
+                .stored_relations()
+                .any(|existing| existing.append_sequence == relation.append_sequence)
+                || composition.episode_relations[..relation_index]
+                    .iter()
+                    .any(|existing| existing.append_sequence == relation.append_sequence)
             {
                 return Err(RepositoryError::DuplicateAppendSequence);
             }
@@ -1241,6 +1514,59 @@ pub fn build_stored_encrypted_workflow_slice(
         },
         encrypted_facts,
         memberships,
+    })
+}
+
+pub fn build_stored_encrypted_episode_composition(
+    parent_episode: ProblemEpisode,
+    child_slices: Vec<IdentityWorkflowSlice>,
+    episode_relations: Vec<EpisodeRelation>,
+    transaction_id: PersistenceTransactionId,
+    committed_at: Timestamp,
+    sequence_plan: &EncryptedEpisodeCompositionAppendSequencePlan,
+    materialization_policy_refs: Vec<PolicyRef>,
+    key: &FactDataEncryptionKey,
+    metadata_planner: &mut impl FactEncryptionMetadataPlanner,
+    encryptor: &impl FactPayloadEncryptor,
+) -> Result<StoredEpisodeComposition, FactEncryptionError> {
+    let child_slices = child_slices
+        .into_iter()
+        .zip(sequence_plan.child_slice_plans.iter())
+        .map(|(slice, child_plan)| {
+            build_stored_encrypted_workflow_slice(
+                slice,
+                transaction_id.clone(),
+                committed_at.clone(),
+                child_plan,
+                materialization_policy_refs.clone(),
+                key,
+                metadata_planner,
+                encryptor,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let episode_relations = episode_relations
+        .into_iter()
+        .enumerate()
+        .map(|(index, relation)| StoredEpisodeRelation {
+            append_sequence: sequence_plan.relation_append_sequence_start + index as AppendSequence,
+            transaction_id: transaction_id.clone(),
+            committed_at: committed_at.clone(),
+            relation,
+        })
+        .collect();
+
+    Ok(StoredEpisodeComposition {
+        transaction_id: transaction_id.clone(),
+        committed_at: committed_at.clone(),
+        parent_episode: StoredProblemEpisode {
+            append_sequence: sequence_plan.parent_episode_append_sequence,
+            transaction_id,
+            committed_at,
+            episode: parent_episode,
+        },
+        child_slices,
+        episode_relations,
     })
 }
 
