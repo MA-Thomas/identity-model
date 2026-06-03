@@ -71,6 +71,36 @@ fn postgres_migration_pins_app_attest_key_state_table_shape() {
 }
 
 #[test]
+fn postgres_migration_pins_live_presence_challenge_table_shape() {
+    let sql = IDENTITY_LIVE_PRESENCE_CHALLENGES_MIGRATION_SQL;
+
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS identity_live_presence_challenges"));
+    assert!(sql.contains("challenge_id TEXT PRIMARY KEY"));
+    assert!(sql.contains("challenge_nonce TEXT NOT NULL UNIQUE"));
+    assert!(sql.contains("intended_workflow TEXT NOT NULL CHECK"));
+    assert!(sql.contains("'mobile_identity_onboarding'"));
+    assert!(sql.contains("'account_recovery'"));
+    assert!(sql.contains("'sensitive_action_step_up'"));
+    assert!(sql.contains("expected_subject_id TEXT"));
+    assert!(sql.contains("expected_device_ref TEXT"));
+    assert!(sql.contains("expected_team_id TEXT"));
+    assert!(sql.contains("expected_bundle_id TEXT"));
+    assert!(sql.contains("expected_app_id TEXT"));
+    assert!(sql.contains("expected_environment TEXT CHECK"));
+    assert!(sql.contains("issued_at TEXT NOT NULL"));
+    assert!(sql.contains("expires_at TEXT NOT NULL"));
+    assert!(sql.contains("status_kind IN ('issued', 'used', 'expired', 'failed', 'manual_review')"));
+    assert!(sql.contains("status_payload JSONB NOT NULL DEFAULT '{}'::jsonb"));
+    assert!(sql.contains("retry_policy_refs TEXT[] NOT NULL"));
+    assert!(sql.contains("manual_review_policy_refs TEXT[] NOT NULL"));
+    assert!(sql.contains("retention_policy_refs TEXT[] NOT NULL"));
+    assert!(sql.contains("identity_live_presence_challenges_subject_idx"));
+    assert!(sql.contains("identity_live_presence_challenges_device_idx"));
+    assert!(sql.contains("identity_live_presence_challenges_status_idx"));
+    assert!(sql.contains("identity_live_presence_challenges_expires_idx"));
+}
+
+#[test]
 fn postgres_migration_registry_pins_ordered_versions() {
     assert_eq!(
         IDENTITY_POSTGRES_MIGRATIONS
@@ -80,7 +110,8 @@ fn postgres_migration_registry_pins_ordered_versions() {
         vec![
             "0001_identity_encrypted_facts",
             "0002_identity_workflow_transactions",
-            "0003_identity_app_attest_key_state"
+            "0003_identity_app_attest_key_state",
+            "0004_identity_live_presence_challenges"
         ]
     );
     assert_eq!(
@@ -89,6 +120,7 @@ fn postgres_migration_registry_pins_ordered_versions() {
             IDENTITY_ENCRYPTED_FACTS_MIGRATION_SQL,
             IDENTITY_WORKFLOW_TRANSACTIONS_MIGRATION_SQL,
             IDENTITY_APP_ATTEST_KEY_STATE_MIGRATION_SQL,
+            IDENTITY_LIVE_PRESENCE_CHALLENGES_MIGRATION_SQL,
         ]
     );
 }
@@ -119,6 +151,88 @@ fn postgres_app_attest_key_state_row_round_trips_labels() {
         row.try_into_key_state()
             .expect("postgres row should restore key state"),
         state
+    );
+}
+
+#[test]
+fn postgres_live_presence_challenge_row_round_trips_status_context_and_labels() {
+    let config = AppAttestClientConfig::ios_app(
+        "TEAMID1234",
+        "com.fen.identity",
+        AppAttestEnvironment::Production,
+    );
+    let mut challenge = LivePresenceChallenge::onboarding(
+        id("live-presence-challenge-postgres"),
+        "live-presence-nonce-postgres",
+        Some(id("subject-live-presence-postgres")),
+        Some("iphone-live-presence-postgres".to_string()),
+        Some(LivePresenceExpectedAppContext::from_app_attest_config(
+            &config,
+        )),
+        ts("2026-05-29T00:05:00Z"),
+        ts("2026-05-29T00:06:00Z"),
+    );
+    challenge.status = LivePresenceChallengeStatus::ManualReview {
+        referred_at: ts("2026-05-29T00:05:30Z"),
+        reason: LivePresenceChallengeManualReviewReason::PresentationAttackInconclusive,
+        provider_event_id: Some("liveness-event-postgres".to_string()),
+    };
+    challenge.retry_policy_refs = vec![id("live-presence-retry@v1")];
+    challenge.manual_review_policy_refs = vec![id("live-presence-review@v1")];
+    challenge.retention_policy_refs = vec![id("live-presence-retention@v1")];
+
+    let row = PostgresLivePresenceChallengeRow::try_from_challenge(&challenge)
+        .expect("challenge should map to postgres row");
+    assert_eq!(row.challenge_id, "live-presence-challenge-postgres");
+    assert_eq!(row.challenge_nonce, "live-presence-nonce-postgres");
+    assert_eq!(row.intended_workflow, "mobile_identity_onboarding");
+    assert_eq!(
+        row.expected_subject_id,
+        Some("subject-live-presence-postgres".to_string())
+    );
+    assert_eq!(
+        row.expected_device_ref,
+        Some("iphone-live-presence-postgres".to_string())
+    );
+    assert_eq!(row.expected_team_id, Some("TEAMID1234".to_string()));
+    assert_eq!(row.expected_bundle_id, Some("com.fen.identity".to_string()));
+    assert_eq!(
+        row.expected_app_id,
+        Some("TEAMID1234.com.fen.identity".to_string())
+    );
+    assert_eq!(row.expected_environment, Some("production".to_string()));
+    assert_eq!(row.status_kind, "manual_review");
+    assert_eq!(
+        row.status_payload,
+        PostgresLivePresenceChallengeStatusPayload::ManualReview {
+            referred_at: "2026-05-29T00:05:30Z".to_string(),
+            reason: "presentation_attack_inconclusive".to_string(),
+            provider_event_id: Some("liveness-event-postgres".to_string())
+        }
+    );
+
+    assert_eq!(
+        row.clone()
+            .try_into_challenge()
+            .expect("postgres row should restore challenge"),
+        challenge
+    );
+
+    let mut invalid_status_payload = row.clone();
+    invalid_status_payload.status_kind = "used".to_string();
+    invalid_status_payload.status_payload = PostgresLivePresenceChallengeStatusPayload::Issued;
+    assert_eq!(
+        invalid_status_payload.try_into_challenge(),
+        Err(PostgresAdapterError::InvalidLivePresenceChallengeStatusPayload)
+    );
+
+    let mut unknown_workflow = row;
+    unknown_workflow.intended_workflow = "future_workflow".to_string();
+    assert_eq!(
+        unknown_workflow.try_into_challenge(),
+        Err(PostgresAdapterError::UnknownLivePresenceChallengeWorkflow(
+            "future_workflow".to_string()
+        ))
     );
 }
 

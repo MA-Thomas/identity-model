@@ -23,7 +23,11 @@ The latest local Keycloak proof is complete. A throwaway Keycloak `26.6.1` dev s
 
 The PostgreSQL live harness has now passed against a disposable PostgreSQL database in this workspace. The live proof covered migration execution, encrypted append/query, duplicate fact ID, duplicate append sequence, all-facts replay order, subject-scoped query, policy-gated materialization, materialization audit insert, workflow-slice transaction append/query, PostgreSQL-backed encrypted workflow append/replay, transaction rollback, and replay-equivalence against `MaterializedIdentityState`.
 
-The next useful handoff move is adding server-issued onboarding live-presence challenges with durable nonce lifecycle: issued, expires, used, failed, and manual-review states. After that, expose the composed identity-onboarding command through HTTP so the product path can submit OIDC, App Attest, government ID witness, and video-selfie/liveness ceremony evidence through one narrow contract.
+`Phoros Onboarding and Recovery Architecture.pdf` has now been folded into `build_plan.md` as a product-state addendum. The build plan keeps the existing FEN fact-graph architecture and adds follow-on milestones for contact-channel evidence, Persona-default legal identity proofing, account and authority status projections, recovery policy setup, restricted-authority recovery, durable live-presence challenges, composed onboarding HTTP, and clinical binding/import states.
+
+Persona is the default Phase 1 legal identity-proofing provider. Treat Persona as the first concrete identity-proofing adapter, not as identity truth. The adapter should verify and normalize Persona workflow results, then translate them into FEN identity witness, asserted attribute, risk, provenance, and external-ref facts. Keep the `IdentityProofingProvider` boundary provider-neutral so ID.me, Socure, Jumio, Entrust/Onfido, Veriff, LexisNexis, government assertions, or provider-mediated assertions can replace Persona later.
+
+The next useful handoff move is adding server-issued onboarding live-presence challenges with durable nonce lifecycle: issued, expires, used, failed, and manual-review states. In parallel or immediately after, add the Persona-shaped identity-proofing boundary so the composed onboarding command can accept legal identity evidence from the default provider. After that, expose the composed identity-onboarding command through HTTP so the product path can submit OIDC, App Attest, Persona identity-proofing evidence, and video-selfie/liveness ceremony evidence through one narrow contract.
 
 Do not treat Keycloak, PostgreSQL, a KMS, Apple App Attest, a liveness provider, or any provider SDK as the identity source of truth. They provide evidence and durable infrastructure. FEN owns the typed fact graph, policy gates, replay semantics, and materialized projections.
 
@@ -33,6 +37,7 @@ These are the most important remaining workstreams for a testable MVP. They focu
 
 ```text
 iPhone evidence + OIDC session + live-presence ceremony result
+  + Persona legal identity-proofing evidence
   -> server-issued challenges bound to app/device context
   -> production HTTP runtime
   -> real verifier/key boundaries
@@ -73,27 +78,39 @@ Do not expand into broad product surface area before this path is real. The MVP 
 
    MVP outcome: FEN can consume liveness evidence without turning the face capture process into identity itself.
 
-6. **Policy And Governance Storage**
+6. **Persona Identity Proofing Boundary**
+
+   Implement Persona as the default Phase 1 legal identity-proofing provider behind a provider-neutral boundary. The first version can use Persona sandbox/static fixtures or verified webhook/API result shapes, but the domain contract should already carry provider name, workflow ID, asserted attributes, evidence types, verification result, assurance level, risk signals, timestamp, expiration policy, and audit reference.
+
+   MVP outcome: the composed onboarding path can record legal identity proofing as FEN evidence without hard-coding Persona as the identity model.
+
+7. **Mac/Backend End-To-End Test Path**
+
+   Create the fastest real-ish end-to-end test path on Mac before building the iPhone app. Run the runtime server against local PostgreSQL, local Keycloak, production-shaped encrypted workflow persistence, and Persona sandbox/static identity-proofing evidence. Drive the composed onboarding HTTP endpoint from a small local client or browser-visible harness and verify the safe summary, persisted facts, materialized projection, and audit rows.
+
+   MVP outcome: the backend product flow can be exercised outside unit tests while the iPhone-specific App Attest and camera/liveness path is still being built.
+
+8. **Policy And Governance Storage**
 
    Add durable storage and review lifecycle for policy artifacts that will be cited by access decisions and materialization decisions. Keep policy refs versioned, reviewed, lifecycle-aware, and stable over time. Avoid embedding mutable policy meaning directly in route handlers, database rows, or provider adapters.
 
    MVP outcome: materialization and access decisions can cite durable policy refs, and later audits can explain which policy version permitted or denied reliance.
 
-7. **Database Operationalization**
+9. **Database Operationalization**
 
    Turn the PostgreSQL adapter from a tested storage proof into an operational database boundary. Add migration version tracking, deployment-safe migration execution, connection-pool configuration, readiness checks, backup/restore expectations, index review, live harness setup guidance, and CI/pre-production coverage for feature-enabled database tests.
 
    MVP outcome: the encrypted append/replay path can be run repeatedly against a real database with predictable schema state and operational diagnostics.
 
-8. **Product Mobile Path**
+10. **Product Mobile Path**
 
    After the server contract is real, build the smallest iOS proof path that obtains a Keycloak/OIDC token, obtains App Attest evidence for a server-issued challenge, guides the user through a video-selfie/live-presence ceremony, submits the mobile onboarding request, and displays the safe onboarding summary. Keep this as a proof app or thin product slice until the backend evidence contract stabilizes.
 
-   Treat this as a staged test boundary. Backend MVP tests can keep using fixtures, synthetic App Attest-shaped evidence, and static liveness verifier results. The real-device MVP needs a minimal native iPhone app because Apple App Attest evidence is produced by `DCAppAttestService` inside a signed app on a supported device, and the video-selfie ceremony needs a real camera/capture UX or provider SDK. An investor demo on the investor's own phone likely needs a TestFlight or demo build, HTTPS access to the runtime, a prepared Keycloak login path, a configured liveness provider path, and deliberate handling of App Attest development versus production environment behavior.
+   Treat this as a staged test boundary. Backend MVP tests can keep using fixtures, synthetic App Attest-shaped evidence, Persona sandbox/static identity-proofing evidence, and static liveness verifier results. The real-device MVP needs a minimal native iPhone app because Apple App Attest evidence is produced by `DCAppAttestService` inside a signed app on a supported device, and the video-selfie ceremony needs a real camera/capture UX or provider SDK. An investor demo on the investor's own phone likely needs a TestFlight or demo build, HTTPS access to the runtime, a prepared Keycloak login path, a configured Persona workflow, a configured liveness provider path, and deliberate handling of App Attest development versus production environment behavior.
 
    MVP outcome: a real phone can exercise the full onboarding path without relying on CLI-only or synthetic HTTP fixtures.
 
-9. **Hardening**
+11. **Hardening**
 
    Finish the security and reliability pass around the MVP path: threat-model the runtime, audit logging, replay failures, key-access failures, App Attest failure modes, liveness/PAD failure modes, stale physical-presence display, timestamp and clock-skew handling, error taxonomy, rate limits, request body limits, idempotency/retry behavior, feature-matrix CI, and safe redaction of logs and responses.
 
@@ -131,8 +148,9 @@ The real-world mobile onboarding target should look like this:
 iPhone app signs in with Keycloak
   -> app obtains OIDC access token
   -> app obtains Apple App Attest or device assertion evidence for a server challenge
+  -> app/provider completes Persona legal identity proofing
   -> app/provider completes a guided live-presence/video-selfie ceremony for a server challenge
-  -> FEN verifies token, device evidence, government ID witness, and liveness result at adapter boundaries
+  -> FEN verifies token, device evidence, Persona identity-proofing evidence, and liveness result at adapter boundaries
   -> FEN appends account-session, portal-login witness, verified-email, device evidence, government ID witness, selfie-liveness witness, and enrollment-reference facts
   -> replay materializes the current account/device/onboarding state
 ```
@@ -141,7 +159,7 @@ Keep these evidence streams separate:
 
 - Keycloak/OIDC proves account/session context, issuer, client/audience, subject, authentication method, and verified email when present.
 - iPhone/App Attest should prove app-bound device possession through a challenge, attestation/assertion verification, replay protection, bundle/team/app allow-listing, and durable attestation-key state.
-- Government ID verification proves civil or institutional identity evidence from an external verifier; it should be recorded as its own witness, not merged into liveness or device evidence.
+- Persona legal identity proofing is the default Phase 1 external verifier. It proves civil or institutional identity evidence through a provider workflow and should be recorded as its own witness and asserted attributes, not merged into liveness or device evidence.
 - Live-presence/video-selfie liveness proves a physically present human completed a fresh capture-path/PAD challenge. It should be recorded as `SelfieLivenessCheck`, not called face authentication or treated as identity itself.
 - Biological continuity after enrollment is the signed 1:1 continuity check against an enrollment reference. Keep this distinct from onboarding liveness, even if the same camera ceremony helps create the enrollment reference.
 - FEN should bind the verified account-session evidence, verified device evidence, government ID witness, liveness witness, and enrollment reference through workflow facts; no single evidence source should directly own the identity graph.
@@ -160,22 +178,24 @@ The liveness slice now adds a second, richer command path: `execute_mobile_ident
 
 The next implementation priority is the durable challenge lifecycle in front of that boundary. Add a server-issued onboarding challenge record with nonce, expiry, intended workflow, expected device/app context, expected subject/account context when known, use status, retry/manual-review state, and retention/policy refs. The liveness verifier or provider can be an external service, a separate application, or a future crate; this codebase should consume the structured result and preserve the audit graph.
 
-After the challenge lifecycle exists, expose the composed identity-onboarding path as an HTTP DTO/handler and wire it through encrypted PostgreSQL append/replay. The older account/device HTTP path can remain as a smaller smoke surface, but the product-facing onboarding path should eventually carry OIDC, App Attest, government ID witness, and liveness ceremony evidence.
+The Persona identity-proofing boundary should land before or alongside the composed HTTP contract. The product-facing onboarding path should eventually carry OIDC, App Attest, Persona legal identity proofing, and liveness ceremony evidence. The older account/device HTTP path can remain as a smaller smoke surface.
+
+Before the iPhone app, create a Mac/backend end-to-end harness that runs the runtime server against local PostgreSQL and Keycloak, injects Persona sandbox/static identity-proofing evidence, submits the composed onboarding HTTP request, and verifies persisted encrypted facts plus the safe onboarding summary. This is the fastest honest way to test the product flow while real App Attest and camera/liveness capture are still pending.
 
 The intended entry-point shape is:
 
 ```text
 identity onboarding command
-  input: OIDC token, App Attest evidence, government ID witness, liveness ceremony result, client context
-  verifies: challenge freshness, OIDC session, device evidence, liveness/PAD result, subject/device consistency
+  input: OIDC token, App Attest evidence, Persona identity-proofing assertion, liveness ceremony result, client context
+  verifies: challenge freshness, OIDC session, device evidence, legal identity proofing, liveness/PAD result, subject/device consistency
   appends: credential, portal-login witness, verified-email when present, device-binding, government ID witness, selfie-liveness witness, enrollment reference when accepted
   persists: through the encryption-aware workflow repository over durable stored-envelope storage
-  returns: safe onboarding summary with accepted/manual-review decision and fresh-live-presence status
+  returns: safe onboarding summary with accepted/manual-review decision, account status, authority status, and fresh-live-presence status
 ```
 
 Keep HTTP and CLI thin. They should parse input, select verifier/config, call the shared command, and shape errors or output. They should not own identity semantics, fact construction rules, replay behavior, or policy meaning.
 
-Do not build a mobile app before the server-side contract exists. Sequence this as: first add durable live-presence challenge issuance and expose the composed identity-onboarding HTTP contract; then wire that handler to durable persistence and production verifier selection; then add a tiny iOS proof app to exercise real Keycloak, App Attest, and video-selfie/liveness evidence once the endpoint exists. The CLI remains useful after the app exists because it can smoke-test local command wiring without driving the full app.
+Do not build a mobile app before the server-side contract exists. Sequence this as: first add durable live-presence challenge issuance and the Persona identity-proofing boundary; expose the composed identity-onboarding HTTP contract; wire that handler to durable persistence and production verifier selection; run the Mac/backend E2E harness; then add a tiny iOS proof app to exercise real Keycloak, App Attest, Persona, and video-selfie/liveness evidence once the endpoint exists. The CLI remains useful after the app exists because it can smoke-test local command wiring without driving the full app.
 
 The proven Rust shape is:
 

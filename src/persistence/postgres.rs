@@ -4,6 +4,7 @@ use crate::device::*;
 use crate::flows::IdentityWorkflowSlice;
 #[cfg(feature = "postgres-adapter")]
 use crate::identity::AccessDecisionResult;
+use crate::liveness::*;
 #[cfg(feature = "postgres-adapter")]
 use crate::materialized::{materialize_identity_state, MaterializedIdentityState};
 #[cfg(feature = "postgres-adapter")]
@@ -19,6 +20,8 @@ pub const IDENTITY_WORKFLOW_TRANSACTIONS_MIGRATION_SQL: &str =
     include_str!("../../migrations/0002_identity_workflow_transactions.sql");
 pub const IDENTITY_APP_ATTEST_KEY_STATE_MIGRATION_SQL: &str =
     include_str!("../../migrations/0003_identity_app_attest_key_state.sql");
+pub const IDENTITY_LIVE_PRESENCE_CHALLENGES_MIGRATION_SQL: &str =
+    include_str!("../../migrations/0004_identity_live_presence_challenges.sql");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PostgresMigration {
@@ -26,7 +29,7 @@ pub struct PostgresMigration {
     pub sql: &'static str,
 }
 
-pub const IDENTITY_POSTGRES_MIGRATIONS: [PostgresMigration; 3] = [
+pub const IDENTITY_POSTGRES_MIGRATIONS: [PostgresMigration; 4] = [
     PostgresMigration {
         name: "0001_identity_encrypted_facts",
         sql: IDENTITY_ENCRYPTED_FACTS_MIGRATION_SQL,
@@ -39,12 +42,17 @@ pub const IDENTITY_POSTGRES_MIGRATIONS: [PostgresMigration; 3] = [
         name: "0003_identity_app_attest_key_state",
         sql: IDENTITY_APP_ATTEST_KEY_STATE_MIGRATION_SQL,
     },
+    PostgresMigration {
+        name: "0004_identity_live_presence_challenges",
+        sql: IDENTITY_LIVE_PRESENCE_CHALLENGES_MIGRATION_SQL,
+    },
 ];
 
-pub const IDENTITY_POSTGRES_MIGRATIONS_SQL: [&str; 3] = [
+pub const IDENTITY_POSTGRES_MIGRATIONS_SQL: [&str; 4] = [
     IDENTITY_ENCRYPTED_FACTS_MIGRATION_SQL,
     IDENTITY_WORKFLOW_TRANSACTIONS_MIGRATION_SQL,
     IDENTITY_APP_ATTEST_KEY_STATE_MIGRATION_SQL,
+    IDENTITY_LIVE_PRESENCE_CHALLENGES_MIGRATION_SQL,
 ];
 
 #[cfg(feature = "postgres-adapter")]
@@ -202,6 +210,56 @@ pub struct PostgresAppAttestKeyStateRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostgresLivePresenceChallengeRow {
+    pub challenge_id: String,
+    pub challenge_nonce: String,
+    pub intended_workflow: String,
+    pub expected_subject_id: Option<String>,
+    pub expected_device_ref: Option<String>,
+    pub expected_team_id: Option<String>,
+    pub expected_bundle_id: Option<String>,
+    pub expected_app_id: Option<String>,
+    pub expected_environment: Option<String>,
+    pub issued_at: String,
+    pub expires_at: String,
+    pub status_kind: String,
+    pub status_payload: PostgresLivePresenceChallengeStatusPayload,
+    pub retry_policy_refs: Vec<String>,
+    pub manual_review_policy_refs: Vec<String>,
+    pub retention_policy_refs: Vec<String>,
+}
+
+#[cfg_attr(
+    feature = "postgres-adapter",
+    derive(serde::Deserialize, serde::Serialize)
+)]
+#[cfg_attr(
+    feature = "postgres-adapter",
+    serde(tag = "kind", rename_all = "snake_case")
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PostgresLivePresenceChallengeStatusPayload {
+    Issued,
+    Used {
+        used_at: String,
+        provider_event_id: Option<String>,
+    },
+    Expired {
+        expired_at: String,
+    },
+    Failed {
+        failed_at: String,
+        reason: String,
+        provider_event_id: Option<String>,
+    },
+    ManualReview {
+        referred_at: String,
+        reason: String,
+        provider_event_id: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PostgresProblemEpisodeRow {
     pub append_sequence: i64,
     pub transaction_id: String,
@@ -353,8 +411,13 @@ pub enum PostgresAdapterError {
     UnknownEpisodeRelationStatusKind(String),
     UnknownAppAttestEnvironment(String),
     UnknownAppAttestKeyStatus(String),
+    UnknownLivePresenceChallengeWorkflow(String),
+    UnknownLivePresenceChallengeStatusKind(String),
+    UnknownLivePresenceChallengeFailureReason(String),
+    UnknownLivePresenceChallengeManualReviewReason(String),
     AppAttestSignCountOutOfRange,
     InvalidEpisodeRelationStatusPayload,
+    InvalidLivePresenceChallengeStatusPayload,
     StatusPayloadJson(String),
     Repository(RepositoryError),
     Sqlx(String),
@@ -411,6 +474,12 @@ pub struct SqlxPostgresEncryptedFactRepository {
 #[cfg(feature = "postgres-adapter")]
 #[derive(Debug, Clone)]
 pub struct PostgresAppAttestKeyStateStore {
+    pool: PgPool,
+}
+
+#[cfg(feature = "postgres-adapter")]
+#[derive(Debug, Clone)]
+pub struct PostgresLivePresenceChallengeStore {
     pool: PgPool,
 }
 
@@ -1170,6 +1239,242 @@ impl PostgresAppAttestKeyStateStore {
 }
 
 #[cfg(feature = "postgres-adapter")]
+impl PostgresLivePresenceChallengeStore {
+    pub fn from_pool(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    pub async fn connect(database_url: &str) -> Result<Self, PostgresAdapterError> {
+        let pool = PgPoolOptions::new()
+            .connect(database_url)
+            .await
+            .map_err(sqlx_error)?;
+        Ok(Self::from_pool(pool))
+    }
+
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+
+    pub async fn issue_live_presence_challenge_async(
+        &self,
+        challenge: &LivePresenceChallenge,
+    ) -> Result<LivePresenceChallenge, LivePresenceChallengeError> {
+        if challenge.challenge_nonce.is_empty() {
+            return Err(LivePresenceChallengeError::MissingChallengeNonce);
+        }
+        let row = PostgresLivePresenceChallengeRow::try_from_challenge(challenge)
+            .map_err(|_| LivePresenceChallengeError::StorageUnavailable)?;
+        let status_payload = row
+            .status_payload
+            .status_payload_json()
+            .map_err(|_| LivePresenceChallengeError::StorageUnavailable)?;
+        sqlx::query(
+            r#"
+            INSERT INTO identity_live_presence_challenges (
+              challenge_id,
+              challenge_nonce,
+              intended_workflow,
+              expected_subject_id,
+              expected_device_ref,
+              expected_team_id,
+              expected_bundle_id,
+              expected_app_id,
+              expected_environment,
+              issued_at,
+              expires_at,
+              status_kind,
+              status_payload,
+              retry_policy_refs,
+              manual_review_policy_refs,
+              retention_policy_refs
+            )
+            VALUES (
+              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+              $11, $12, CAST($13 AS jsonb), $14, $15, $16
+            )
+            "#,
+        )
+        .bind(&row.challenge_id)
+        .bind(&row.challenge_nonce)
+        .bind(&row.intended_workflow)
+        .bind(&row.expected_subject_id)
+        .bind(&row.expected_device_ref)
+        .bind(&row.expected_team_id)
+        .bind(&row.expected_bundle_id)
+        .bind(&row.expected_app_id)
+        .bind(&row.expected_environment)
+        .bind(&row.issued_at)
+        .bind(&row.expires_at)
+        .bind(&row.status_kind)
+        .bind(status_payload)
+        .bind(&row.retry_policy_refs)
+        .bind(&row.manual_review_policy_refs)
+        .bind(&row.retention_policy_refs)
+        .execute(&self.pool)
+        .await
+        .map_err(live_presence_challenge_sqlx_error)?;
+        Ok(challenge.clone())
+    }
+
+    pub async fn live_presence_challenge_by_nonce_async(
+        &self,
+        challenge_nonce: &str,
+    ) -> Result<Option<LivePresenceChallenge>, LivePresenceChallengeError> {
+        let sql =
+            format!("{SELECT_LIVE_PRESENCE_CHALLENGE_COLUMNS_SQL} WHERE challenge_nonce = $1");
+        let row = sqlx::query(&sql)
+            .bind(challenge_nonce)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(live_presence_challenge_sqlx_error)?;
+        row.map(live_presence_challenge_from_pg_row).transpose()
+    }
+
+    pub async fn record_live_presence_challenge_status_async(
+        &self,
+        challenge_nonce: &str,
+        status: &LivePresenceChallengeStatus,
+    ) -> Result<LivePresenceChallenge, LivePresenceChallengeError> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(live_presence_challenge_sqlx_error)?;
+        let challenge =
+            locked_live_presence_challenge_by_nonce(&mut transaction, challenge_nonce).await?;
+        if !matches!(challenge.status, LivePresenceChallengeStatus::Issued) {
+            return Err(LivePresenceChallengeError::ChallengeAlreadyConsumed);
+        }
+        update_live_presence_challenge_status(&mut transaction, challenge_nonce, status).await?;
+        transaction
+            .commit()
+            .await
+            .map_err(live_presence_challenge_sqlx_error)?;
+        let mut updated = challenge;
+        updated.status = status.clone();
+        Ok(updated)
+    }
+
+    pub async fn consume_verified_live_presence_challenge_async(
+        &self,
+        ceremony: &VerifiedLivenessCeremony,
+        app_attest: &VerifiedAppAttestAssertion,
+        subject_id: &SubjectId,
+        observed_at: &Timestamp,
+    ) -> Result<LivePresenceChallenge, LivePresenceChallengeError> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(live_presence_challenge_sqlx_error)?;
+        let mut challenge =
+            locked_live_presence_challenge_by_nonce(&mut transaction, &ceremony.challenge_nonce)
+                .await?;
+
+        if let Err(error) = validate_live_presence_challenge_context(
+            &challenge,
+            ceremony,
+            app_attest,
+            subject_id,
+            observed_at,
+        ) {
+            if let Some(status) = postgres_terminal_live_presence_challenge_status_for_error(
+                error,
+                observed_at.clone(),
+            ) {
+                update_live_presence_challenge_status(
+                    &mut transaction,
+                    &ceremony.challenge_nonce,
+                    &status,
+                )
+                .await?;
+                transaction
+                    .commit()
+                    .await
+                    .map_err(live_presence_challenge_sqlx_error)?;
+            }
+            return Err(error);
+        }
+
+        let status =
+            terminal_live_presence_challenge_status_for_ceremony(ceremony, observed_at.clone());
+        update_live_presence_challenge_status(&mut transaction, &ceremony.challenge_nonce, &status)
+            .await?;
+        transaction
+            .commit()
+            .await
+            .map_err(live_presence_challenge_sqlx_error)?;
+        challenge.status = status;
+        Ok(challenge)
+    }
+}
+
+#[cfg(feature = "postgres-adapter")]
+impl LivePresenceChallengeStore for PostgresLivePresenceChallengeStore {
+    fn issue_live_presence_challenge(
+        &self,
+        challenge: LivePresenceChallenge,
+    ) -> Result<LivePresenceChallenge, LivePresenceChallengeError> {
+        let store = self.clone();
+        run_live_presence_challenge_store_blocking(move || async move {
+            store.issue_live_presence_challenge_async(&challenge).await
+        })
+    }
+
+    fn live_presence_challenge_by_nonce(
+        &self,
+        challenge_nonce: &str,
+    ) -> Result<Option<LivePresenceChallenge>, LivePresenceChallengeError> {
+        let store = self.clone();
+        let challenge_nonce = challenge_nonce.to_string();
+        run_live_presence_challenge_store_blocking(move || async move {
+            store
+                .live_presence_challenge_by_nonce_async(&challenge_nonce)
+                .await
+        })
+    }
+
+    fn record_live_presence_challenge_status(
+        &self,
+        challenge_nonce: &str,
+        status: LivePresenceChallengeStatus,
+    ) -> Result<LivePresenceChallenge, LivePresenceChallengeError> {
+        let store = self.clone();
+        let challenge_nonce = challenge_nonce.to_string();
+        run_live_presence_challenge_store_blocking(move || async move {
+            store
+                .record_live_presence_challenge_status_async(&challenge_nonce, &status)
+                .await
+        })
+    }
+
+    fn consume_verified_live_presence_challenge(
+        &self,
+        ceremony: &VerifiedLivenessCeremony,
+        app_attest: &VerifiedAppAttestAssertion,
+        subject_id: &SubjectId,
+        observed_at: &Timestamp,
+    ) -> Result<LivePresenceChallenge, LivePresenceChallengeError> {
+        let store = self.clone();
+        let ceremony = ceremony.clone();
+        let app_attest = app_attest.clone();
+        let subject_id = subject_id.clone();
+        let observed_at = observed_at.clone();
+        run_live_presence_challenge_store_blocking(move || async move {
+            store
+                .consume_verified_live_presence_challenge_async(
+                    &ceremony,
+                    &app_attest,
+                    &subject_id,
+                    &observed_at,
+                )
+                .await
+        })
+    }
+}
+
+#[cfg(feature = "postgres-adapter")]
 impl AppAttestKeyStateStore for PostgresAppAttestKeyStateStore {
     fn record_verified_app_attest_assertion(
         &self,
@@ -1347,6 +1652,66 @@ fn envelope_from_pg_row(row: PgRow) -> Result<StoredEncryptedFact, PostgresAdapt
 }
 
 #[cfg(feature = "postgres-adapter")]
+fn live_presence_challenge_from_pg_row(
+    row: PgRow,
+) -> Result<LivePresenceChallenge, LivePresenceChallengeError> {
+    let status_payload_json: String = row
+        .try_get("status_payload")
+        .map_err(live_presence_challenge_sqlx_error)?;
+    PostgresLivePresenceChallengeRow {
+        challenge_id: row
+            .try_get("challenge_id")
+            .map_err(live_presence_challenge_sqlx_error)?,
+        challenge_nonce: row
+            .try_get("challenge_nonce")
+            .map_err(live_presence_challenge_sqlx_error)?,
+        intended_workflow: row
+            .try_get("intended_workflow")
+            .map_err(live_presence_challenge_sqlx_error)?,
+        expected_subject_id: row
+            .try_get("expected_subject_id")
+            .map_err(live_presence_challenge_sqlx_error)?,
+        expected_device_ref: row
+            .try_get("expected_device_ref")
+            .map_err(live_presence_challenge_sqlx_error)?,
+        expected_team_id: row
+            .try_get("expected_team_id")
+            .map_err(live_presence_challenge_sqlx_error)?,
+        expected_bundle_id: row
+            .try_get("expected_bundle_id")
+            .map_err(live_presence_challenge_sqlx_error)?,
+        expected_app_id: row
+            .try_get("expected_app_id")
+            .map_err(live_presence_challenge_sqlx_error)?,
+        expected_environment: row
+            .try_get("expected_environment")
+            .map_err(live_presence_challenge_sqlx_error)?,
+        issued_at: row
+            .try_get("issued_at")
+            .map_err(live_presence_challenge_sqlx_error)?,
+        expires_at: row
+            .try_get("expires_at")
+            .map_err(live_presence_challenge_sqlx_error)?,
+        status_kind: row
+            .try_get("status_kind")
+            .map_err(live_presence_challenge_sqlx_error)?,
+        status_payload: PostgresLivePresenceChallengeStatusPayload::from_json(&status_payload_json)
+            .map_err(|_| LivePresenceChallengeError::StorageUnavailable)?,
+        retry_policy_refs: row
+            .try_get("retry_policy_refs")
+            .map_err(live_presence_challenge_sqlx_error)?,
+        manual_review_policy_refs: row
+            .try_get("manual_review_policy_refs")
+            .map_err(live_presence_challenge_sqlx_error)?,
+        retention_policy_refs: row
+            .try_get("retention_policy_refs")
+            .map_err(live_presence_challenge_sqlx_error)?,
+    }
+    .try_into_challenge()
+    .map_err(|_| LivePresenceChallengeError::StorageUnavailable)
+}
+
+#[cfg(feature = "postgres-adapter")]
 const SELECT_PROBLEM_EPISODE_COLUMNS_SQL: &str = r#"
 SELECT
   append_sequence,
@@ -1420,6 +1785,28 @@ SELECT
   last_challenge_nonce
 FROM identity_app_attest_keys
 WHERE key_id = $1
+"#;
+
+#[cfg(feature = "postgres-adapter")]
+const SELECT_LIVE_PRESENCE_CHALLENGE_COLUMNS_SQL: &str = r#"
+SELECT
+  challenge_id,
+  challenge_nonce,
+  intended_workflow,
+  expected_subject_id,
+  expected_device_ref,
+  expected_team_id,
+  expected_bundle_id,
+  expected_app_id,
+  expected_environment,
+  issued_at,
+  expires_at,
+  status_kind,
+  status_payload::text AS status_payload,
+  retry_policy_refs,
+  manual_review_policy_refs,
+  retention_policy_refs
+FROM identity_live_presence_challenges
 "#;
 
 #[cfg(feature = "postgres-adapter")]
@@ -1738,6 +2125,55 @@ async fn insert_episode_relation_row(
     .execute(&mut **transaction)
     .await
     .map_err(repository_sqlx_error)?;
+    Ok(())
+}
+
+#[cfg(feature = "postgres-adapter")]
+async fn locked_live_presence_challenge_by_nonce(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    challenge_nonce: &str,
+) -> Result<LivePresenceChallenge, LivePresenceChallengeError> {
+    let sql = format!(
+        "{SELECT_LIVE_PRESENCE_CHALLENGE_COLUMNS_SQL} WHERE challenge_nonce = $1 FOR UPDATE"
+    );
+    let row = sqlx::query(&sql)
+        .bind(challenge_nonce)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(live_presence_challenge_sqlx_error)?;
+    row.map(live_presence_challenge_from_pg_row)
+        .transpose()?
+        .ok_or(LivePresenceChallengeError::UnknownChallenge)
+}
+
+#[cfg(feature = "postgres-adapter")]
+async fn update_live_presence_challenge_status(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    challenge_nonce: &str,
+    status: &LivePresenceChallengeStatus,
+) -> Result<(), LivePresenceChallengeError> {
+    let (status_kind, status_payload) = postgres_live_presence_challenge_status_parts(status);
+    let status_payload = status_payload
+        .status_payload_json()
+        .map_err(|_| LivePresenceChallengeError::StorageUnavailable)?;
+    let updated = sqlx::query(
+        r#"
+        UPDATE identity_live_presence_challenges
+        SET status_kind = $1,
+            status_payload = CAST($2 AS jsonb)
+        WHERE challenge_nonce = $3
+        "#,
+    )
+    .bind(status_kind)
+    .bind(status_payload)
+    .bind(challenge_nonce)
+    .execute(&mut **transaction)
+    .await
+    .map_err(live_presence_challenge_sqlx_error)?
+    .rows_affected();
+    if updated == 0 {
+        return Err(LivePresenceChallengeError::UnknownChallenge);
+    }
     Ok(())
 }
 
@@ -2133,6 +2569,19 @@ impl PostgresEpisodeRelationStatusPayload {
 }
 
 #[cfg(feature = "postgres-adapter")]
+impl PostgresLivePresenceChallengeStatusPayload {
+    fn status_payload_json(&self) -> Result<String, PostgresAdapterError> {
+        serde_json::to_string(self)
+            .map_err(|error| PostgresAdapterError::StatusPayloadJson(error.to_string()))
+    }
+
+    fn from_json(json: &str) -> Result<Self, PostgresAdapterError> {
+        serde_json::from_str(json)
+            .map_err(|error| PostgresAdapterError::StatusPayloadJson(error.to_string()))
+    }
+}
+
+#[cfg(feature = "postgres-adapter")]
 impl PostgresProblemEpisodeRow {
     fn problem_code_json(&self) -> Result<Option<String>, PostgresAdapterError> {
         self.problem_code
@@ -2229,6 +2678,22 @@ fn app_attest_sqlx_error(error: sqlx::Error) -> AppAttestAssertionVerificationEr
 }
 
 #[cfg(feature = "postgres-adapter")]
+fn live_presence_challenge_sqlx_error(error: sqlx::Error) -> LivePresenceChallengeError {
+    if let sqlx::Error::Database(database_error) = &error {
+        match database_error.constraint() {
+            Some("identity_live_presence_challenges_pkey") => {
+                return LivePresenceChallengeError::DuplicateChallengeId
+            }
+            Some("identity_live_presence_challenges_challenge_nonce_key") => {
+                return LivePresenceChallengeError::DuplicateChallengeNonce
+            }
+            _ => {}
+        }
+    }
+    LivePresenceChallengeError::StorageUnavailable
+}
+
+#[cfg(feature = "postgres-adapter")]
 fn run_app_attest_store_blocking<T, F, Fut>(
     operation: F,
 ) -> Result<T, AppAttestAssertionVerificationError>
@@ -2247,6 +2712,66 @@ where
     handle.join().unwrap_or(Err(
         AppAttestAssertionVerificationError::KeyStateUnavailable,
     ))
+}
+
+#[cfg(feature = "postgres-adapter")]
+fn run_live_presence_challenge_store_blocking<T, F, Fut>(
+    operation: F,
+) -> Result<T, LivePresenceChallengeError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = Result<T, LivePresenceChallengeError>> + Send + 'static,
+{
+    let handle = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| LivePresenceChallengeError::StorageUnavailable)?;
+        runtime.block_on(operation())
+    });
+    handle
+        .join()
+        .unwrap_or(Err(LivePresenceChallengeError::StorageUnavailable))
+}
+
+#[cfg(feature = "postgres-adapter")]
+fn postgres_terminal_live_presence_challenge_status_for_error(
+    error: LivePresenceChallengeError,
+    observed_at: Timestamp,
+) -> Option<LivePresenceChallengeStatus> {
+    match error {
+        LivePresenceChallengeError::ChallengeExpired => {
+            Some(LivePresenceChallengeStatus::Expired {
+                expired_at: observed_at,
+            })
+        }
+        LivePresenceChallengeError::ChallengeNonceMismatch => {
+            Some(LivePresenceChallengeStatus::Failed {
+                failed_at: observed_at,
+                reason: LivePresenceChallengeFailureReason::ChallengeMismatch,
+                provider_event_id: None,
+            })
+        }
+        LivePresenceChallengeError::SubjectMismatch => Some(LivePresenceChallengeStatus::Failed {
+            failed_at: observed_at,
+            reason: LivePresenceChallengeFailureReason::SubjectMismatch,
+            provider_event_id: None,
+        }),
+        LivePresenceChallengeError::DeviceMismatch => Some(LivePresenceChallengeStatus::Failed {
+            failed_at: observed_at,
+            reason: LivePresenceChallengeFailureReason::DeviceMismatch,
+            provider_event_id: None,
+        }),
+        LivePresenceChallengeError::AppContextMismatch => {
+            Some(LivePresenceChallengeStatus::Failed {
+                failed_at: observed_at,
+                reason: LivePresenceChallengeFailureReason::AppContextMismatch,
+                provider_event_id: None,
+            })
+        }
+        _ => None,
+    }
 }
 
 impl PostgresMaterializationAuditRow {
@@ -2339,6 +2864,93 @@ impl PostgresAppAttestKeyStateRow {
             last_asserted_at: Timestamp(self.last_asserted_at),
             last_sign_count: self.last_sign_count as u64,
             last_challenge_nonce: self.last_challenge_nonce,
+        })
+    }
+}
+
+impl PostgresLivePresenceChallengeRow {
+    pub fn try_from_challenge(
+        challenge: &LivePresenceChallenge,
+    ) -> Result<Self, PostgresAdapterError> {
+        let expected_app = challenge.expected_app.as_ref();
+        let (status_kind, status_payload) =
+            postgres_live_presence_challenge_status_parts(&challenge.status);
+        Ok(Self {
+            challenge_id: challenge.challenge_id.0.clone(),
+            challenge_nonce: challenge.challenge_nonce.clone(),
+            intended_workflow: postgres_live_presence_challenge_workflow(
+                challenge.intended_workflow,
+            )
+            .to_string(),
+            expected_subject_id: challenge
+                .expected_subject_id
+                .as_ref()
+                .map(|subject_id| subject_id.0.clone()),
+            expected_device_ref: challenge.expected_device_ref.clone(),
+            expected_team_id: expected_app.map(|app| app.team_id.clone()),
+            expected_bundle_id: expected_app.map(|app| app.bundle_id.clone()),
+            expected_app_id: expected_app.map(|app| app.app_id.clone()),
+            expected_environment: expected_app
+                .map(|app| postgres_app_attest_environment(app.environment).to_string()),
+            issued_at: challenge.issued_at.0.clone(),
+            expires_at: challenge.expires_at.0.clone(),
+            status_kind: status_kind.to_string(),
+            status_payload,
+            retry_policy_refs: challenge
+                .retry_policy_refs
+                .iter()
+                .map(|policy_ref| policy_ref.0.clone())
+                .collect(),
+            manual_review_policy_refs: challenge
+                .manual_review_policy_refs
+                .iter()
+                .map(|policy_ref| policy_ref.0.clone())
+                .collect(),
+            retention_policy_refs: challenge
+                .retention_policy_refs
+                .iter()
+                .map(|policy_ref| policy_ref.0.clone())
+                .collect(),
+        })
+    }
+
+    pub fn try_into_challenge(self) -> Result<LivePresenceChallenge, PostgresAdapterError> {
+        let expected_app = match (
+            self.expected_team_id,
+            self.expected_bundle_id,
+            self.expected_app_id,
+            self.expected_environment,
+        ) {
+            (None, None, None, None) => None,
+            (Some(team_id), Some(bundle_id), Some(app_id), Some(environment)) => {
+                Some(LivePresenceExpectedAppContext {
+                    team_id,
+                    bundle_id,
+                    app_id,
+                    environment: app_attest_environment_from_postgres(&environment)?,
+                })
+            }
+            _ => return Err(PostgresAdapterError::InvalidLivePresenceChallengeStatusPayload),
+        };
+
+        Ok(LivePresenceChallenge {
+            challenge_id: Id(self.challenge_id),
+            challenge_nonce: self.challenge_nonce,
+            intended_workflow: live_presence_challenge_workflow_from_postgres(
+                &self.intended_workflow,
+            )?,
+            expected_subject_id: self.expected_subject_id.map(Id),
+            expected_device_ref: self.expected_device_ref,
+            expected_app,
+            issued_at: Timestamp(self.issued_at),
+            expires_at: Timestamp(self.expires_at),
+            status: live_presence_challenge_status_from_postgres(
+                &self.status_kind,
+                self.status_payload,
+            )?,
+            retry_policy_refs: self.retry_policy_refs.into_iter().map(Id).collect(),
+            manual_review_policy_refs: self.manual_review_policy_refs.into_iter().map(Id).collect(),
+            retention_policy_refs: self.retention_policy_refs.into_iter().map(Id).collect(),
         })
     }
 }
@@ -2908,6 +3520,201 @@ fn app_attest_key_status_from_postgres(
         _ => Err(PostgresAdapterError::UnknownAppAttestKeyStatus(
             value.to_string(),
         )),
+    }
+}
+
+fn postgres_live_presence_challenge_workflow(
+    workflow: LivePresenceChallengeWorkflow,
+) -> &'static str {
+    match workflow {
+        LivePresenceChallengeWorkflow::MobileIdentityOnboarding => "mobile_identity_onboarding",
+        LivePresenceChallengeWorkflow::AccountRecovery => "account_recovery",
+        LivePresenceChallengeWorkflow::SensitiveActionStepUp => "sensitive_action_step_up",
+    }
+}
+
+fn live_presence_challenge_workflow_from_postgres(
+    value: &str,
+) -> Result<LivePresenceChallengeWorkflow, PostgresAdapterError> {
+    match value {
+        "mobile_identity_onboarding" => Ok(LivePresenceChallengeWorkflow::MobileIdentityOnboarding),
+        "account_recovery" => Ok(LivePresenceChallengeWorkflow::AccountRecovery),
+        "sensitive_action_step_up" => Ok(LivePresenceChallengeWorkflow::SensitiveActionStepUp),
+        _ => Err(PostgresAdapterError::UnknownLivePresenceChallengeWorkflow(
+            value.to_string(),
+        )),
+    }
+}
+
+fn postgres_live_presence_challenge_status_parts(
+    status: &LivePresenceChallengeStatus,
+) -> (&'static str, PostgresLivePresenceChallengeStatusPayload) {
+    match status {
+        LivePresenceChallengeStatus::Issued => {
+            ("issued", PostgresLivePresenceChallengeStatusPayload::Issued)
+        }
+        LivePresenceChallengeStatus::Used {
+            used_at,
+            provider_event_id,
+        } => (
+            "used",
+            PostgresLivePresenceChallengeStatusPayload::Used {
+                used_at: used_at.0.clone(),
+                provider_event_id: provider_event_id.clone(),
+            },
+        ),
+        LivePresenceChallengeStatus::Expired { expired_at } => (
+            "expired",
+            PostgresLivePresenceChallengeStatusPayload::Expired {
+                expired_at: expired_at.0.clone(),
+            },
+        ),
+        LivePresenceChallengeStatus::Failed {
+            failed_at,
+            reason,
+            provider_event_id,
+        } => (
+            "failed",
+            PostgresLivePresenceChallengeStatusPayload::Failed {
+                failed_at: failed_at.0.clone(),
+                reason: postgres_live_presence_failure_reason(*reason).to_string(),
+                provider_event_id: provider_event_id.clone(),
+            },
+        ),
+        LivePresenceChallengeStatus::ManualReview {
+            referred_at,
+            reason,
+            provider_event_id,
+        } => (
+            "manual_review",
+            PostgresLivePresenceChallengeStatusPayload::ManualReview {
+                referred_at: referred_at.0.clone(),
+                reason: postgres_live_presence_manual_review_reason(*reason).to_string(),
+                provider_event_id: provider_event_id.clone(),
+            },
+        ),
+    }
+}
+
+fn live_presence_challenge_status_from_postgres(
+    status_kind: &str,
+    status_payload: PostgresLivePresenceChallengeStatusPayload,
+) -> Result<LivePresenceChallengeStatus, PostgresAdapterError> {
+    match (status_kind, status_payload) {
+        ("issued", PostgresLivePresenceChallengeStatusPayload::Issued) => {
+            Ok(LivePresenceChallengeStatus::Issued)
+        }
+        (
+            "used",
+            PostgresLivePresenceChallengeStatusPayload::Used {
+                used_at,
+                provider_event_id,
+            },
+        ) => Ok(LivePresenceChallengeStatus::Used {
+            used_at: Timestamp(used_at),
+            provider_event_id,
+        }),
+        ("expired", PostgresLivePresenceChallengeStatusPayload::Expired { expired_at }) => {
+            Ok(LivePresenceChallengeStatus::Expired {
+                expired_at: Timestamp(expired_at),
+            })
+        }
+        (
+            "failed",
+            PostgresLivePresenceChallengeStatusPayload::Failed {
+                failed_at,
+                reason,
+                provider_event_id,
+            },
+        ) => Ok(LivePresenceChallengeStatus::Failed {
+            failed_at: Timestamp(failed_at),
+            reason: live_presence_failure_reason_from_postgres(&reason)?,
+            provider_event_id,
+        }),
+        (
+            "manual_review",
+            PostgresLivePresenceChallengeStatusPayload::ManualReview {
+                referred_at,
+                reason,
+                provider_event_id,
+            },
+        ) => Ok(LivePresenceChallengeStatus::ManualReview {
+            referred_at: Timestamp(referred_at),
+            reason: live_presence_manual_review_reason_from_postgres(&reason)?,
+            provider_event_id,
+        }),
+        ("issued" | "used" | "expired" | "failed" | "manual_review", _) => {
+            Err(PostgresAdapterError::InvalidLivePresenceChallengeStatusPayload)
+        }
+        _ => Err(
+            PostgresAdapterError::UnknownLivePresenceChallengeStatusKind(status_kind.to_string()),
+        ),
+    }
+}
+
+fn postgres_live_presence_failure_reason(
+    reason: LivePresenceChallengeFailureReason,
+) -> &'static str {
+    match reason {
+        LivePresenceChallengeFailureReason::LivenessFailed => "liveness_failed",
+        LivePresenceChallengeFailureReason::PresentationAttackDetected => {
+            "presentation_attack_detected"
+        }
+        LivePresenceChallengeFailureReason::ChallengeMismatch => "challenge_mismatch",
+        LivePresenceChallengeFailureReason::SubjectMismatch => "subject_mismatch",
+        LivePresenceChallengeFailureReason::DeviceMismatch => "device_mismatch",
+        LivePresenceChallengeFailureReason::AppContextMismatch => "app_context_mismatch",
+        LivePresenceChallengeFailureReason::ProviderRejected => "provider_rejected",
+    }
+}
+
+fn live_presence_failure_reason_from_postgres(
+    value: &str,
+) -> Result<LivePresenceChallengeFailureReason, PostgresAdapterError> {
+    match value {
+        "liveness_failed" => Ok(LivePresenceChallengeFailureReason::LivenessFailed),
+        "presentation_attack_detected" => {
+            Ok(LivePresenceChallengeFailureReason::PresentationAttackDetected)
+        }
+        "challenge_mismatch" => Ok(LivePresenceChallengeFailureReason::ChallengeMismatch),
+        "subject_mismatch" => Ok(LivePresenceChallengeFailureReason::SubjectMismatch),
+        "device_mismatch" => Ok(LivePresenceChallengeFailureReason::DeviceMismatch),
+        "app_context_mismatch" => Ok(LivePresenceChallengeFailureReason::AppContextMismatch),
+        "provider_rejected" => Ok(LivePresenceChallengeFailureReason::ProviderRejected),
+        _ => {
+            Err(PostgresAdapterError::UnknownLivePresenceChallengeFailureReason(value.to_string()))
+        }
+    }
+}
+
+fn postgres_live_presence_manual_review_reason(
+    reason: LivePresenceChallengeManualReviewReason,
+) -> &'static str {
+    match reason {
+        LivePresenceChallengeManualReviewReason::LivenessInconclusive => "liveness_inconclusive",
+        LivePresenceChallengeManualReviewReason::PresentationAttackInconclusive => {
+            "presentation_attack_inconclusive"
+        }
+        LivePresenceChallengeManualReviewReason::RetryOrReviewPolicy => "retry_or_review_policy",
+    }
+}
+
+fn live_presence_manual_review_reason_from_postgres(
+    value: &str,
+) -> Result<LivePresenceChallengeManualReviewReason, PostgresAdapterError> {
+    match value {
+        "liveness_inconclusive" => {
+            Ok(LivePresenceChallengeManualReviewReason::LivenessInconclusive)
+        }
+        "presentation_attack_inconclusive" => {
+            Ok(LivePresenceChallengeManualReviewReason::PresentationAttackInconclusive)
+        }
+        "retry_or_review_policy" => {
+            Ok(LivePresenceChallengeManualReviewReason::RetryOrReviewPolicy)
+        }
+        _ => Err(
+            PostgresAdapterError::UnknownLivePresenceChallengeManualReviewReason(value.to_string()),
+        ),
     }
 }
 

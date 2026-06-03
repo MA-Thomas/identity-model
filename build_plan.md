@@ -726,6 +726,402 @@ Create transition notes for:
 
 This milestone becomes the bridge from Phase 1 implementation to Phase 2 and Phase 3 planning.
 
+## Product-State Addendum: Onboarding and Recovery Architecture
+
+### Purpose
+
+`Phoros Onboarding and Recovery Architecture.pdf` sharpens the product-facing stages around the same FEN commitments. It does not replace the original identity graph plan. It adds a practical product-state layer that should be derived from the fact graph:
+
+```text
+contact identity -> legal identity -> authenticator identity -> biological continuity
+  -> recovery and authority policy -> clinical identity binding -> records import authority
+```
+
+The key rule is:
+
+```text
+account access is not the same as authority over health data
+```
+
+The implementation should therefore distinguish:
+
+- contact-channel control
+- legal identity proofing
+- cryptographic account control
+- biological-continuity enrollment and checks
+- clinical record binding
+- recovery policy
+- authority state
+
+Each stage should emit or rely on append-only facts, policy artifacts, provider references, and materialized projections. No stage should become a mutable `users.verified = true` shortcut.
+
+## Milestone 20: Contact Channel Evidence
+
+### Purpose
+
+Represent claimed and verified communication channels as low-risk evidence without treating them as legal identity or account authority.
+
+### Minimal FEN Context
+
+Email and phone verification prove that the claimant controlled a declared channel at a time. They do not prove legal identity, biological continuity, clinical identity, or full account authority.
+
+### Build Target
+
+Add explicit contact-channel evidence support. The likely shape is either a dedicated fact payload such as:
+
+```text
+ContactChannelVerified {
+  channel_type,
+  channel_ref,
+  verification_method,
+  result,
+  expires_at,
+}
+```
+
+or a structured `IdentityWitnessRecorded` subtype with equivalent context.
+
+The flow should support:
+
+- claimed name, email, and phone as onboarding input
+- email verification
+- phone verification
+- OTP or provider event refs
+- expiration or reverification policy refs
+- low-risk account status progression to `ContactVerified`
+
+### Acceptance Criteria
+
+- Verified email and phone are represented as evidence, not mutable subject fields.
+- Contact evidence can support notifications and low-risk onboarding progression.
+- Contact evidence cannot by itself restore full account authority.
+- Failed or expired contact verification is representable and auditable.
+- The materialized account-status view can distinguish `Pending` from `ContactVerified`.
+
+### Notes for Later Phases
+
+Contact channels may later become recovery inputs, but they should remain weak evidence unless combined with stronger witnesses and policy.
+
+## Milestone 21: Legal Identity Proofing Provider Abstraction
+
+### Purpose
+
+Create a provider-neutral boundary for legal identity assertions. Persona is the default Phase 1 identity-proofing provider. The boundary should still support replacing Persona with ID.me, Socure, Jumio, Entrust/Onfido, Veriff, LexisNexis, government assertions, or provider-mediated legal identity assertions without changing FEN fact semantics.
+
+### Minimal FEN Context
+
+Legal identity proofing vendors provide evidence. They do not own `SubjectId`, account authority, biological continuity, clinical binding, or recovery decisions.
+
+### Build Target
+
+Define an internal legal identity proofing boundary and implement the first adapter as a Persona-shaped provider integration. The domain-facing boundary should look like:
+
+```text
+IdentityProofingProvider
+  -> provider_name
+  -> workflow_id
+  -> asserted_attributes
+  -> evidence_types
+  -> verification_result
+  -> assurance_level
+  -> risk_signals
+  -> timestamp
+  -> expiration_policy
+  -> audit_reference
+```
+
+Translate verified provider results into FEN facts:
+
+- `IdentityWitnessRecorded` for government ID or legal identity verification
+- `IdentityAttributeAsserted` for provider-asserted name, date of birth, address, or other attributes
+- optional `RiskEvaluationEvent` for fraud or risk signals when the signal affects policy
+- external refs for provider transaction, workflow, and audit identifiers
+
+### Acceptance Criteria
+
+- Persona is the default configured identity-proofing provider for Phase 1 onboarding.
+- The Persona adapter verifies and normalizes Persona workflow results before FEN facts are created.
+- Persona or another vendor can be replaced without changing FEN fact semantics.
+- Vendor-native payloads, hosted-flow states, and account IDs stay at the adapter edge.
+- Assertions include provenance, assurance, result, expiration or reverification policy, and audit refs.
+- Failed, inconclusive, and expired identity proofing outcomes can drive retry or manual review without silent denial.
+- Identity proofing remains separate from passkey enrollment and biological-continuity enrollment.
+
+### Notes for Later Phases
+
+Reusable identity-wallet providers such as ID.me may have different account ownership semantics than embedded verification providers. FEN should normalize the result as evidence either way.
+
+## Milestone 22: Account and Authority Status Projections
+
+### Purpose
+
+Add product-facing derived statuses without turning those statuses into the source of truth.
+
+### Minimal FEN Context
+
+The current fact graph can already answer many identity questions, but product surfaces need concise states. Those states should be projections over facts, policies, and access decisions.
+
+### Build Target
+
+Define derived projections such as:
+
+```text
+AccountStatus:
+  Pending
+  ContactVerified
+  LegalIdentityVerified
+  Active
+  Suspended
+  Closed
+
+AuthorityStatus:
+  None
+  Restricted
+  Full
+  Delegated
+  Transferred
+  Suspended
+  Disputed
+```
+
+Derive them from:
+
+- contact-channel evidence
+- legal identity proofing evidence
+- credential and device-binding facts
+- recovery events
+- continuity facts
+- authority relationships
+- access decisions
+- disputes, revocations, suspensions, and policy constraints
+
+### Acceptance Criteria
+
+- Product status values are rebuildable from the fact graph.
+- Restoring login does not automatically restore full authority.
+- A user can have an active Phoros account before any clinical identity is linked.
+- Suspended, disputed, or restricted authority can block high-risk actions while allowing limited recovery progress.
+- Status projections point back to source facts or policy refs where possible.
+
+### Notes for Later Phases
+
+These statuses are product and policy conveniences. They should not replace `MaterializedIdentityState` or become mutable account rows.
+
+## Milestone 23: Recovery Policy Configuration
+
+### Purpose
+
+Represent recovery policy setup during onboarding as durable, auditable governance rather than an afterthought.
+
+### Minimal FEN Context
+
+Recovery is not only credential replacement. It governs how account access and health-data authority are restored or transferred under uncertainty.
+
+### Build Target
+
+Add a recovery-policy artifact or fact family, likely one of:
+
+```text
+RecoveryPolicyConfigured
+RecoveryPolicyUpdated
+RecoveryDelegateAdded
+RecoveryDelegateRevoked
+```
+
+The model should capture policy-governed references for:
+
+- backup passkeys
+- recovery codes or recovery-code sets, without storing raw codes in facts
+- trusted recovery contacts
+- provider-mediated recovery options
+- caregiver or legal representative preferences
+- escalation rules if biological continuity fails
+- notification preferences for sensitive recovery events
+- policy refs and effective windows
+
+### Acceptance Criteria
+
+- Recovery policy creation and updates are append-only or otherwise fully auditable.
+- Raw recovery secrets are not stored in ordinary facts.
+- Recovery policy changes can require step-up evidence and cite access-decision policy refs.
+- The current recovery policy is derived from active policy facts or policy artifacts.
+- Revoked recovery delegates and retired recovery methods remain in audit history.
+
+### Notes for Later Phases
+
+Some recovery policy definitions may fit better as `PolicyArtifact` values than `FactPayload` values. Choose the representation that preserves review, versioning, lifecycle, and citation semantics.
+
+## Milestone 24: Restricted Authority During Recovery
+
+### Purpose
+
+Make the PDF's recovery distinction explicit: credential recovery, continuity recovery, and authority recovery are separate.
+
+### Minimal FEN Context
+
+A claimant may regain a login mechanism while biological continuity remains uncertain or authority is not yet fully restored. The system should represent this middle state instead of choosing between immediate denial and immediate full control.
+
+### Build Target
+
+Add recovery and authority events or policy outcomes that can represent:
+
+- credential recovery requested
+- contact channels reverified
+- legal identity reverified
+- biological continuity confirmed, uncertain, or conflicted
+- new passkey bound
+- authority restricted
+- authority restored
+- authority transferred
+- manual or provider adjudication required
+
+The event vocabulary may include:
+
+```text
+AuthorityRestricted
+AuthorityRestored
+AuthorityTransferred
+BiologicalContinuityConfirmed
+BiologicalContinuityUncertain
+```
+
+or equivalent fact/policy/access-decision shapes that preserve the same semantics.
+
+### Acceptance Criteria
+
+- Lost-device recovery can bind a new passkey without immediately permitting high-risk actions.
+- Restricted authority blocks complete export, data transactions, caregiver changes, recovery delegate changes, clinical binding changes, biometric-reference deletion, and similar sensitive operations.
+- Manual review and provider adjudication are auditable recovery episodes.
+- Restored, limited, transferred, and denied authority outcomes are represented distinctly.
+- Recovery access decisions cite relied-on facts and policy refs.
+
+### Notes for Later Phases
+
+This milestone is the main place where product safety and user experience meet. It should avoid trapping legitimate users while still preventing email, phone, or device control from becoming full health-data authority.
+
+## Milestone 25: Durable Live-Presence Challenge Lifecycle
+
+### Purpose
+
+Move the current liveness ceremony boundary behind a durable server-issued challenge lifecycle.
+
+### Minimal FEN Context
+
+A live-presence ceremony is meaningful only when it is fresh, bound to a server challenge, bound to the expected device/app context, and one-time-use.
+
+### Build Target
+
+Add a durable `LivePresenceChallenge` or equivalent store with:
+
+- challenge nonce
+- intended workflow
+- expected subject or account context when known
+- expected device/app context
+- issued-at and expires-at timestamps
+- use state such as issued, used, expired, failed, or manual-review
+- retry and manual-review policy refs
+- retention policy refs
+- provider callback or ceremony refs where appropriate
+
+### Acceptance Criteria
+
+- A liveness ceremony cannot be accepted without a matching live challenge.
+- Expired, unknown, reused, wrong-device, and wrong-app challenges are rejected or translated into auditable rejection evidence.
+- Failed or inconclusive ceremonies can open retry or manual-review paths.
+- The challenge store does not contain raw video, biometric templates, embeddings, or vendor-native capture artifacts.
+- The liveness provider remains replaceable.
+
+### Notes for Later Phases
+
+The same challenge discipline should later apply to recovery liveness and high-risk continuity checks.
+
+## Milestone 26: Product-Facing Composed Onboarding HTTP Contract
+
+### Purpose
+
+Expose the composed onboarding path through a narrow production-facing contract.
+
+### Minimal FEN Context
+
+The current implementation has a smaller account/device HTTP surface and a richer in-memory composed identity onboarding command. Product onboarding needs the richer command behind HTTP and durable encrypted persistence.
+
+### Build Target
+
+Add an HTTP DTO and handler for the composed onboarding path carrying:
+
+- contact-channel verification refs or already-verified contact evidence
+- OIDC or IAM session evidence
+- App Attest or device evidence
+- legal identity proofing assertion
+- live-presence ceremony result
+- recovery policy setup input
+- optional clinical or payer binding input
+- client context
+
+The handler should:
+
+- parse and validate transport DTOs
+- call verifier/provider boundaries
+- call the shared composed onboarding command
+- append through encrypted PostgreSQL workflow persistence
+- replay through policy-gated materialization
+- return a safe summary with account status, authority status, decision, active devices, and key fact IDs
+
+### Acceptance Criteria
+
+- HTTP and CLI remain thin adapters over shared commands.
+- Public DTOs do not expose internal `FactPayload`, encrypted envelopes, provider-native payloads, or policy artifact internals.
+- The response distinguishes active account state from full health-data authority.
+- Failed or inconclusive liveness returns manual-review or restricted states rather than silently denying onboarding.
+- The endpoint is covered by feature-gated HTTP and encrypted-persistence tests.
+
+### Notes for Later Phases
+
+After this endpoint is stable, the smallest iOS proof app can exercise real Keycloak, App Attest, identity proofing, and liveness evidence against the same contract.
+
+## Milestone 27: Clinical Binding and Records Import Authorization States
+
+### Purpose
+
+Keep clinical identity binding separate from account activation and legal identity verification.
+
+### Minimal FEN Context
+
+A Phoros account can be active before a provider record is connected. Clinical binding answers whether the Phoros subject corresponds to a patient identity at a provider, payer, lab, imaging center, pharmacy, or other health-data source.
+
+### Build Target
+
+Expand product-state support for:
+
+- `ClinicalIdentityLinked`
+- `RecordsImportAuthorized`
+- provider-mediated attestation
+- patient portal connection
+- EHR export authorization
+- medical record number linkage
+- payer identity matching
+- lab, imaging, pharmacy, or other source binding
+- signed clinical organization assertions
+
+Use existing or extended fact shapes such as:
+
+- `ClinicalIdentityLinkEstablished`
+- `PayerIdentityLinkEstablished`
+- access or consent decisions for records import
+- dispute, revocation, supersession, and correction facts
+
+### Acceptance Criteria
+
+- Account activation does not require clinical binding.
+- Clinical binding records institution, linked identifiers, consent or authorization refs, provenance, and active/disputed/revoked state.
+- Provider, payer, portal, and MRN identifiers do not become subject identity truth.
+- Records import authorization is policy-governed and auditable.
+- Contested or rejected clinical bindings are excluded from high-risk reliance.
+
+### Notes for Later Phases
+
+This milestone prepares the bridge from identity proofing into patient-mediated record access without making any provider record the root of Phoros identity.
+
 ## Suggested Daily Working Rhythm
 
 For each daily conversation:
