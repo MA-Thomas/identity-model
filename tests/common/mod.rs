@@ -132,3 +132,34 @@ pub fn mobile_evidence_fixture(
         device_ref: device_ref.to_string(),
     }
 }
+
+pub fn persona_identity_proofing_request(
+    id_namespace: &str,
+) -> IdentityProofingVerificationRequest {
+    IdentityProofingVerificationRequest {
+        provider_name: PERSONA_PROVIDER_NAME.to_string(),
+        workflow_id: format!("persona-workflow-{id_namespace}"),
+        provider_event_id: Some(format!("persona-inquiry-{id_namespace}")),
+        asserted_attributes: vec![
+            IdentityProofingAssertedAttribute {
+                attribute: IdentityAttribute::LegalName,
+                value: IdentityAttributeValue::StringValue("Mobile Identity Patient".to_string()),
+                confidence: MatchConfidence::High,
+            },
+            IdentityProofingAssertedAttribute {
+                attribute: IdentityAttribute::DateOfBirth,
+                value: IdentityAttributeValue::DateValue(Date("1990-01-01".to_string())),
+                confidence: MatchConfidence::High,
+            },
+        ],
+        evidence_types: vec![IdentityProofingEvidenceType::GovernmentIdDocument],
+        verification_result: IdentityWitnessResult::Passed,
+        assurance_level: AssuranceLevel::High,
+        risk_signals: Vec::new(),
+        verified_at: ts("2026-05-29T00:05:10Z"),
+        expires_at: None,
+        audit_ref: Some(format!("persona-audit-{id_namespace}")),
+        evidence_ref: Some(format!("identity-proofing-{id_namespace}")),
+        retention_policy_refs: vec![id("identity-proof-retention@v1")],
+    }
+}

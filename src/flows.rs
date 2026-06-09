@@ -11,6 +11,7 @@ mod support;
 use crate::continuity::*;
 use crate::fen::*;
 use crate::identity::*;
+use crate::identity_proofing::*;
 use crate::ids::*;
 use crate::liveness::*;
 use crate::policy::*;

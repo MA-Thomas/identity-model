@@ -3,6 +3,7 @@ use crate::fen::*;
 use crate::flows::*;
 use crate::iam::*;
 use crate::identity::*;
+use crate::identity_proofing::*;
 use crate::ids::*;
 use crate::liveness::*;
 use crate::materialized::*;
@@ -82,7 +83,7 @@ pub struct MobileIdentityOnboardingCommandRequest {
     pub account: AccountTokenBootstrapRequest,
     pub app_attest: AppAttestAssertionVerificationRequest,
     pub liveness: LivenessCeremonyVerificationRequest,
-    pub government_id: GovernmentIdWitnessInput,
+    pub identity_proofing: IdentityProofingVerificationRequest,
     pub client_context: MobileOnboardingClientContext,
     pub subject_kind: SubjectKind,
     pub stable_profile: StableIdentityProfile,
@@ -119,7 +120,7 @@ pub struct MobileIdentityOnboardingFactIds {
     pub portal_login_witness_fact_id: FactId,
     pub verified_email_attribute_fact_id: Option<FactId>,
     pub device_binding_fact_id: FactId,
-    pub government_id_witness_fact_id: FactId,
+    pub identity_proofing_witness_fact_id: FactId,
     pub selfie_liveness_witness_fact_id: FactId,
     pub enrollment_fact_id: Option<FactId>,
 }
@@ -140,6 +141,7 @@ pub enum MobileOnboardingCommandError {
 pub enum MobileIdentityOnboardingCommandError {
     Verification(OidcSessionVerificationError),
     AppAttest(AppAttestAssertionVerificationError),
+    IdentityProofing(IdentityProofingVerificationError),
     Liveness(LivenessCeremonyVerificationError),
     LivePresenceChallenge(LivePresenceChallengeError),
     DeviceRefMismatch,
@@ -173,6 +175,12 @@ impl From<OidcSessionVerificationError> for MobileIdentityOnboardingCommandError
 impl From<AppAttestAssertionVerificationError> for MobileIdentityOnboardingCommandError {
     fn from(error: AppAttestAssertionVerificationError) -> Self {
         Self::AppAttest(error)
+    }
+}
+
+impl From<IdentityProofingVerificationError> for MobileIdentityOnboardingCommandError {
+    fn from(error: IdentityProofingVerificationError) -> Self {
+        Self::IdentityProofing(error)
     }
 }
 
@@ -333,6 +341,7 @@ pub fn execute_mobile_identity_onboarding_command(
     request: MobileIdentityOnboardingCommandRequest,
     oidc_verifier: &impl OidcSessionVerifier,
     app_attest_verifier: &impl AppAttestAssertionVerifier,
+    identity_proofing_provider: &impl IdentityProofingProvider,
     liveness_verifier: &impl LivenessCeremonyVerifier,
     live_presence_challenge_store: &impl LivePresenceChallengeStore,
     continuity_provider: &impl ContinuityVaultProvider,
@@ -344,6 +353,7 @@ pub fn execute_mobile_identity_onboarding_command(
         request,
         oidc_verifier,
         app_attest_verifier,
+        identity_proofing_provider,
         liveness_verifier,
         live_presence_challenge_store,
         continuity_provider,
@@ -369,6 +379,7 @@ pub fn execute_encrypted_mobile_identity_onboarding_command<R, M, E>(
     request: MobileIdentityOnboardingCommandRequest,
     oidc_verifier: &impl OidcSessionVerifier,
     app_attest_verifier: &impl AppAttestAssertionVerifier,
+    identity_proofing_provider: &impl IdentityProofingProvider,
     liveness_verifier: &impl LivenessCeremonyVerifier,
     live_presence_challenge_store: &impl LivePresenceChallengeStore,
     continuity_provider: &impl ContinuityVaultProvider,
@@ -387,6 +398,7 @@ where
         request,
         oidc_verifier,
         app_attest_verifier,
+        identity_proofing_provider,
         liveness_verifier,
         live_presence_challenge_store,
         continuity_provider,
@@ -418,6 +430,7 @@ pub async fn execute_postgres_encrypted_mobile_identity_onboarding_command<M, E>
     request: MobileIdentityOnboardingCommandRequest,
     oidc_verifier: &impl OidcSessionVerifier,
     app_attest_verifier: &impl AppAttestAssertionVerifier,
+    identity_proofing_provider: &impl IdentityProofingProvider,
     liveness_verifier: &impl LivenessCeremonyVerifier,
     live_presence_challenge_store: &impl LivePresenceChallengeStore,
     continuity_provider: &impl ContinuityVaultProvider,
@@ -435,6 +448,7 @@ where
         request,
         oidc_verifier,
         app_attest_verifier,
+        identity_proofing_provider,
         liveness_verifier,
         live_presence_challenge_store,
         continuity_provider,
@@ -484,6 +498,7 @@ fn build_verified_mobile_identity_onboarding_composition(
     request: MobileIdentityOnboardingCommandRequest,
     oidc_verifier: &impl OidcSessionVerifier,
     app_attest_verifier: &impl AppAttestAssertionVerifier,
+    identity_proofing_provider: &impl IdentityProofingProvider,
     liveness_verifier: &impl LivenessCeremonyVerifier,
     live_presence_challenge_store: &impl LivePresenceChallengeStore,
     continuity_provider: &impl ContinuityVaultProvider,
@@ -509,6 +524,11 @@ fn build_verified_mobile_identity_onboarding_composition(
     {
         return Err(MobileIdentityOnboardingCommandError::DeviceRefMismatch);
     }
+
+    let identity_proofing = identity_proofing_provider
+        .verify_identity_proofing(&request.identity_proofing, &observed_at)?;
+    let identity_proofing_requires_review =
+        identity_proofing.requires_manual_review_at(&observed_at)?;
 
     let liveness = liveness_verifier.verify_liveness_ceremony(&request.liveness, &observed_at)?;
     validate_liveness_bound_to_app_attest(&liveness, &app_attest_assertion)?;
@@ -557,18 +577,19 @@ fn build_verified_mobile_identity_onboarding_composition(
             id_plan: WorkflowIdPlan::generated(
                 id_generator,
                 &format!("{id_namespace}-identity-witnesses"),
-                2,
+                identity_proofing.mapped_fact_count() + 1,
             ),
-            government_id: request.government_id,
+            identity_proofing,
             liveness: liveness.clone(),
         },
         &service.translator,
     );
-    let government_id_witness_fact_id = required_fact_id_in_slice(&witness_slice, |payload| {
+    let identity_proofing_witness_fact_id = required_fact_id_in_slice(&witness_slice, |payload| {
         matches!(
             payload,
             FactPayload::IdentityWitnessRecorded {
-                witness_type: IdentityWitnessType::GovernmentIdVerification,
+                witness_type: IdentityWitnessType::GovernmentIdVerification
+                    | IdentityWitnessType::LegalDocument,
                 ..
             }
         )
@@ -583,7 +604,7 @@ fn build_verified_mobile_identity_onboarding_composition(
         )
     });
 
-    let continuity_enrollment = if liveness.passed() {
+    let continuity_enrollment = if liveness.passed() && !identity_proofing_requires_review {
         Some(service.enroll_continuity_reference(
             EnrollContinuityRequest::with_generated_ids(
                 subject_id.clone(),
@@ -628,7 +649,11 @@ fn build_verified_mobile_identity_onboarding_composition(
         client_context: request.client_context,
         subject_id,
         decision: if liveness.passed() {
-            MobileIdentityOnboardingDecision::Accepted
+            if identity_proofing_requires_review {
+                MobileIdentityOnboardingDecision::ManualReviewRequired
+            } else {
+                MobileIdentityOnboardingDecision::Accepted
+            }
         } else {
             MobileIdentityOnboardingDecision::ManualReviewRequired
         },
@@ -643,7 +668,7 @@ fn build_verified_mobile_identity_onboarding_composition(
             device_binding_fact_id: account_bootstrap
                 .device_binding_fact_id
                 .expect("App Attest onboarding requires device binding"),
-            government_id_witness_fact_id,
+            identity_proofing_witness_fact_id,
             selfie_liveness_witness_fact_id,
             enrollment_fact_id: continuity_enrollment
                 .map(|enrollment| enrollment.enrollment_fact_id),

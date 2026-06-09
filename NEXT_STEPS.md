@@ -2,22 +2,26 @@
 
 ## Handoff Snapshot
 
-Start here. The repo now has fourteen relevant implementation slices:
+Start here. The repo now has eighteen relevant implementation slices:
 
 - encrypted Fact persistence and policy-gated materialization are implemented and tested in memory
 - PostgreSQL migrations, row mapping, SQLx repository methods, env-gated live adapter harnesses, rollback coverage, and replay-equivalence coverage are implemented
 - a higher-level encryption-aware workflow repository facade converts workflow slices into encrypted stored envelopes, owns append-sequence assignment, delegates durable append to a stored-envelope repository, and replays policy-gated materialized state
 - a PostgreSQL-backed encryption-aware workflow facade now allocates append sequences inside the same SQL transaction that writes encrypted facts, episodes, memberships, and workflow transaction rows
 - Keycloak/OIDC account-session bootstrap, feature-gated JWKS verification, and an env-gated live Keycloak harness are implemented
-- iPhone/App Attest-shaped device evidence can now be verified at an adapter boundary and bound into the account-token bootstrap workflow as a normal device-binding fact
+- iPhone/App Attest-shaped device evidence can now be verified at an adapter boundary and bound into the account-token bootstrap workflow as a normal device-binding fact; under `production-crypto`, an Apple registration verifier now accepts decoded registration evidence or a native attestation-object envelope, extracts App Attest `authData`, `x5c`, AAGUID, credential ID, and COSE P-256 public key, verifies the certificate chain to Apple's App Attestation Root CA, verifies the App Attest nonce extension, binds the key to the leaf certificate public key, records trusted public-key metadata, and the Apple assertion verifier checks the registered public key, server allow-listed app config, challenge-bound client-data hash, app-ID hash, P-256 signature, assertion expiry, and sign count before the durable key-state guard runs
 - a shared mobile onboarding command now wraps OIDC token verification, App Attest-shaped device evidence verification, workflow append, replay, and a safe account/device summary; a dependency-free CLI smoke harness and a feature-gated HTTP handler call the same command
 - an onboarding live-presence/liveness boundary now records `IdentityWitnessRecorded { witness_type: SelfieLivenessCheck }` from a verified ceremony result, binds that result to server challenge and App Attest device context, stores provider event refs/assurance/PAD result/expiry/retention policy refs instead of raw media, and creates continuity enrollment only after a passed liveness ceremony
 - durable live-presence challenge lifecycle storage now exists in memory and PostgreSQL, including issued, used, expired, failed, and manual-review states, expected subject/device/app context, retry/manual-review/retention policy refs, one-time consumption, and tests for missing, expired, mismatched, failed, and inconclusive challenges
 - a feature-gated `production-crypto` adapter now encrypts fact plaintext with AES-256-GCM through `ring`, using the existing canonical associated-data contract and append-sequence-derived 96-bit nonces
 - an App Attest key-state guard now records verified key state, used challenge nonces, sign-count progress, and revocation state so synthetic or future real App Attest verification cannot replay the same challenge or move a key across app/device context
-- PostgreSQL now has an App Attest key-state migration and state-store adapter, with transactional challenge replay protection, sign-count updates, key revocation state, and runtime wiring through the existing verifier guard
-- a feature-gated `runtime-server` binary now loads runtime config from env, connects to PostgreSQL, optionally runs migrations, assembles `SqlxPostgresEncryptionAwareWorkflowRepository` with the AES-256-GCM adapter, selects JWKS-backed OIDC verification, wraps the current static App Attest-shaped verifier in the durable PostgreSQL key-state guard, exposes `/health` and `/ready`, and forwards `POST /mobile/onboarding` through the same framework-neutral handler
-- a composed mobile identity-onboarding HTTP contract now exists at `POST /mobile/identity-onboarding`, with plain, encrypted, and PostgreSQL encrypted handlers plus a separate `PostgresEncryptedMobileIdentityOnboardingRuntime` facade for hosts that can supply OIDC, App Attest, liveness, live-presence challenge, continuity-provider, repository, and key dependencies
+- PostgreSQL now has App Attest key-state and key-registration migrations/adapters, with transactional challenge replay protection, sign-count updates, key revocation state, durable registered public-key lookup, and runtime wiring through the existing verifier guard
+- a feature-gated `runtime-server` binary now loads runtime config from env, connects to PostgreSQL, optionally runs migrations, assembles `SqlxPostgresEncryptionAwareWorkflowRepository` with the AES-256-GCM adapter, selects JWKS-backed OIDC verification, wraps either the static App Attest fixture verifier or opt-in Apple assertion verifier backed by PostgreSQL registration lookup in the durable PostgreSQL key-state guard, exposes `/health` and `/ready`, and routes both `POST /mobile/onboarding` and `POST /mobile/identity-onboarding` through the framework-neutral handlers
+- a composed mobile identity-onboarding HTTP contract now exists at `POST /mobile/identity-onboarding`, with plain, encrypted, and PostgreSQL encrypted handlers plus a `PostgresEncryptedMobileIdentityOnboardingRuntime` facade mounted by the runtime server with Persona proofing, static liveness verification, durable PostgreSQL live-presence challenge storage, continuity-provider config, and encrypted workflow persistence
+- a product-facing live-presence challenge issuance HTTP route now exists at `POST /mobile/identity-onboarding/live-presence-challenge`; it binds subject, device, and expected App Attest app context, writes a durable PostgreSQL challenge through the runtime server, and returns a CSPRNG-generated nonce plus expiry/policy refs for the composed onboarding request
+- a provider-neutral live-presence handoff/callback HTTP shape now exists; challenge issuance returns provider handoff metadata, `POST /mobile/identity-onboarding/live-presence-callback` accepts provider-normalized liveness/PAD result evidence, verifies provider/assertion/timestamp shape, and maps the callback into the existing onboarding `liveness` input without storing raw capture media or consuming the challenge before App Attest-bound onboarding
+- a provider-neutral identity-proofing boundary now exists with Persona as the default Phase 1 adapter shape; composed mobile identity onboarding verifies Persona-normalized proofing evidence, records the legal identity witness, asserted attributes, provider refs, retention refs, and optional policy-affecting risk signals, and routes failed/inconclusive/expired proofing into manual review without treating Persona as identity truth
+- an env-gated backend E2E harness now starts the mounted runtime server on a temporary local port, issues a durable live-presence challenge through the HTTP route, submits `POST /mobile/identity-onboarding` with live Keycloak/JWKS token evidence plus static App Attest, Persona, and liveness evidence, and verifies the safe summary, encrypted fact rows, audit rows, App Attest key state, and used challenge state
 
 The latest hardening pass also moved security-sensitive timestamp comparisons onto parsed UTC helpers, centralized encrypted persistence labels on typed enums, indexed materialized projection checks to avoid repeated scans, deduped replayed view rows, and split workflow outcome helpers out of the service facade.
 
@@ -25,11 +29,13 @@ The latest local Keycloak proof is complete. A throwaway Keycloak `26.6.1` dev s
 
 The PostgreSQL live harness has now passed against a disposable PostgreSQL database in this workspace. The live proof covered migration execution, encrypted append/query, duplicate fact ID, duplicate append sequence, all-facts replay order, subject-scoped query, policy-gated materialization, materialization audit insert, workflow-slice transaction append/query, PostgreSQL-backed encrypted workflow append/replay, transaction rollback, and replay-equivalence against `MaterializedIdentityState`.
 
+The backend runtime E2E harness has now passed against disposable local PostgreSQL and Keycloak services in this workspace. It obtained a fresh Keycloak token, started the mounted runtime server on a temporary port, issued and callback-verified a durable live-presence challenge, submitted the composed identity-onboarding HTTP request, and verified the encrypted PostgreSQL facts, materialization audit rows, App Attest key state, and used challenge state.
+
 `Phoros Onboarding and Recovery Architecture.pdf` has now been folded into `build_plan.md` as a product-state addendum. The build plan keeps the existing FEN fact-graph architecture and adds follow-on milestones for contact-channel evidence, Persona-default legal identity proofing, account and authority status projections, recovery policy setup, restricted-authority recovery, durable live-presence challenges, composed onboarding HTTP, and clinical binding/import states.
 
-Persona is the default Phase 1 legal identity-proofing provider. Treat Persona as the first concrete identity-proofing adapter, not as identity truth. The adapter should verify and normalize Persona workflow results, then translate them into FEN identity witness, asserted attribute, risk, provenance, and external-ref facts. Keep the `IdentityProofingProvider` boundary provider-neutral so ID.me, Socure, Jumio, Entrust/Onfido, Veriff, LexisNexis, government assertions, or provider-mediated assertions can replace Persona later.
+Persona is the default Phase 1 legal identity-proofing provider. Treat Persona as the first concrete identity-proofing adapter, not as identity truth. The initial adapter verifies normalized Persona workflow results and translates them into FEN identity witness, asserted attribute, risk, provenance, and external-ref facts. Keep the `IdentityProofingProvider` boundary provider-neutral so ID.me, Socure, Jumio, Entrust/Onfido, Veriff, LexisNexis, government assertions, or provider-mediated assertions can replace Persona later.
 
-The next useful handoff move is adding the Persona-shaped identity-proofing boundary so the composed onboarding path can accept provider-normalized legal identity evidence from the default Phase 1 provider instead of treating the current government-ID witness input as the final provider adapter. After that, mount the composed identity-onboarding runtime in the server binary with durable live-presence challenge storage, continuity-provider config, and production-shaped verifier selection, then build the Mac/backend E2E harness against local PostgreSQL and Keycloak.
+The next useful handoff move is exercising the registered-key App Attest assertion path from a signed iOS proof app, now that the local backend E2E path has run against live PostgreSQL and Keycloak.
 
 Do not treat Keycloak, PostgreSQL, a KMS, Apple App Attest, a liveness provider, or any provider SDK as the identity source of truth. They provide evidence and durable infrastructure. FEN owns the typed fact graph, policy gates, replay semantics, and materialized projections.
 
@@ -52,25 +58,25 @@ Do not expand into broad product surface area before this path is real. The MVP 
 
 1. **Persona Identity Proofing Boundary**
 
-   Implement Persona as the default Phase 1 legal identity-proofing provider behind a provider-neutral boundary. The first version can use Persona sandbox/static fixtures or verified webhook/API result shapes, but the domain contract should already carry provider name, workflow ID, asserted attributes, evidence types, verification result, assurance level, risk signals, timestamp, expiration policy, and audit reference.
+   The initial Persona-shaped boundary is implemented behind a provider-neutral `IdentityProofingProvider` contract. It uses normalized Persona/static evidence shapes carrying provider name, workflow ID, asserted attributes, evidence types, verification result, assurance level, risk signals, timestamp, expiration policy, and audit reference.
 
    MVP outcome: the composed onboarding path can record legal identity proofing as FEN evidence without hard-coding Persona as the identity model.
 
 2. **Production Runtime**
 
-   The framework-neutral composed identity-onboarding HTTP handlers and `PostgresEncryptedMobileIdentityOnboardingRuntime` now exist. The next runtime step is to mount that richer runtime in the server binary or chosen web host, configure the durable live-presence challenge store, select the liveness verifier/provider, configure continuity-provider enrollment, and route `POST /mobile/identity-onboarding` alongside the existing account/device smoke endpoint.
+   The framework-neutral composed identity-onboarding HTTP handlers and `PostgresEncryptedMobileIdentityOnboardingRuntime` now exist, and the feature-gated runtime server now mounts the richer path alongside the smaller account/device smoke endpoint. The runtime builds Persona proofing, durable PostgreSQL live-presence challenge storage, static liveness verifier config, continuity-provider config, JWKS-backed OIDC verification, durable App Attest key-state protection, and encrypted PostgreSQL workflow persistence.
 
    Remaining runtime hardening: move from the local shell to production-grade transport concerns such as concurrency, graceful shutdown, request tracing, deployment migration policy, stricter body/timeout handling, real App Attest cryptographic verification, async-native App Attest and live-presence state operations, and durable key-management storage.
 
 3. **Mac/Backend End-To-End Test Path**
 
-   Create the fastest real-ish end-to-end test path on Mac before building the iPhone app. Run the runtime server or host harness against local PostgreSQL, local Keycloak, production-shaped encrypted workflow persistence, durable live-presence challenges, and Persona sandbox/static identity-proofing evidence. Drive the composed onboarding HTTP endpoint from a small local client or browser-visible harness and verify the safe summary, persisted facts, materialized projection, and audit rows.
+   The fastest real-ish backend path now exists as an env-gated integration harness. It runs the mounted runtime server against local PostgreSQL, local Keycloak, production-shaped encrypted workflow persistence, durable live-presence challenges, and Persona sandbox/static identity-proofing evidence. It drives the composed onboarding HTTP endpoint, then verifies the safe summary, encrypted persisted facts, materialization audit rows, App Attest key-state rows, and used challenge state.
 
    MVP outcome: the backend product flow can be exercised outside unit tests while the iPhone-specific App Attest and camera/liveness path is still being built.
 
 4. **Challenge Issuance And Provider Callback Shape**
 
-   The durable `LivePresenceChallenge` store and one-time consumption checks exist. The next product-facing challenge work is an issuance contract or host route that creates the nonce, binds intended workflow, expected app/device context, subject/account context where known, expiry, retry/manual-review policy, and retention refs, then lets the liveness provider or ceremony callback return structured verification evidence.
+   The durable `LivePresenceChallenge` store, one-time consumption checks, runtime-server issuance route, provider handoff metadata, and provider-normalized callback mapping exist. The route binds intended workflow, expected app/device context, subject/account context where known, expiry, retry/manual-review policy, retention refs, and a CSPRNG-generated nonce. The next challenge work is vendor-specific session creation, signed callback verification, and provider ceremony metadata hardening.
 
    MVP outcome: a passed video-selfie/liveness ceremony can be trusted as fresh physical-presence evidence for onboarding because it is bound to a server-issued challenge and attested device context; failed or inconclusive ceremony results create auditable retry/manual-review paths instead of silent denial.
 
@@ -82,7 +88,9 @@ Do not expand into broad product surface area before this path is real. The MVP 
 
 6. **Real Apple App Attest**
 
-   Replace the current deterministic App Attest-shaped verifier with a real Apple App Attest adapter. The key-state guard now enforces app/team/bundle/device consistency, challenge replay protection, sign-count monotonicity, and revocation state after an assertion has been synthetically verified, and the runtime persists that state in PostgreSQL. The real adapter still needs to verify Apple attestation/assertion formats, bind server-issued challenge bytes, persist any real attestation-key metadata needed for verification, and translate only verified evidence into FEN facts.
+   The first real registration/assertion verification boundary now exists behind `production-crypto`. Registration verification accepts decoded App Attest registration evidence or a native attestation-object envelope, validates server allow-listed team/bundle/environment, app-ID hash, registration challenge hash, App Attest AAGUID, credential ID, COSE P-256 public key shape, `x5c` presence, certificate validity, issuer/subject chaining, ECDSA certificate signatures up to Apple's App Attestation Root CA, App Attest nonce extension, leaf-certificate public-key binding, timestamp, and format, then records trusted public-key metadata in the registration store. Assertion verification resolves that registered key, binds the assertion to the server challenge through `clientDataHash`, verifies the P-256 signature over `authenticatorData || clientDataHash`, extracts the sign count, and then lets the durable key-state guard enforce challenge replay protection, sign-count monotonicity, app/device context stability, and revocation state.
+
+   Remaining App Attest work: exercise registration and assertion from a signed iOS app, decide how to store/use Apple attestation receipts for fraud-risk telemetry, and keep development/production App Attest environment handling explicit.
 
    MVP outcome: the iPhone path proves app-bound device possession with real Apple evidence before FEN appends the device-binding workflow facts.
 
@@ -153,7 +161,7 @@ iPhone app signs in with Keycloak
   -> app/provider completes Persona legal identity proofing
   -> app/provider completes a guided live-presence/video-selfie ceremony for a server challenge
   -> FEN verifies token, device evidence, Persona identity-proofing evidence, and liveness result at adapter boundaries
-  -> FEN appends account-session, portal-login witness, verified-email, device evidence, government ID witness, selfie-liveness witness, and enrollment-reference facts
+  -> FEN appends account-session, portal-login witness, verified-email, device evidence, legal identity-proofing witness and attributes, selfie-liveness witness, and enrollment-reference facts
   -> replay materializes the current account/device/onboarding state
 ```
 
@@ -164,11 +172,11 @@ Keep these evidence streams separate:
 - Persona legal identity proofing is the default Phase 1 external verifier. It proves civil or institutional identity evidence through a provider workflow and should be recorded as its own witness and asserted attributes, not merged into liveness or device evidence.
 - Live-presence/video-selfie liveness proves a physically present human completed a fresh capture-path/PAD challenge. It should be recorded as `SelfieLivenessCheck`, not called face authentication or treated as identity itself.
 - Biological continuity after enrollment is the signed 1:1 continuity check against an enrollment reference. Keep this distinct from onboarding liveness, even if the same camera ceremony helps create the enrollment reference.
-- FEN should bind the verified account-session evidence, verified device evidence, government ID witness, liveness witness, and enrollment reference through workflow facts; no single evidence source should directly own the identity graph.
+- FEN should bind the verified account-session evidence, verified device evidence, Persona-normalized legal identity-proofing witness and attributes, liveness witness, and enrollment reference through workflow facts; no single evidence source should directly own the identity graph.
 
 Do not generalize the current Apple-specific verifier into a broad `DeviceEvidenceVerifier` until a second platform integration is real. App Attest, Play Integrity, Android key attestation, Windows Hello/passkeys, TPM attestation, and managed-device attestation are related evidence sources, but they prove different claims. When Android or desktop enters scope, add a neutral verified-device-evidence shape that platform-specific verifiers can emit into. Also do not assume Apple App Attest covers desktop Mac apps; treat iOS/iPadOS App Attest, managed Apple device attestation, consumer Mac passkey/Secure Enclave evidence, Android app/device integrity, Android hardware-backed key attestation, and Windows Hello/TPM signals as distinct adapter inputs that FEN translates into typed facts.
 
-## Priority Now: Persona Boundary And Runtime Mount
+## Priority Now: Backend E2E
 
 The in-memory Rust proof for encrypted Fact persistence exists, and the PostgreSQL adapter now has migration SQL, row mapping, a feature-gated SQLx repository, and an env-gated live integration test harness for encrypted Fact envelopes and workflow-slice transaction rows. The Keycloak/OIDC-facing slice now exists too: verified OIDC session evidence can enter FEN as normal credential, portal-login witness, and verified-email attribute facts, and a feature-gated JWKS verifier can validate live Keycloak-style JWTs.
 
@@ -176,13 +184,13 @@ The local Keycloak harness has been run against a throwaway `fen-dev` realm on `
 
 The shared mobile onboarding command now exists in `src/mobile.rs`, the dependency-free CLI smoke harness in `src/bin/mobile_onboarding_smoke.rs` calls the account/device command, and the feature-gated HTTP handler in `src/mobile_http.rs` exposes `POST /mobile/onboarding` as a framework-agnostic method/path/body adapter. The existing HTTP path takes OIDC token evidence, App Attest-shaped assertion evidence, challenge nonce context, and client context; verifies OIDC and App Attest evidence at adapter boundaries; rejects device-reference mismatch before append; appends account/session/device-binding facts through the workflow repository boundary; replays materialized state; and returns a narrow account/device summary instead of exposing full workflow internals.
 
-The richer identity-onboarding path now verifies OIDC, verifies App Attest, verifies a structured liveness ceremony result, consumes a durable live-presence challenge, binds the liveness result to App Attest challenge/device/app context, records government ID and selfie-liveness witnesses, creates continuity enrollment only when liveness passed, and returns a decision that distinguishes accepted onboarding from manual review. This path is intentionally not the camera implementation. It is the FEN-facing ceremony boundary plus workflow composition.
+The richer identity-onboarding path now verifies OIDC, verifies App Attest, verifies Persona-normalized identity-proofing evidence, verifies a structured liveness ceremony result, consumes a durable live-presence challenge, binds the liveness result to App Attest challenge/device/app context, records legal identity-proofing and selfie-liveness witnesses, creates continuity enrollment only when proofing and liveness pass, and returns a decision that distinguishes accepted onboarding from manual review. This path is intentionally not the camera implementation. It is the FEN-facing ceremony boundary plus workflow composition.
 
-The composed identity-onboarding HTTP contract now exists in `src/mobile_http.rs` as `POST /mobile/identity-onboarding`. It has plain, encrypted, and PostgreSQL encrypted handler variants, and `src/runtime.rs` exposes `PostgresEncryptedMobileIdentityOnboardingRuntime` for hosts that can provide liveness, live-presence challenge, continuity-provider, encrypted repository, and key dependencies. The existing `runtime-server` binary still mounts the smaller account/device endpoint; mounting the composed identity endpoint requires runtime config for the additional providers and stores.
+The composed identity-onboarding HTTP contract now exists in `src/mobile_http.rs` as `POST /mobile/identity-onboarding`. It has plain, encrypted, and PostgreSQL encrypted handler variants, and `src/runtime.rs` exposes `PostgresEncryptedMobileIdentityOnboardingRuntime` for hosts that can provide identity proofing, liveness, live-presence challenge, continuity-provider, encrypted repository, and key dependencies. The `runtime-server` binary now mounts the smaller account/device endpoint, the composed identity endpoint, and the live-presence challenge issuance endpoint with Persona proofing, static liveness verifier config, durable PostgreSQL live-presence challenge storage, and the mock Phase 1 continuity-provider boundary.
 
-The next implementation priority is the Persona identity-proofing boundary. The product-facing onboarding path should eventually carry OIDC, App Attest, Persona legal identity proofing, and liveness ceremony evidence. The current composed contract accepts a provider-neutral government ID witness input; the next slice should replace or wrap that input with Persona-normalized provider evidence while preserving the FEN fact graph as the identity source of truth. The older account/device HTTP path can remain as a smaller smoke surface.
+The Persona identity-proofing boundary now exists. The product-facing onboarding path carries OIDC, App Attest, Persona-normalized legal identity proofing, and liveness ceremony evidence. The composed contract accepts provider-normalized `identity_proofing` input instead of treating a raw government-ID witness input as the final provider adapter. The older account/device HTTP path can remain as a smaller smoke surface.
 
-After Persona lands, mount the composed runtime in the server binary or a host harness, then create a Mac/backend end-to-end path that runs against local PostgreSQL and Keycloak, injects Persona sandbox/static identity-proofing evidence, issues and consumes durable live-presence challenges, submits the composed onboarding HTTP request, and verifies persisted encrypted facts plus the safe onboarding summary. This is the fastest honest way to test the product flow while real App Attest and camera/liveness capture are still pending.
+The backend E2E harness has now run against local PostgreSQL and Keycloak. Next, drive the registered-key App Attest path from the iOS proof app. The harness starts the mounted runtime server, injects Persona sandbox/static identity-proofing evidence, issues a durable live-presence challenge, maps a provider-normalized liveness callback through HTTP, submits the composed onboarding HTTP request, and verifies persisted encrypted facts plus the safe onboarding summary. This remains the fastest honest way to test the product flow while live iOS App Attest capture and camera/liveness capture are still pending.
 
 The intended entry-point shape is:
 
@@ -190,14 +198,14 @@ The intended entry-point shape is:
 identity onboarding command
   input: OIDC token, App Attest evidence, Persona-normalized identity-proofing evidence, liveness ceremony result, client context
   verifies: live-presence challenge freshness, OIDC session, device evidence, legal identity proofing, liveness/PAD result, subject/device/app consistency
-  appends: credential, portal-login witness, verified-email when present, device-binding, government ID witness, selfie-liveness witness, enrollment reference when accepted
+  appends: credential, portal-login witness, verified-email when present, device-binding, legal identity-proofing witness and attributes, selfie-liveness witness, enrollment reference when accepted
   persists: through the encryption-aware workflow repository over durable stored-envelope storage
   returns: safe onboarding summary with accepted/manual-review decision, account status, authority status, and fresh-live-presence status
 ```
 
 Keep HTTP and CLI thin. They should parse input, select verifier/config, call the shared command, and shape errors or output. They should not own identity semantics, fact construction rules, replay behavior, or policy meaning.
 
-Do not build a mobile app before the server-side product path is mounted and testable. Sequence this as: add the Persona identity-proofing boundary; mount the composed identity-onboarding runtime with durable persistence and production verifier selection; add a challenge-issuance/provider-callback shape if the chosen host needs one; run the Mac/backend E2E harness; then add a tiny iOS proof app to exercise real Keycloak, App Attest, Persona, and video-selfie/liveness evidence. The CLI remains useful after the app exists because it can smoke-test local command wiring without driving the full app.
+The server-side product path is now testable outside unit tests through the backend E2E harness. The next proof app should exercise real Keycloak, App Attest registration/assertion, Persona, and video-selfie/liveness evidence from iOS. The CLI remains useful after the app exists because it can smoke-test local command wiring without driving the full app.
 
 The proven Rust shape is:
 
@@ -287,6 +295,10 @@ The mobile device-evidence boundary now exists without adding Apple SDK or produ
 - `AppAttestClientConfig` allow-lists team ID, bundle ID, app ID, and development/production environment
 - `VerifiedAppAttestAssertion` carries app-bound device evidence, key ID, challenge nonce, sign count, observed timing, and assurance level
 - `AppAttestAssertionVerifier` trait and deterministic `StaticAppAttestAssertionVerifier` for tests
+- `AppleAppAttestAssertionVerifier` behind `production-crypto` for challenge-bound P-256 assertion verification using trusted public-key bytes
+- `AppleAppAttestKeyRegistrationVerifier`, `AppAttestKeyRegistrationStore`, and PostgreSQL key-registration storage for durable trusted public-key lookup
+- native App Attest registration-object parsing now accepts `fmt`, `authData`, and `attStmt.x5c`, extracts attested credential data and COSE P-256 public keys, enforces App Attest AAGUIDs, verifies certificate validity/chain signatures/root trust/nonce extension, and rejects leaf-certificate public-key mismatches
+- `StaticAppAttestPublicKeyResolver` remains as a test bridge for direct assertion-verifier fixtures
 - context validation for assertion payload, team ID, bundle ID, app ID, environment, challenge nonce, device ref, key ID, and expiration
 - `StatefulAppAttestAssertionVerifier`, `InMemoryAppAttestKeyStateStore`, and `PostgresAppAttestKeyStateStore` wrap a cryptographic/parser verifier with key-state checks for challenge replay, monotonic sign counts, app/device context drift, and revoked keys
 - account-token plus App Attest service methods that verify OIDC and App Attest evidence before appending anything
@@ -318,12 +330,12 @@ The live-presence ceremony boundary now exists without adding camera, biometric,
 - PostgreSQL migration and row mapping preserve live-presence challenge workflow labels, status payloads, expected app context, expected device/subject context, policy refs, and lifecycle timestamps
 - verified liveness carries provider metadata, provider event refs, challenge nonce, device ref, observed/expiry timestamps, liveness result, PAD result, assurance level, and retention policy refs
 - `IdentityWitnessContext` records witness result, challenge nonce, App Attest-bound device ref, PAD result, and retention policy refs on `IdentityWitnessRecorded`
-- `SelfieLivenessCheck` is represented as an onboarding witness distinct from `GovernmentIdVerification` and later `BiometricContinuityCheck`
+- `SelfieLivenessCheck` is represented as an onboarding witness distinct from the legal identity-proofing witness currently carried through the `GovernmentIdVerification` label and later `BiometricContinuityCheck`
 - raw frames, images, templates, embeddings, and provider-native capture artifacts stay outside ordinary FEN facts
-- `onboarding_identity_witnesses_slice_from_request` creates government ID and selfie-liveness witnesses as a child onboarding episode
-- `execute_mobile_identity_onboarding_command` composes subject registration, OIDC/App Attest account-device bootstrap, government ID witness, selfie-liveness witness, and continuity enrollment after consuming a matching live-presence challenge
+- `onboarding_identity_witnesses_slice_from_request` creates Persona-normalized legal identity-proofing and selfie-liveness witnesses as a child onboarding episode
+- `execute_mobile_identity_onboarding_command` composes subject registration, OIDC/App Attest account-device bootstrap, legal identity-proofing witness and attributes, selfie-liveness witness, and continuity enrollment after consuming a matching live-presence challenge
 - passed liveness can create the enrollment reference; failed or inconclusive liveness records auditable evidence and returns manual review without silently denying or creating enrollment
-- tests prove successful onboarding creates account/session facts, device binding, government ID witness, selfie-liveness witness, and enrollment reference
+- tests prove successful onboarding creates account/session facts, device binding, legal identity-proofing witness and attributes, selfie-liveness witness, and enrollment reference
 - tests prove failed/inconclusive liveness creates a manual-review path with witness evidence and no enrollment reference
 - tests prove liveness must bind to the App Attest challenge/device context before append
 - tests prove missing, used, expired, mismatched, failed, and manual-review challenge states behave explicitly
@@ -344,7 +356,7 @@ The product-facing HTTP adapter shape now exists behind the optional `mobile-htt
 - success returns subject ID, assurance level, active devices, workflow episode ID, key fact IDs, and committed fact count
 - invalid JSON maps to `400`, wrong method to `405`, OIDC verification failure to `401`, App Attest/device mismatch to `422`, and repository append failure to `409`
 - liveness rejection maps to `422`; missing, expired, already-consumed, or mismatched live-presence challenges map to explicit challenge errors; encrypted command encryption/materialization failures map to `500` because they indicate server-side persistence, key, or policy configuration failures
-- tests cover successful account/device HTTP response JSON, encrypted-facade account/device HTTP append, invalid request JSON, wrong method, device mismatch, successful composed identity HTTP append, missing live-presence challenge rejection without repository mutation, and encrypted composed episode append/replay through the HTTP adapter
+- tests cover successful account/device HTTP response JSON, encrypted-facade account/device HTTP append, invalid request JSON, wrong method, device mismatch, successful composed identity HTTP append, explicit identity-proofing outcome fields, live-presence handoff/callback mapping, missing live-presence challenge rejection without repository mutation, and encrypted composed episode append/replay through the HTTP adapter
 
 ### Completed Encryption-Aware Workflow Repository Facade Slice
 
@@ -361,7 +373,7 @@ The selected persistence direction is now a higher-level Rust facade over the ex
 - deterministic metadata planning and an in-memory stored-envelope repository keep the facade covered without adding production KMS or database dependencies to the default crate
 - tests prove a mobile OIDC plus App Attest workflow and the composed identity-onboarding episode composition can be encrypted, appended with explicit sequences, replayed, matched back to the direct workflow projection, and reached through the mobile HTTP adapter shape
 
-The PostgreSQL-backed version of this facade now exists for durable append-sequence allocation and stored-envelope writes for both workflow slices and episode compositions. The runtime now composes that durable facade with JWKS-backed OIDC, AES-256-GCM fact encryption, durable App Attest key-state replay protection, and a separate identity-onboarding runtime facade ready for host/server mounting.
+The PostgreSQL-backed version of this facade now exists for durable append-sequence allocation and stored-envelope writes for both workflow slices and episode compositions. The runtime now composes that durable facade with JWKS-backed OIDC, AES-256-GCM fact encryption, durable App Attest key-state replay protection, and the mounted identity-onboarding runtime facade.
 
 Important PostgreSQL design choices to preserve:
 
@@ -377,14 +389,13 @@ Important PostgreSQL design choices to preserve:
 
 Immediate next implementation order:
 
-1. Add the Persona identity-proofing boundary and map Persona-normalized provider results into FEN witness/asserted-attribute/risk/provenance facts.
-2. Mount the composed identity-onboarding runtime in the server binary or selected host with durable live-presence challenge storage, liveness verifier/provider config, continuity-provider config, and `POST /mobile/identity-onboarding` routing.
-3. Build a Mac/backend E2E harness that runs local PostgreSQL and Keycloak, injects Persona sandbox/static evidence, issues/consumes live-presence challenges, submits the composed HTTP request, and verifies encrypted rows, materialized projection, audit events, and safe summary.
-4. Replace the synthetic App Attest parser/signature proof with real Apple App Attest attestation/assertion verification.
-5. Move fact key material from env-loaded bytes into DEK/KEK or KMS-backed wrapping and rotation.
-6. Move the local runtime shell toward production-grade transport and make App Attest and live-presence state checks async-native when the server framework is selected.
+1. Exercise Apple App Attest registration and assertion from a signed iOS proof app against the runtime.
+2. Move fact key material from env-loaded bytes into DEK/KEK or KMS-backed wrapping and rotation.
+3. Move the local runtime shell toward production-grade transport and make App Attest and live-presence state checks async-native when the server framework is selected.
 
 The live PostgreSQL tests are skipped unless `IDENTITY_MODEL_POSTGRES_URL` is present; they have passed against a disposable PostgreSQL database in this workspace. The live Keycloak test is skipped unless the Keycloak env vars are present; it has passed against the local dev setup documented in `LOCAL_KEYCLOAK_DEV.md`.
+
+The backend E2E harness is skipped unless `IDENTITY_MODEL_POSTGRES_URL`, `IDENTITY_MODEL_KEYCLOAK_ISSUER`, `IDENTITY_MODEL_KEYCLOAK_CLIENT_ID`, and `IDENTITY_MODEL_KEYCLOAK_TOKEN` are present. It has passed against disposable local PostgreSQL and Keycloak services using the setup documented in `LOCAL_BACKEND_E2E.md`.
 
 PostgreSQL is the preferred first production database because it gives mature transactions, indexes, binary ciphertext storage, JSON/hybrid metadata options, and operational reliability without asking SQL to become the source of identity meaning.
 
@@ -396,8 +407,9 @@ This repo contains a Rust crate implementing the first FEN identity-model founda
 - parsed UTC timestamp helpers for policy, IAM, device-evidence, and projection validity checks
 - split onboarding and service APIs for subject registration, device binding, continuity enrollment, provider links, payer links, recovery, delegation, access decisions, and identity disputes
 - generic OIDC/Keycloak session evidence boundary, JWKS verifier, and account-token bootstrap append/replay harness
-- shared mobile onboarding command, dependency-free CLI smoke harness, and feature-gated HTTP handler for OIDC plus App Attest-shaped device evidence
-- composed mobile identity-onboarding command and framework-neutral HTTP handlers for subject registration, account/device bootstrap, government ID witness, selfie-liveness witness, manual-review outcome, and continuity enrollment after passed liveness
+- shared mobile onboarding command, dependency-free CLI smoke harness, feature-gated HTTP handler for OIDC plus App Attest-shaped device evidence, and production-crypto Apple registration/assertion verification boundary
+- composed mobile identity-onboarding command and framework-neutral HTTP handlers for subject registration, account/device bootstrap, Persona-normalized legal identity-proofing witness and attributes, selfie-liveness witness, manual-review outcome, and continuity enrollment after passed proofing and liveness
+- env-gated runtime-server E2E harness for the composed identity-onboarding endpoint over real local HTTP, live PostgreSQL persistence, live Keycloak/JWKS token verification, HTTP live-presence challenge issuance/consumption, and durable App Attest key-state replay protection
 - liveness ceremony verifier boundary and durable live-presence challenge stores that consume structured live-presence/PAD results without storing raw media in FEN facts
 - append-only in-memory repository traits and replay helpers for facts, episodes, memberships, and episode relations
 - encrypted Fact envelope, associated-data, test encryption/key, policy-gated materialization, materialization audit, and in-memory encrypted repository boundaries
@@ -425,7 +437,7 @@ Default suite:
 cargo test
 ```
 
-Passed locally after the composed identity HTTP/runtime slice.
+Passed locally after the production-crypto Apple assertion verifier pass.
 
 Feature-enabled Ed25519 suite:
 
@@ -433,7 +445,7 @@ Feature-enabled Ed25519 suite:
 cargo test --features ed25519-dalek-verifier
 ```
 
-Passed locally after the composed identity HTTP/runtime slice.
+Previously passed locally after the composed identity HTTP/runtime slice.
 
 Feature-enabled OIDC/JWKS suite:
 
@@ -441,7 +453,7 @@ Feature-enabled OIDC/JWKS suite:
 cargo test --features oidc-jwks-verifier
 ```
 
-Passed locally after the composed identity HTTP/runtime slice. One test is env-gated and no-ops unless the Keycloak issuer/client/token env vars are set.
+Passed locally after the threaded JWKS fetch hardening. The env-gated live Keycloak test also passed against the local `fen-dev` realm when the Keycloak issuer/client/token env vars were set.
 
 Feature-enabled mobile HTTP suite:
 
@@ -449,7 +461,41 @@ Feature-enabled mobile HTTP suite:
 cargo test --features mobile-http
 ```
 
-Passed locally after the composed identity HTTP/runtime slice.
+Passed locally after the Persona proofing boundary and runtime-server identity mount.
+
+Feature-enabled production crypto focused suite:
+
+```sh
+cargo test --features production-crypto apple_app_attest
+```
+
+Passed locally after the production-crypto Apple assertion verifier pass.
+
+Live runtime server E2E:
+
+```sh
+cargo test --features runtime-server \
+  live_runtime_server_identity_onboarding_e2e_when_env_is_set \
+  -- --nocapture
+```
+
+Passed locally after the threaded JWKS fetch hardening with `IDENTITY_MODEL_POSTGRES_URL`, `IDENTITY_MODEL_KEYCLOAK_ISSUER`, `IDENTITY_MODEL_KEYCLOAK_CLIENT_ID`, and a fresh `IDENTITY_MODEL_KEYCLOAK_TOKEN` set against disposable local services.
+
+Feature-enabled runtime server suite:
+
+```sh
+cargo test --features runtime-server
+```
+
+Passed locally after the production-crypto Apple assertion verifier pass.
+
+Runtime server binary check:
+
+```sh
+cargo check --features runtime-server --bin mobile_onboarding_server
+```
+
+Passed locally after the runtime server mounted account/device, composed identity, and live-presence challenge issuance endpoints.
 
 Feature-enabled PostgreSQL adapter suite:
 
@@ -457,7 +503,15 @@ Feature-enabled PostgreSQL adapter suite:
 cargo test --features postgres-adapter
 ```
 
-Passed locally after the composed identity HTTP/runtime slice with `IDENTITY_MODEL_POSTGRES_URL` absent. Live tests are env-gated and no-op unless that URL is set; those live tests pass against a disposable PostgreSQL database when the URL is present.
+Passed locally after the Persona proofing boundary and runtime-server identity mount with `IDENTITY_MODEL_POSTGRES_URL` absent. Live tests are env-gated and no-op unless that URL is set; those live tests pass against a disposable PostgreSQL database when the URL is present.
+
+Combined mobile HTTP plus PostgreSQL adapter suite:
+
+```sh
+cargo test --features "mobile-http postgres-adapter"
+```
+
+Passed locally after the Persona proofing boundary and runtime-server identity mount.
 
 Full all-features suite:
 
@@ -476,10 +530,10 @@ The tests cover:
 - service-level access decisions, policy reasons, policy artifacts, and stale-evidence checks
 - parsed timestamp comparisons for policy effective windows, stale evidence, OIDC session expiration, App Attest assertion expiration, and projection validity windows
 - Keycloak/OIDC session bootstrap into credential, portal-login witness, and verified-email facts
-- App Attest-shaped device evidence validation, account-token binding, device-binding fact creation, and rejection-without-append behavior
+- App Attest-shaped device evidence validation, production-crypto Apple registration storage plus assertion signature/challenge/app-ID verification, account-token binding, device-binding fact creation, and rejection-without-append behavior
 - shared mobile onboarding command summary behavior, encrypted-facade mobile command behavior, CLI harness compile path, account/device HTTP JSON/status-code adapter behavior, encrypted-facade account/device HTTP adapter behavior, empty App Attest challenge rejection, and invalid App Attest timestamp rejection
-- composed identity onboarding with government ID witness, selfie-liveness witness, durable live-presence challenge consumption, enrollment creation after passed liveness, manual-review evidence after failed/inconclusive liveness, and App Attest challenge/device/app binding for liveness
-- composed identity-onboarding HTTP request/response shape, encrypted-facade composed HTTP append/replay, missing live-presence challenge HTTP rejection without repository mutation, and composed episode-relation persistence
+- composed identity onboarding with Persona-normalized legal identity-proofing witness and attributes, selfie-liveness witness, durable live-presence challenge consumption, enrollment creation after passed proofing and liveness, manual-review evidence after failed/inconclusive/expired proofing or liveness, and App Attest challenge/device/app binding for liveness
+- composed identity-onboarding HTTP request/response shape, live-presence challenge issuance HTTP response shape, encrypted-facade composed HTTP append/replay, missing live-presence challenge HTTP rejection without repository mutation, and composed episode-relation persistence
 - feature-gated OIDC/JWKS verification, asymmetric JWT validation, env-gated live Keycloak token harness, and account-token append/replay
 - split onboarding, composed onboarding, repository append/replay, and episode relations
 - encrypted Fact envelope round trips, append-sequence replay, policy-before-key access, materialization audit, codec boundary, tamper detection, wrong-key, missing-key, and retired-key failures
@@ -516,7 +570,7 @@ The audit graph becomes operational without turning SQL tables into identity tru
 
 ### 3. Onboarding Liveness Challenge and HTTP Contract
 
-The liveness verifier boundary and composed identity-onboarding command exist. The next implementation work is durable challenge issuance, one-time nonce use, expiry handling, retry/manual-review state, and a product-facing HTTP contract for the composed onboarding path.
+The liveness verifier boundary, durable challenge issuance/consumption, composed identity-onboarding command, composed HTTP contract, runtime-server routes, CSPRNG challenge nonce generation, provider handoff metadata, and provider-normalized callback mapping exist. The next implementation work is vendor-specific handoff/session creation, signed provider callback verification, and provider ceremony metadata hardening while preserving one-time nonce use, expiry, and retry/manual-review state.
 
 Keep the ceremony evaluator outside the FEN identity ontology. It may become an external vendor integration, a separate service/application, or a future crate. This codebase should consume structured results and record only typed witness context, provider refs, assurance, PAD/liveness outcome, expiry, and retention policy refs.
 

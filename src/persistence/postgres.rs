@@ -22,6 +22,8 @@ pub const IDENTITY_APP_ATTEST_KEY_STATE_MIGRATION_SQL: &str =
     include_str!("../../migrations/0003_identity_app_attest_key_state.sql");
 pub const IDENTITY_LIVE_PRESENCE_CHALLENGES_MIGRATION_SQL: &str =
     include_str!("../../migrations/0004_identity_live_presence_challenges.sql");
+pub const IDENTITY_APP_ATTEST_KEY_REGISTRATION_MIGRATION_SQL: &str =
+    include_str!("../../migrations/0005_identity_app_attest_key_registration.sql");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PostgresMigration {
@@ -29,7 +31,7 @@ pub struct PostgresMigration {
     pub sql: &'static str,
 }
 
-pub const IDENTITY_POSTGRES_MIGRATIONS: [PostgresMigration; 4] = [
+pub const IDENTITY_POSTGRES_MIGRATIONS: [PostgresMigration; 5] = [
     PostgresMigration {
         name: "0001_identity_encrypted_facts",
         sql: IDENTITY_ENCRYPTED_FACTS_MIGRATION_SQL,
@@ -46,13 +48,18 @@ pub const IDENTITY_POSTGRES_MIGRATIONS: [PostgresMigration; 4] = [
         name: "0004_identity_live_presence_challenges",
         sql: IDENTITY_LIVE_PRESENCE_CHALLENGES_MIGRATION_SQL,
     },
+    PostgresMigration {
+        name: "0005_identity_app_attest_key_registration",
+        sql: IDENTITY_APP_ATTEST_KEY_REGISTRATION_MIGRATION_SQL,
+    },
 ];
 
-pub const IDENTITY_POSTGRES_MIGRATIONS_SQL: [&str; 4] = [
+pub const IDENTITY_POSTGRES_MIGRATIONS_SQL: [&str; 5] = [
     IDENTITY_ENCRYPTED_FACTS_MIGRATION_SQL,
     IDENTITY_WORKFLOW_TRANSACTIONS_MIGRATION_SQL,
     IDENTITY_APP_ATTEST_KEY_STATE_MIGRATION_SQL,
     IDENTITY_LIVE_PRESENCE_CHALLENGES_MIGRATION_SQL,
+    IDENTITY_APP_ATTEST_KEY_REGISTRATION_MIGRATION_SQL,
 ];
 
 #[cfg(feature = "postgres-adapter")]
@@ -207,6 +214,20 @@ pub struct PostgresAppAttestKeyStateRow {
     pub last_asserted_at: String,
     pub last_sign_count: i64,
     pub last_challenge_nonce: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostgresAppAttestKeyRegistrationRow {
+    pub key_id: String,
+    pub team_id: String,
+    pub bundle_id: String,
+    pub app_id: String,
+    pub environment: String,
+    pub device_ref: String,
+    pub public_key_bytes: Vec<u8>,
+    pub registered_at: String,
+    pub attestation_challenge_nonce: String,
+    pub attestation_format: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -411,6 +432,7 @@ pub enum PostgresAdapterError {
     UnknownEpisodeRelationStatusKind(String),
     UnknownAppAttestEnvironment(String),
     UnknownAppAttestKeyStatus(String),
+    InvalidAppAttestKeyRegistration,
     UnknownLivePresenceChallengeWorkflow(String),
     UnknownLivePresenceChallengeStatusKind(String),
     UnknownLivePresenceChallengeFailureReason(String),
@@ -1183,6 +1205,41 @@ impl PostgresAppAttestKeyStateStore {
         row.map(app_attest_key_state_from_pg_row).transpose()
     }
 
+    pub async fn record_app_attest_key_registration_async(
+        &self,
+        registration: &AppAttestKeyRegistration,
+    ) -> Result<AppAttestKeyRegistration, AppAttestAssertionVerificationError> {
+        validate_app_attest_key_registration(registration)?;
+        let existing = self
+            .app_attest_key_registration_async(&registration.key_id)
+            .await?;
+        match existing {
+            Some(existing) if &existing == registration => Ok(existing),
+            Some(_) => Err(AppAttestAssertionVerificationError::KeyContextMismatch),
+            None => {
+                insert_app_attest_key_registration_row(
+                    &self.pool,
+                    &PostgresAppAttestKeyRegistrationRow::try_from_registration(registration)
+                        .map_err(|_| AppAttestAssertionVerificationError::KeyStateUnavailable)?,
+                )
+                .await?;
+                Ok(registration.clone())
+            }
+        }
+    }
+
+    pub async fn app_attest_key_registration_async(
+        &self,
+        key_id: &str,
+    ) -> Result<Option<AppAttestKeyRegistration>, AppAttestAssertionVerificationError> {
+        let row = sqlx::query(SELECT_APP_ATTEST_KEY_REGISTRATION_COLUMNS_SQL)
+            .bind(key_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(app_attest_sqlx_error)?;
+        row.map(app_attest_key_registration_from_pg_row).transpose()
+    }
+
     pub async fn app_attest_challenge_nonce_seen_async(
         &self,
         key_id: &str,
@@ -1507,6 +1564,33 @@ impl AppAttestKeyStateStore for PostgresAppAttestKeyStateStore {
     }
 }
 
+#[cfg(feature = "postgres-adapter")]
+impl AppAttestKeyRegistrationStore for PostgresAppAttestKeyStateStore {
+    fn record_app_attest_key_registration(
+        &self,
+        registration: &AppAttestKeyRegistration,
+    ) -> Result<AppAttestKeyRegistration, AppAttestAssertionVerificationError> {
+        let store = self.clone();
+        let registration = registration.clone();
+        run_app_attest_store_blocking(move || async move {
+            store
+                .record_app_attest_key_registration_async(&registration)
+                .await
+        })
+    }
+
+    fn app_attest_key_registration(
+        &self,
+        key_id: &str,
+    ) -> Result<Option<AppAttestKeyRegistration>, AppAttestAssertionVerificationError> {
+        let store = self.clone();
+        let key_id = key_id.to_string();
+        run_app_attest_store_blocking(move || async move {
+            store.app_attest_key_registration_async(&key_id).await
+        })
+    }
+}
+
 impl PostgresEncryptedFactRow {
     pub fn try_from_envelope(envelope: &StoredEncryptedFact) -> Result<Self, PostgresAdapterError> {
         let append_sequence = i64::try_from(envelope.append_sequence)
@@ -1775,6 +1859,23 @@ SELECT
   last_sign_count,
   last_challenge_nonce
 FROM identity_app_attest_keys
+WHERE key_id = $1
+"#;
+
+#[cfg(feature = "postgres-adapter")]
+const SELECT_APP_ATTEST_KEY_REGISTRATION_COLUMNS_SQL: &str = r#"
+SELECT
+  key_id,
+  team_id,
+  bundle_id,
+  app_id,
+  environment,
+  device_ref,
+  public_key_bytes,
+  registered_at,
+  attestation_challenge_nonce,
+  attestation_format
+FROM identity_app_attest_key_registrations
 WHERE key_id = $1
 "#;
 
@@ -2345,6 +2446,46 @@ fn app_attest_key_state_from_pg_row(
 }
 
 #[cfg(feature = "postgres-adapter")]
+fn app_attest_key_registration_from_pg_row(
+    row: PgRow,
+) -> Result<AppAttestKeyRegistration, AppAttestAssertionVerificationError> {
+    PostgresAppAttestKeyRegistrationRow {
+        key_id: row
+            .try_get("key_id")
+            .map_err(|_| AppAttestAssertionVerificationError::KeyStateUnavailable)?,
+        team_id: row
+            .try_get("team_id")
+            .map_err(|_| AppAttestAssertionVerificationError::KeyStateUnavailable)?,
+        bundle_id: row
+            .try_get("bundle_id")
+            .map_err(|_| AppAttestAssertionVerificationError::KeyStateUnavailable)?,
+        app_id: row
+            .try_get("app_id")
+            .map_err(|_| AppAttestAssertionVerificationError::KeyStateUnavailable)?,
+        environment: row
+            .try_get("environment")
+            .map_err(|_| AppAttestAssertionVerificationError::KeyStateUnavailable)?,
+        device_ref: row
+            .try_get("device_ref")
+            .map_err(|_| AppAttestAssertionVerificationError::KeyStateUnavailable)?,
+        public_key_bytes: row
+            .try_get("public_key_bytes")
+            .map_err(|_| AppAttestAssertionVerificationError::KeyStateUnavailable)?,
+        registered_at: row
+            .try_get("registered_at")
+            .map_err(|_| AppAttestAssertionVerificationError::KeyStateUnavailable)?,
+        attestation_challenge_nonce: row
+            .try_get("attestation_challenge_nonce")
+            .map_err(|_| AppAttestAssertionVerificationError::KeyStateUnavailable)?,
+        attestation_format: row
+            .try_get("attestation_format")
+            .map_err(|_| AppAttestAssertionVerificationError::KeyStateUnavailable)?,
+    }
+    .try_into_registration()
+    .map_err(|_| AppAttestAssertionVerificationError::KeyStateUnavailable)
+}
+
+#[cfg(feature = "postgres-adapter")]
 async fn record_verified_app_attest_assertion_in_postgres(
     pool: &PgPool,
     assertion: &VerifiedAppAttestAssertion,
@@ -2408,6 +2549,44 @@ async fn record_verified_app_attest_assertion_in_postgres(
 
     transaction.commit().await.map_err(app_attest_sqlx_error)?;
     Ok(updated)
+}
+
+#[cfg(feature = "postgres-adapter")]
+async fn insert_app_attest_key_registration_row(
+    pool: &PgPool,
+    row: &PostgresAppAttestKeyRegistrationRow,
+) -> Result<(), AppAttestAssertionVerificationError> {
+    sqlx::query(
+        r#"
+        INSERT INTO identity_app_attest_key_registrations (
+          key_id,
+          team_id,
+          bundle_id,
+          app_id,
+          environment,
+          device_ref,
+          public_key_bytes,
+          registered_at,
+          attestation_challenge_nonce,
+          attestation_format
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        "#,
+    )
+    .bind(&row.key_id)
+    .bind(&row.team_id)
+    .bind(&row.bundle_id)
+    .bind(&row.app_id)
+    .bind(&row.environment)
+    .bind(&row.device_ref)
+    .bind(&row.public_key_bytes)
+    .bind(&row.registered_at)
+    .bind(&row.attestation_challenge_nonce)
+    .bind(&row.attestation_format)
+    .execute(pool)
+    .await
+    .map_err(app_attest_sqlx_error)?;
+    Ok(())
 }
 
 #[cfg(feature = "postgres-adapter")]
@@ -2720,6 +2899,9 @@ fn app_attest_sqlx_error(error: sqlx::Error) -> AppAttestAssertionVerificationEr
         if database_error.constraint() == Some("identity_app_attest_challenge_nonces_pkey") {
             return AppAttestAssertionVerificationError::ChallengeReplay;
         }
+        if database_error.constraint() == Some("identity_app_attest_key_registrations_pkey") {
+            return AppAttestAssertionVerificationError::KeyContextMismatch;
+        }
     }
     AppAttestAssertionVerificationError::KeyStateUnavailable
 }
@@ -2912,6 +3094,43 @@ impl PostgresAppAttestKeyStateRow {
             last_sign_count: self.last_sign_count as u64,
             last_challenge_nonce: self.last_challenge_nonce,
         })
+    }
+}
+
+impl PostgresAppAttestKeyRegistrationRow {
+    pub fn try_from_registration(
+        registration: &AppAttestKeyRegistration,
+    ) -> Result<Self, PostgresAdapterError> {
+        Ok(Self {
+            key_id: registration.key_id.clone(),
+            team_id: registration.team_id.clone(),
+            bundle_id: registration.bundle_id.clone(),
+            app_id: registration.app_id.clone(),
+            environment: postgres_app_attest_environment(registration.environment).to_string(),
+            device_ref: registration.device_ref.clone(),
+            public_key_bytes: registration.public_key_bytes.clone(),
+            registered_at: registration.registered_at.0.clone(),
+            attestation_challenge_nonce: registration.attestation_challenge_nonce.clone(),
+            attestation_format: registration.attestation_format.clone(),
+        })
+    }
+
+    pub fn try_into_registration(self) -> Result<AppAttestKeyRegistration, PostgresAdapterError> {
+        let registration = AppAttestKeyRegistration {
+            key_id: self.key_id,
+            team_id: self.team_id,
+            bundle_id: self.bundle_id,
+            app_id: self.app_id,
+            environment: app_attest_environment_from_postgres(&self.environment)?,
+            device_ref: self.device_ref,
+            public_key_bytes: self.public_key_bytes,
+            registered_at: Timestamp(self.registered_at),
+            attestation_challenge_nonce: self.attestation_challenge_nonce,
+            attestation_format: self.attestation_format,
+        };
+        validate_app_attest_key_registration(&registration)
+            .map_err(|_| PostgresAdapterError::InvalidAppAttestKeyRegistration)?;
+        Ok(registration)
     }
 }
 

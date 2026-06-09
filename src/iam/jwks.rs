@@ -6,15 +6,11 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
 #[derive(Debug, Clone)]
-pub struct OidcJwksSessionVerifier {
-    http_client: reqwest::blocking::Client,
-}
+pub struct OidcJwksSessionVerifier;
 
 impl OidcJwksSessionVerifier {
     pub fn new() -> Self {
-        Self {
-            http_client: reqwest::blocking::Client::new(),
-        }
+        Self
     }
 
     pub fn verify_session_with_jwks(
@@ -75,8 +71,23 @@ impl OidcJwksSessionVerifier {
             .map_err(|_| OidcSessionVerificationError::JwksFetchFailed)
     }
 
-    fn fetch_json<T: DeserializeOwned>(&self, url: &str) -> Result<T, reqwest::Error> {
-        self.http_client.get(url).send()?.error_for_status()?.json()
+    fn fetch_json<T>(&self, url: &str) -> Result<T, ()>
+    where
+        T: DeserializeOwned + Send + 'static,
+    {
+        let url = url.to_string();
+        std::thread::spawn(move || {
+            reqwest::blocking::Client::new()
+                .get(url)
+                .send()
+                .map_err(|_| ())?
+                .error_for_status()
+                .map_err(|_| ())?
+                .json()
+                .map_err(|_| ())
+        })
+        .join()
+        .unwrap_or(Err(()))
     }
 }
 

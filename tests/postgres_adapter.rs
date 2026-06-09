@@ -71,6 +71,20 @@ fn postgres_migration_pins_app_attest_key_state_table_shape() {
 }
 
 #[test]
+fn postgres_migration_pins_app_attest_key_registration_table_shape() {
+    let sql = IDENTITY_APP_ATTEST_KEY_REGISTRATION_MIGRATION_SQL;
+
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS identity_app_attest_key_registrations"));
+    assert!(sql.contains("key_id TEXT PRIMARY KEY"));
+    assert!(sql.contains("public_key_bytes BYTEA NOT NULL"));
+    assert!(sql.contains("attestation_challenge_nonce TEXT NOT NULL"));
+    assert!(sql.contains("attestation_format TEXT NOT NULL CHECK"));
+    assert!(sql.contains("'apple-app-attest'"));
+    assert!(sql.contains("identity_app_attest_key_registrations_device_idx"));
+    assert!(sql.contains("identity_app_attest_key_registrations_registered_idx"));
+}
+
+#[test]
 fn postgres_migration_pins_live_presence_challenge_table_shape() {
     let sql = IDENTITY_LIVE_PRESENCE_CHALLENGES_MIGRATION_SQL;
 
@@ -111,7 +125,8 @@ fn postgres_migration_registry_pins_ordered_versions() {
             "0001_identity_encrypted_facts",
             "0002_identity_workflow_transactions",
             "0003_identity_app_attest_key_state",
-            "0004_identity_live_presence_challenges"
+            "0004_identity_live_presence_challenges",
+            "0005_identity_app_attest_key_registration"
         ]
     );
     assert_eq!(
@@ -121,6 +136,7 @@ fn postgres_migration_registry_pins_ordered_versions() {
             IDENTITY_WORKFLOW_TRANSACTIONS_MIGRATION_SQL,
             IDENTITY_APP_ATTEST_KEY_STATE_MIGRATION_SQL,
             IDENTITY_LIVE_PRESENCE_CHALLENGES_MIGRATION_SQL,
+            IDENTITY_APP_ATTEST_KEY_REGISTRATION_MIGRATION_SQL,
         ]
     );
 }
@@ -151,6 +167,34 @@ fn postgres_app_attest_key_state_row_round_trips_labels() {
         row.try_into_key_state()
             .expect("postgres row should restore key state"),
         state
+    );
+}
+
+#[test]
+fn postgres_app_attest_key_registration_row_round_trips_labels_and_key_bytes() {
+    let registration = AppAttestKeyRegistration {
+        key_id: "app-attest-key-registration-postgres".to_string(),
+        team_id: "TEAMID1234".to_string(),
+        bundle_id: "com.fen.identity".to_string(),
+        app_id: "TEAMID1234.com.fen.identity".to_string(),
+        environment: AppAttestEnvironment::Production,
+        device_ref: "iphone-registration-postgres".to_string(),
+        public_key_bytes: vec![4, 1, 2, 3],
+        registered_at: ts("2026-05-29T00:05:00Z"),
+        attestation_challenge_nonce: "registration-nonce-postgres".to_string(),
+        attestation_format: "apple-app-attest".to_string(),
+    };
+
+    let row = PostgresAppAttestKeyRegistrationRow::try_from_registration(&registration)
+        .expect("registration should map to postgres row");
+    assert_eq!(row.environment, "production");
+    assert_eq!(row.public_key_bytes, vec![4, 1, 2, 3]);
+    assert_eq!(row.attestation_format, "apple-app-attest");
+
+    assert_eq!(
+        row.try_into_registration()
+            .expect("postgres row should restore registration"),
+        registration
     );
 }
 
@@ -747,6 +791,64 @@ fn live_postgres_app_attest_key_state_store_rejects_replay_when_env_is_set() {
                 .record_verified_app_attest_assertion_async(&after_revoke)
                 .await,
             Err(AppAttestAssertionVerificationError::KeyRevoked)
+        );
+
+        cleanup_live_app_attest_key_state(repository.pool(), &key_id).await;
+    });
+}
+
+#[cfg(feature = "postgres-adapter")]
+#[test]
+fn live_postgres_app_attest_key_registration_store_round_trips_when_env_is_set() {
+    let Ok(database_url) = std::env::var(POSTGRES_URL_ENV) else {
+        eprintln!(
+            "skipping live PostgreSQL App Attest registration test; set {POSTGRES_URL_ENV} to run it"
+        );
+        return;
+    };
+
+    sqlx::test_block_on(async {
+        let repository = SqlxPostgresEncryptedFactRepository::connect(&database_url)
+            .await
+            .expect("live PostgreSQL repository should connect");
+        run_live_postgres_migration(&repository).await;
+        let suffix = live_test_suffix();
+        let key_id = format!("app-attest-registration-live-postgres-{suffix}");
+        cleanup_live_app_attest_key_state(repository.pool(), &key_id).await;
+        let store = PostgresAppAttestKeyStateStore::from_pool(repository.pool().clone());
+        let registration = AppAttestKeyRegistration {
+            key_id: key_id.clone(),
+            team_id: "TEAMID1234".to_string(),
+            bundle_id: "com.fen.identity".to_string(),
+            app_id: "TEAMID1234.com.fen.identity".to_string(),
+            environment: AppAttestEnvironment::Development,
+            device_ref: "iphone-live-postgres-registration".to_string(),
+            public_key_bytes: vec![4, 7, 8, 9],
+            registered_at: ts("2026-05-29T00:05:00Z"),
+            attestation_challenge_nonce: "registration-nonce-live-postgres".to_string(),
+            attestation_format: "apple-app-attest".to_string(),
+        };
+
+        let stored = store
+            .record_app_attest_key_registration_async(&registration)
+            .await
+            .expect("registration should persist");
+        assert_eq!(stored, registration);
+        assert_eq!(
+            store
+                .app_attest_key_registration_async(&key_id)
+                .await
+                .expect("lookup should succeed"),
+            Some(registration.clone())
+        );
+        assert_eq!(
+            store
+                .record_app_attest_key_registration_async(&AppAttestKeyRegistration {
+                    device_ref: "different-device".to_string(),
+                    ..registration.clone()
+                })
+                .await,
+            Err(AppAttestAssertionVerificationError::KeyContextMismatch)
         );
 
         cleanup_live_app_attest_key_state(repository.pool(), &key_id).await;
@@ -2014,6 +2116,17 @@ async fn cleanup_live_app_attest_key_state(pool: &sqlx::PgPool, key_id: &str) {
     .execute(pool)
     .await
     .expect("live App Attest key cleanup should succeed");
+
+    sqlx::query(
+        r#"
+        DELETE FROM identity_app_attest_key_registrations
+        WHERE key_id = $1
+        "#,
+    )
+    .bind(key_id)
+    .execute(pool)
+    .await
+    .expect("live App Attest registration cleanup should succeed");
 }
 
 #[cfg(feature = "postgres-adapter")]

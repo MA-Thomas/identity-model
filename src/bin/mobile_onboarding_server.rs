@@ -15,22 +15,114 @@ fn main() {
 #[cfg(feature = "runtime-server")]
 mod server {
     use identity_model::*;
+    use ring::rand::SecureRandom;
     use std::env;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    type Runtime = PostgresEncryptedMobileOnboardingRuntime<
+    type AppAttestVerifier = StatefulAppAttestAssertionVerifier<
+        RuntimeAppAttestAssertionVerifier,
+        PostgresAppAttestKeyStateStore,
+    >;
+
+    type AccountRuntime = PostgresEncryptedMobileOnboardingRuntime<
         Aes256GcmFactEncryptionMetadataPlanner,
         RingAes256GcmFactEncryptor,
         OidcJwksSessionVerifier,
-        StatefulAppAttestAssertionVerifier<
-            StaticAppAttestAssertionVerifier,
-            PostgresAppAttestKeyStateStore,
-        >,
+        AppAttestVerifier,
         DeterministicIdGenerator,
         StaticFactKeyResolver,
     >;
+
+    type IdentityRuntime = PostgresEncryptedMobileIdentityOnboardingRuntime<
+        Aes256GcmFactEncryptionMetadataPlanner,
+        RingAes256GcmFactEncryptor,
+        OidcJwksSessionVerifier,
+        AppAttestVerifier,
+        PersonaIdentityProofingProvider,
+        StaticLivenessCeremonyVerifier,
+        PostgresLivePresenceChallengeStore,
+        MockPhase1ContinuityProvider,
+        DeterministicIdGenerator,
+        StaticFactKeyResolver,
+    >;
+
+    struct Runtime {
+        account: AccountRuntime,
+        identity: IdentityRuntime,
+    }
+
+    impl Runtime {
+        async fn run_migrations(&self) -> Result<(), PostgresAdapterError> {
+            self.account.run_migrations().await
+        }
+
+        async fn readiness_check(
+            &self,
+        ) -> Result<PostgresEncryptedMobileOnboardingReadiness, PostgresAdapterError> {
+            self.account.readiness_check().await
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    enum RuntimeAppAttestAssertionVerifier {
+        Static(StaticAppAttestAssertionVerifier),
+        AppleAssertion(AppleAppAttestAssertionVerifier<PostgresAppAttestKeyStateStore>),
+    }
+
+    #[derive(Debug, Clone)]
+    enum RuntimeAppAttestVerifierConfig {
+        Static(StaticAppAttestAssertionVerifier),
+        AppleAssertion {
+            expected_config: AppAttestClientConfig,
+        },
+    }
+
+    impl RuntimeAppAttestVerifierConfig {
+        fn static_verified_assertion(&self) -> Option<&VerifiedAppAttestAssertion> {
+            match self {
+                Self::Static(verifier) => Some(&verifier.verified_assertion),
+                Self::AppleAssertion { .. } => None,
+            }
+        }
+
+        fn build_verifier(
+            &self,
+            key_state_store: PostgresAppAttestKeyStateStore,
+        ) -> RuntimeAppAttestAssertionVerifier {
+            match self {
+                Self::Static(verifier) => {
+                    RuntimeAppAttestAssertionVerifier::Static(verifier.clone())
+                }
+                Self::AppleAssertion { expected_config } => {
+                    RuntimeAppAttestAssertionVerifier::AppleAssertion(
+                        AppleAppAttestAssertionVerifier::new(
+                            expected_config.clone(),
+                            key_state_store,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    impl AppAttestAssertionVerifier for RuntimeAppAttestAssertionVerifier {
+        fn verify_app_attest_assertion(
+            &self,
+            request: &AppAttestAssertionVerificationRequest,
+            observed_at: &Timestamp,
+        ) -> Result<VerifiedAppAttestAssertion, AppAttestAssertionVerificationError> {
+            match self {
+                Self::Static(verifier) => {
+                    verifier.verify_app_attest_assertion(request, observed_at)
+                }
+                Self::AppleAssertion(verifier) => {
+                    verifier.verify_app_attest_assertion(request, observed_at)
+                }
+            }
+        }
+    }
 
     pub fn run() -> Result<(), String> {
         let config = ServerConfig::from_env()?;
@@ -38,22 +130,48 @@ mod server {
             .enable_all()
             .build()
             .map_err(|error| format!("could not start async runtime: {error}"))?;
-        let runtime = tokio_runtime.block_on(build_runtime(&config))?;
+        let storage = tokio_runtime.block_on(connect_storage(&config))?;
+        let runtime = build_runtime(&config, storage);
+        if config.run_migrations {
+            tokio_runtime
+                .block_on(runtime.run_migrations())
+                .map_err(|error| format!("could not run migrations: {error:?}"))?;
+        }
 
         serve(config, runtime, &tokio_runtime)
     }
 
-    async fn build_runtime(config: &ServerConfig) -> Result<Runtime, String> {
-        let storage = SqlxPostgresEncryptedFactRepository::connect(&config.database_url)
+    async fn connect_storage(
+        config: &ServerConfig,
+    ) -> Result<SqlxPostgresEncryptedFactRepository, String> {
+        SqlxPostgresEncryptedFactRepository::connect(&config.database_url)
             .await
-            .map_err(|error| format!("could not connect to PostgreSQL: {error:?}"))?;
-        let app_attest_key_state_store =
-            PostgresAppAttestKeyStateStore::from_pool(storage.pool().clone());
+            .map_err(|error| format!("could not connect to PostgreSQL: {error:?}"))
+    }
+
+    fn build_runtime(
+        config: &ServerConfig,
+        storage: SqlxPostgresEncryptedFactRepository,
+    ) -> Runtime {
+        let pool = storage.pool().clone();
+        let app_attest_key_state_store = PostgresAppAttestKeyStateStore::from_pool(pool.clone());
+        let live_presence_challenge_store = PostgresLivePresenceChallengeStore::from_pool(pool);
         let key = FactDataEncryptionKey::active(
             config.fact_key_id.clone(),
             config.fact_key_material.clone(),
         );
-        let repository = SqlxPostgresEncryptionAwareWorkflowRepository::new(
+        let account_repository = SqlxPostgresEncryptionAwareWorkflowRepository::new(
+            storage.clone(),
+            Aes256GcmFactEncryptionMetadataPlanner::new(
+                config.fact_key_id.clone(),
+                config.fact_nonce_domain,
+                config.wrapped_dek_ref.clone(),
+            ),
+            RingAes256GcmFactEncryptor::new(),
+            key.clone(),
+            config.materialization_policy_refs.clone(),
+        );
+        let identity_repository = SqlxPostgresEncryptionAwareWorkflowRepository::new(
             storage,
             Aes256GcmFactEncryptionMetadataPlanner::new(
                 config.fact_key_id.clone(),
@@ -67,27 +185,40 @@ mod server {
         let service = IdentityWorkflowService::new(FenTranslator {
             system_author: config.authored_by.clone(),
         });
-        let runtime = PostgresEncryptedMobileOnboardingRuntime::new(
+        let account = PostgresEncryptedMobileOnboardingRuntime::new(
+            service.clone(),
+            config.authored_by.clone(),
+            OidcJwksSessionVerifier::new(),
+            StatefulAppAttestAssertionVerifier::new(
+                config
+                    .app_attest_verifier_config
+                    .build_verifier(app_attest_key_state_store.clone()),
+                app_attest_key_state_store.clone(),
+            ),
+            DeterministicIdGenerator::new(),
+            account_repository,
+            StaticFactKeyResolver::from_keys([key.clone()]),
+        );
+        let identity = PostgresEncryptedMobileIdentityOnboardingRuntime::new(
             service,
             config.authored_by.clone(),
             OidcJwksSessionVerifier::new(),
             StatefulAppAttestAssertionVerifier::new(
-                config.app_attest_verifier.clone(),
+                config
+                    .app_attest_verifier_config
+                    .build_verifier(app_attest_key_state_store.clone()),
                 app_attest_key_state_store,
             ),
+            PersonaIdentityProofingProvider::new(),
+            config.liveness_verifier.clone(),
+            live_presence_challenge_store,
+            config.continuity_provider.clone(),
             DeterministicIdGenerator::new(),
-            repository,
+            identity_repository,
             StaticFactKeyResolver::from_keys([key]),
         );
-
-        if config.run_migrations {
-            runtime
-                .run_migrations()
-                .await
-                .map_err(|error| format!("could not run migrations: {error:?}"))?;
-        }
-
-        Ok(runtime)
+        let runtime = Runtime { account, identity };
+        runtime
     }
 
     fn serve(
@@ -158,32 +289,145 @@ mod server {
                 Ok(_) => wire_json_response(503, r#"{"status":"not_ready"}"#),
                 Err(_) => wire_json_response(503, r#"{"status":"not_ready"}"#),
             },
-            _ => {
-                let context = match config.persistence_context() {
-                    Ok(context) => context,
-                    Err(error) => {
-                        return wire_json_response(
-                            500,
-                            &format!(
-                                r#"{{"status":"error","error":{{"code":"runtime_context_failed","message":"{error}"}}}}"#
-                            ),
-                        );
-                    }
-                };
-                let response = tokio_runtime.block_on(runtime.handle_http_request(
-                    MobileOnboardingHttpRequest {
-                        method: request.method,
-                        path: route_path.to_string(),
-                        body: request.body,
-                    },
-                    context,
-                ));
-                WireResponse {
-                    status_code: response.status_code,
-                    content_type: response.content_type,
-                    body: response.body,
-                }
+            (method, MOBILE_IDENTITY_ONBOARDING_LIVE_PRESENCE_CHALLENGE_HTTP_PATH) => {
+                handle_live_presence_challenge_issue_http_request(
+                    &runtime.identity.live_presence_challenge_store,
+                    method,
+                    route_path,
+                    request.body,
+                    config,
+                )
             }
+            (method, MOBILE_IDENTITY_ONBOARDING_LIVE_PRESENCE_CALLBACK_HTTP_PATH) => {
+                handle_live_presence_callback_http_request(method, route_path, request.body, config)
+            }
+            (method, MOBILE_IDENTITY_ONBOARDING_HTTP_PATH) => handle_identity_runtime_http_request(
+                &mut runtime.identity,
+                method,
+                route_path,
+                request.body,
+                config,
+                tokio_runtime,
+            ),
+            _ => handle_account_runtime_http_request(
+                &mut runtime.account,
+                &request.method,
+                route_path,
+                request.body,
+                config,
+                tokio_runtime,
+            ),
+        }
+    }
+
+    fn handle_account_runtime_http_request(
+        runtime: &mut AccountRuntime,
+        method: &str,
+        path: &str,
+        body: String,
+        config: &ServerConfig,
+        tokio_runtime: &tokio::runtime::Runtime,
+    ) -> WireResponse {
+        let context = match config.persistence_context() {
+            Ok(context) => context,
+            Err(error) => return runtime_context_error_response(error),
+        };
+        let response = tokio_runtime.block_on(runtime.handle_http_request(
+            MobileOnboardingHttpRequest {
+                method: method.to_string(),
+                path: path.to_string(),
+                body,
+            },
+            context,
+        ));
+        wire_response_from_mobile_response(response)
+    }
+
+    fn handle_live_presence_challenge_issue_http_request(
+        store: &PostgresLivePresenceChallengeStore,
+        method: &str,
+        path: &str,
+        body: String,
+        config: &ServerConfig,
+    ) -> WireResponse {
+        let issue_context = match config.live_presence_challenge_issue_context() {
+            Ok(context) => context,
+            Err(error) => return runtime_context_error_response(error),
+        };
+        let response = handle_mobile_identity_onboarding_live_presence_challenge_http_request(
+            MobileOnboardingHttpRequest {
+                method: method.to_string(),
+                path: path.to_string(),
+                body,
+            },
+            store,
+            issue_context,
+        );
+        wire_response_from_mobile_response(response)
+    }
+
+    fn handle_live_presence_callback_http_request(
+        method: &str,
+        path: &str,
+        body: String,
+        config: &ServerConfig,
+    ) -> WireResponse {
+        let context = match config.live_presence_callback_context() {
+            Ok(context) => context,
+            Err(error) => return runtime_context_error_response(error),
+        };
+        let response = handle_mobile_identity_onboarding_live_presence_callback_http_request(
+            MobileOnboardingHttpRequest {
+                method: method.to_string(),
+                path: path.to_string(),
+                body,
+            },
+            &config.liveness_callback_verifier(),
+            context,
+        );
+        wire_response_from_mobile_response(response)
+    }
+
+    fn handle_identity_runtime_http_request(
+        runtime: &mut IdentityRuntime,
+        method: &str,
+        path: &str,
+        body: String,
+        config: &ServerConfig,
+        tokio_runtime: &tokio::runtime::Runtime,
+    ) -> WireResponse {
+        let context = match config.persistence_context() {
+            Ok(context) => context,
+            Err(error) => return runtime_context_error_response(error),
+        };
+        let response = tokio_runtime.block_on(runtime.handle_http_request(
+            MobileOnboardingHttpRequest {
+                method: method.to_string(),
+                path: path.to_string(),
+                body,
+            },
+            context,
+        ));
+        wire_response_from_mobile_response(response)
+    }
+
+    fn runtime_context_error_response(error: String) -> WireResponse {
+        let body = serde_json::json!({
+            "status": "error",
+            "error": {
+                "code": "runtime_context_failed",
+                "message": error,
+            },
+        })
+        .to_string();
+        wire_json_response(500, &body)
+    }
+
+    fn wire_response_from_mobile_response(response: MobileOnboardingHttpResponse) -> WireResponse {
+        WireResponse {
+            status_code: response.status_code,
+            content_type: response.content_type,
+            body: response.body,
         }
     }
 
@@ -203,7 +447,16 @@ mod server {
         materialization_caller: Option<String>,
         materialization_purpose: Option<String>,
         transaction_id_prefix: String,
-        app_attest_verifier: StaticAppAttestAssertionVerifier,
+        app_attest_verifier_config: RuntimeAppAttestVerifierConfig,
+        liveness_verifier: StaticLivenessCeremonyVerifier,
+        continuity_provider: MockPhase1ContinuityProvider,
+        live_presence_challenge_ttl_seconds: u64,
+        live_presence_provider_name: String,
+        live_presence_handoff_uri: Option<String>,
+        live_presence_callback_path: String,
+        live_presence_retry_policy_refs: Vec<PolicyRef>,
+        live_presence_manual_review_policy_refs: Vec<PolicyRef>,
+        live_presence_retention_policy_refs: Vec<PolicyRef>,
     }
 
     impl ServerConfig {
@@ -238,7 +491,31 @@ mod server {
                     .or_else(|| Some("mobile-onboarding-summary".to_string()));
             let transaction_id_prefix = optional_env("IDENTITY_MODEL_TRANSACTION_ID_PREFIX")
                 .unwrap_or_else(|| "tx-mobile-onboarding".to_string());
-            let app_attest_verifier = app_attest_verifier_from_env()?;
+            let app_attest_verifier_config = app_attest_verifier_config_from_env()?;
+            let liveness_verifier = liveness_verifier_from_env(&app_attest_verifier_config)?;
+            let continuity_provider = MockPhase1ContinuityProvider::successful();
+            let live_presence_challenge_ttl_seconds =
+                u64_env("IDENTITY_MODEL_LIVE_PRESENCE_CHALLENGE_TTL_SECONDS", 300)?;
+            let live_presence_provider_name = liveness_verifier
+                .verified_ceremony
+                .provider_metadata
+                .provider_name
+                .clone();
+            let live_presence_handoff_uri =
+                optional_env("IDENTITY_MODEL_LIVE_PRESENCE_HANDOFF_URI");
+            let live_presence_callback_path =
+                optional_env("IDENTITY_MODEL_LIVE_PRESENCE_CALLBACK_PATH").unwrap_or_else(|| {
+                    MOBILE_IDENTITY_ONBOARDING_LIVE_PRESENCE_CALLBACK_HTTP_PATH.to_string()
+                });
+            let live_presence_retry_policy_refs =
+                optional_policy_refs_env("IDENTITY_MODEL_LIVE_PRESENCE_RETRY_POLICY_REFS")?
+                    .unwrap_or_else(|| vec![Id("live-presence-retry@v1".to_string())]);
+            let live_presence_manual_review_policy_refs =
+                optional_policy_refs_env("IDENTITY_MODEL_LIVE_PRESENCE_MANUAL_REVIEW_POLICY_REFS")?
+                    .unwrap_or_else(|| vec![Id("live-presence-manual-review@v1".to_string())]);
+            let live_presence_retention_policy_refs =
+                optional_policy_refs_env("IDENTITY_MODEL_LIVE_PRESENCE_RETENTION_POLICY_REFS")?
+                    .unwrap_or_else(|| vec![Id("live-presence-retention@v1".to_string())]);
 
             Ok(Self {
                 bind_addr,
@@ -255,7 +532,16 @@ mod server {
                 materialization_caller,
                 materialization_purpose,
                 transaction_id_prefix,
-                app_attest_verifier,
+                app_attest_verifier_config,
+                liveness_verifier,
+                continuity_provider,
+                live_presence_challenge_ttl_seconds,
+                live_presence_provider_name,
+                live_presence_handoff_uri,
+                live_presence_callback_path,
+                live_presence_retry_policy_refs,
+                live_presence_manual_review_policy_refs,
+                live_presence_retention_policy_refs,
             })
         }
 
@@ -280,16 +566,75 @@ mod server {
                 ),
             })
         }
+
+        fn live_presence_challenge_issue_context(
+            &self,
+        ) -> Result<MobileLivePresenceChallengeIssueContext, String> {
+            let (issued_at, nanos) = now_timestamp_and_nanos()?;
+            let issued_at_seconds = timestamp_to_unix_seconds(&issued_at)
+                .map_err(|_| "could not parse generated live-presence issued_at".to_string())?;
+            let expires_at = unix_seconds_to_timestamp(
+                issued_at_seconds + self.live_presence_challenge_ttl_seconds as i64,
+            );
+            Ok(MobileLivePresenceChallengeIssueContext {
+                challenge_id: Id(format!("live-presence-{nanos}")),
+                challenge_nonce: generate_live_presence_challenge_nonce()?,
+                issued_at,
+                expires_at,
+                provider_name: self.live_presence_provider_name.clone(),
+                handoff_uri: self.live_presence_handoff_uri.clone(),
+                callback_path: self.live_presence_callback_path.clone(),
+                retry_policy_refs: self.live_presence_retry_policy_refs.clone(),
+                manual_review_policy_refs: self.live_presence_manual_review_policy_refs.clone(),
+                retention_policy_refs: self.live_presence_retention_policy_refs.clone(),
+            })
+        }
+
+        fn live_presence_callback_context(
+            &self,
+        ) -> Result<MobileLivePresenceCallbackContext, String> {
+            let (observed_at, _) = now_timestamp_and_nanos()?;
+            Ok(MobileLivePresenceCallbackContext { observed_at })
+        }
+
+        fn liveness_callback_verifier(&self) -> StaticLivenessProviderCallbackVerifier {
+            StaticLivenessProviderCallbackVerifier::new(
+                self.live_presence_provider_name.clone(),
+                self.liveness_verifier.expected_assertion.clone(),
+            )
+        }
     }
 
-    fn app_attest_verifier_from_env() -> Result<StaticAppAttestAssertionVerifier, String> {
-        let config = AppAttestClientConfig::ios_app(
+    fn app_attest_verifier_config_from_env() -> Result<RuntimeAppAttestVerifierConfig, String> {
+        match optional_env("IDENTITY_MODEL_APP_ATTEST_VERIFIER")
+            .unwrap_or_else(|| "static".to_string())
+            .as_str()
+        {
+            "static" => Ok(RuntimeAppAttestVerifierConfig::Static(
+                static_app_attest_verifier_from_env()?,
+            )),
+            "apple_assertion" | "apple" => Ok(RuntimeAppAttestVerifierConfig::AppleAssertion {
+                expected_config: app_attest_config_from_env()?,
+            }),
+            other => Err(format!(
+                "IDENTITY_MODEL_APP_ATTEST_VERIFIER must be static or apple_assertion; got {other}"
+            )),
+        }
+    }
+
+    fn app_attest_config_from_env() -> Result<AppAttestClientConfig, String> {
+        Ok(AppAttestClientConfig::ios_app(
             required_env("IDENTITY_MODEL_APP_ATTEST_TEAM_ID")?,
             required_env("IDENTITY_MODEL_APP_ATTEST_BUNDLE_ID")?,
             app_attest_environment_env("IDENTITY_MODEL_APP_ATTEST_ENVIRONMENT")?,
-        );
+        ))
+    }
+
+    fn static_app_attest_verifier_from_env() -> Result<StaticAppAttestAssertionVerifier, String> {
+        let config = app_attest_config_from_env()?;
         let expected_assertion = required_env("IDENTITY_MODEL_APP_ATTEST_EXPECTED_ASSERTION")?;
-        let challenge_nonce = required_env("IDENTITY_MODEL_APP_ATTEST_CHALLENGE_NONCE")?;
+        let challenge_nonce = optional_env("IDENTITY_MODEL_APP_ATTEST_CHALLENGE_NONCE")
+            .unwrap_or_else(|| "static-app-attest-template-nonce".to_string());
         Ok(StaticAppAttestAssertionVerifier::new(
             expected_assertion,
             VerifiedAppAttestAssertion {
@@ -308,7 +653,80 @@ mod server {
                     AssuranceLevel::Medium,
                 )?,
             },
-        ))
+        )
+        .with_request_challenge_nonce())
+    }
+
+    fn liveness_verifier_from_env(
+        app_attest_verifier: &RuntimeAppAttestVerifierConfig,
+    ) -> Result<StaticLivenessCeremonyVerifier, String> {
+        let app_attest = app_attest_verifier.static_verified_assertion();
+        let expected_assertion = optional_env("IDENTITY_MODEL_LIVENESS_EXPECTED_ASSERTION")
+            .unwrap_or_else(|| "valid-live-presence-assertion".to_string());
+        let provider_name = optional_env("IDENTITY_MODEL_LIVENESS_PROVIDER_NAME")
+            .unwrap_or_else(|| "StaticLivePresenceProvider".to_string());
+        let provider_event_id = optional_env("IDENTITY_MODEL_LIVENESS_PROVIDER_EVENT_ID");
+        let provider_subject_ref = optional_env("IDENTITY_MODEL_LIVENESS_PROVIDER_SUBJECT_REF");
+        let sdk_or_api_version = optional_env("IDENTITY_MODEL_LIVENESS_SDK_OR_API_VERSION");
+        let challenge_nonce = optional_env("IDENTITY_MODEL_LIVENESS_CHALLENGE_NONCE")
+            .or_else(|| app_attest.map(|assertion| assertion.challenge_nonce.clone()))
+            .ok_or_else(|| {
+                "IDENTITY_MODEL_LIVENESS_CHALLENGE_NONCE is required for apple_assertion App Attest mode"
+                    .to_string()
+            })?;
+        let device_ref = optional_env("IDENTITY_MODEL_LIVENESS_DEVICE_REF")
+            .or_else(|| app_attest.map(|assertion| assertion.device_ref.clone()))
+            .ok_or_else(|| {
+                "IDENTITY_MODEL_LIVENESS_DEVICE_REF is required for apple_assertion App Attest mode"
+                    .to_string()
+            })?;
+        let observed_at = optional_env("IDENTITY_MODEL_LIVENESS_OBSERVED_AT")
+            .map(Timestamp)
+            .or_else(|| app_attest.map(|assertion| assertion.asserted_at.clone()))
+            .ok_or_else(|| {
+                "IDENTITY_MODEL_LIVENESS_OBSERVED_AT is required for apple_assertion App Attest mode"
+                    .to_string()
+            })?;
+        let expires_at = optional_env("IDENTITY_MODEL_LIVENESS_EXPIRES_AT")
+            .map(Timestamp)
+            .or_else(|| app_attest.map(|assertion| assertion.expires_at.clone()))
+            .ok_or_else(|| {
+                "IDENTITY_MODEL_LIVENESS_EXPIRES_AT is required for apple_assertion App Attest mode"
+                    .to_string()
+            })?;
+        let retention_policy_refs =
+            optional_policy_refs_env("IDENTITY_MODEL_LIVENESS_RETENTION_POLICY_REFS")?
+                .unwrap_or_else(|| vec![Id("live-presence-retention@v1".to_string())]);
+
+        Ok(StaticLivenessCeremonyVerifier::new(
+            expected_assertion,
+            VerifiedLivenessCeremony {
+                provider_metadata: ContinuityProviderMetadata {
+                    provider_name,
+                    provider_event_id,
+                    provider_subject_ref,
+                    sdk_or_api_version,
+                },
+                challenge_nonce,
+                device_ref,
+                observed_at,
+                expires_at,
+                result: identity_witness_result_env(
+                    "IDENTITY_MODEL_LIVENESS_RESULT",
+                    IdentityWitnessResult::Passed,
+                )?,
+                assurance_level: assurance_level_env(
+                    "IDENTITY_MODEL_LIVENESS_ASSURANCE_LEVEL",
+                    AssuranceLevel::High,
+                )?,
+                pad_result: pad_result_env(
+                    "IDENTITY_MODEL_LIVENESS_PAD_RESULT",
+                    PresentationAttackDetectionResult::Passed,
+                )?,
+                retention_policy_refs,
+            },
+        )
+        .with_request_challenge_nonce())
     }
 
     #[derive(Debug, Clone)]
@@ -494,6 +912,23 @@ mod server {
         Ok(refs)
     }
 
+    fn optional_policy_refs_env(name: &'static str) -> Result<Option<Vec<PolicyRef>>, String> {
+        optional_env(name)
+            .map(|value| {
+                let refs = value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| Id(value.to_string()))
+                    .collect::<Vec<_>>();
+                if refs.is_empty() {
+                    return Err(format!("{name} must contain at least one policy ref"));
+                }
+                Ok(refs)
+            })
+            .transpose()
+    }
+
     fn fact_key_material_env() -> Result<Vec<u8>, String> {
         if let Some(value) = optional_env("IDENTITY_MODEL_FACT_KEY_MATERIAL_HEX") {
             let bytes = decode_hex(&value)?;
@@ -540,6 +975,24 @@ mod server {
         Ok(bytes)
     }
 
+    fn generate_live_presence_challenge_nonce() -> Result<String, String> {
+        let rng = ring::rand::SystemRandom::new();
+        let mut bytes = [0_u8; 32];
+        rng.fill(&mut bytes)
+            .map_err(|_| "could not generate live-presence challenge nonce".to_string())?;
+        Ok(encode_hex(&bytes))
+    }
+
+    fn encode_hex(bytes: &[u8]) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut output = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            output.push(HEX[(byte >> 4) as usize] as char);
+            output.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+        output
+    }
+
     fn hex_nibble(byte: u8) -> Result<u8, String> {
         match byte {
             b'0'..=b'9' => Ok(byte - b'0'),
@@ -570,6 +1023,37 @@ mod server {
             Some("very_high") => Ok(AssuranceLevel::VeryHigh),
             Some(other) => Err(format!(
                 "{name} must be low, medium, high, or very_high; got {other}"
+            )),
+            None => Ok(default),
+        }
+    }
+
+    fn identity_witness_result_env(
+        name: &'static str,
+        default: IdentityWitnessResult,
+    ) -> Result<IdentityWitnessResult, String> {
+        match optional_env(name).as_deref() {
+            Some("passed") => Ok(IdentityWitnessResult::Passed),
+            Some("failed") => Ok(IdentityWitnessResult::Failed),
+            Some("inconclusive") => Ok(IdentityWitnessResult::Inconclusive),
+            Some(other) => Err(format!(
+                "{name} must be passed, failed, or inconclusive; got {other}"
+            )),
+            None => Ok(default),
+        }
+    }
+
+    fn pad_result_env(
+        name: &'static str,
+        default: PresentationAttackDetectionResult,
+    ) -> Result<PresentationAttackDetectionResult, String> {
+        match optional_env(name).as_deref() {
+            Some("passed") => Ok(PresentationAttackDetectionResult::Passed),
+            Some("failed") => Ok(PresentationAttackDetectionResult::Failed),
+            Some("inconclusive") => Ok(PresentationAttackDetectionResult::Inconclusive),
+            Some("not_performed") => Ok(PresentationAttackDetectionResult::NotPerformed),
+            Some(other) => Err(format!(
+                "{name} must be passed, failed, inconclusive, or not_performed; got {other}"
             )),
             None => Ok(default),
         }

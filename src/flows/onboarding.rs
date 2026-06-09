@@ -227,7 +227,7 @@ pub struct OnboardingIdentityWitnessesRequest {
     pub authored_by: Author,
     pub started_at: Timestamp,
     pub id_plan: WorkflowIdPlan,
-    pub government_id: GovernmentIdWitnessInput,
+    pub identity_proofing: VerifiedIdentityProofingEvidence,
     pub liveness: VerifiedLivenessCeremony,
 }
 
@@ -486,32 +486,76 @@ pub fn onboarding_identity_witnesses_slice_from_request(
         request.started_at.clone(),
     );
 
-    let mut government_id = translator.identity_witness_recorded(
+    let proofing_external_refs = request.identity_proofing.external_refs();
+    let proofing_source_system = Some(request.identity_proofing.source_system());
+    let mut drafts = Vec::new();
+    let mut roles = Vec::new();
+
+    let mut identity_proofing = translator.identity_witness_recorded(
         request.subject_id.clone(),
-        request.started_at.clone(),
-        IdentityWitnessType::GovernmentIdVerification,
+        request.identity_proofing.verified_at.clone(),
+        request.identity_proofing.identity_witness_type(),
         request.subject_id.clone(),
-        request.government_id.assurance_level,
-        request.government_id.evidence_ref.clone(),
-        request.government_id.expires_at.clone(),
-        request.government_id.source_system.clone(),
+        request.identity_proofing.assurance_level,
+        request.identity_proofing.evidence_ref.clone(),
+        request.identity_proofing.expires_at.clone(),
+        proofing_source_system.clone(),
     );
-    government_id.external_refs = request.government_id.external_refs();
-    if !request.government_id.retention_policy_refs.is_empty() {
-        if let FactPayload::IdentityWitnessRecorded { context, .. } = &mut government_id.payload {
-            context.retention_policy_refs = request.government_id.retention_policy_refs.clone();
-        }
+    identity_proofing.external_refs = proofing_external_refs.clone();
+    if let FactPayload::IdentityWitnessRecorded { context, .. } = &mut identity_proofing.payload {
+        *context = request.identity_proofing.identity_witness_context();
+    }
+    drafts.push(identity_proofing);
+    roles.push(FactRole::IdentityWitness);
+
+    for asserted_attribute in &request.identity_proofing.asserted_attributes {
+        let mut attribute = translator.identity_attribute_asserted(
+            request.subject_id.clone(),
+            request.identity_proofing.verified_at.clone(),
+            asserted_attribute.attribute.clone(),
+            asserted_attribute.value.clone(),
+            asserted_attribute.confidence,
+            proofing_source_system.clone(),
+        );
+        attribute.external_refs = proofing_external_refs.clone();
+        drafts.push(attribute);
+        roles.push(FactRole::IdentityWitness);
     }
 
-    let liveness = translator.selfie_liveness_witness_recorded(
-        request.subject_id.clone(),
-        request.liveness,
-    );
+    for risk_signal in request
+        .identity_proofing
+        .risk_signals
+        .iter()
+        .filter(|signal| signal.affects_policy)
+    {
+        let mut risk = translator.risk_evaluation(
+            request.subject_id.clone(),
+            request.identity_proofing.verified_at.clone(),
+            risk_signal.action,
+            risk_signal.result,
+            risk_signal.required_assurance,
+        );
+        risk.provenance.source_system = proofing_source_system.clone();
+        risk.external_refs = proofing_external_refs.clone();
+        risk.external_refs.push(ExternalRef {
+            system: ExternalSystem::Other(request.identity_proofing.provider_name.clone()),
+            resource_type: Some("identity_proofing_risk_signal".to_string()),
+            resource_id: risk_signal.signal_type.clone(),
+            uri: None,
+        });
+        drafts.push(risk);
+        roles.push(FactRole::RiskSignal);
+    }
+
+    let liveness =
+        translator.selfie_liveness_witness_recorded(request.subject_id.clone(), request.liveness);
+    drafts.push(liveness);
+    roles.push(FactRole::IdentityWitness);
 
     slice_from_drafts_with_id_plan(
         episode,
-        vec![government_id, liveness],
-        vec![FactRole::IdentityWitness, FactRole::IdentityWitness],
+        drafts,
+        roles,
         request.authored_by,
         request.started_at,
         &request.id_plan,

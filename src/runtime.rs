@@ -1,6 +1,7 @@
 use crate::device::*;
 use crate::fen::*;
 use crate::iam::*;
+use crate::identity_proofing::*;
 use crate::ids::*;
 use crate::liveness::*;
 use crate::mobile::*;
@@ -21,11 +22,12 @@ pub struct PostgresEncryptedMobileOnboardingRuntime<M, E, O, A, I, K> {
 }
 
 #[cfg(all(feature = "mobile-http", feature = "postgres-adapter"))]
-pub struct PostgresEncryptedMobileIdentityOnboardingRuntime<M, E, O, A, L, C, P, I, K> {
+pub struct PostgresEncryptedMobileIdentityOnboardingRuntime<M, E, O, A, G, L, C, P, I, K> {
     pub service: IdentityWorkflowService,
     pub authored_by: Author,
     pub oidc_verifier: O,
     pub app_attest_verifier: A,
+    pub identity_proofing_provider: G,
     pub liveness_verifier: L,
     pub live_presence_challenge_store: C,
     pub continuity_provider: P,
@@ -58,14 +60,15 @@ impl<M, E, O, A, I, K> PostgresEncryptedMobileOnboardingRuntime<M, E, O, A, I, K
 }
 
 #[cfg(all(feature = "mobile-http", feature = "postgres-adapter"))]
-impl<M, E, O, A, L, C, P, I, K>
-    PostgresEncryptedMobileIdentityOnboardingRuntime<M, E, O, A, L, C, P, I, K>
+impl<M, E, O, A, G, L, C, P, I, K>
+    PostgresEncryptedMobileIdentityOnboardingRuntime<M, E, O, A, G, L, C, P, I, K>
 {
     pub fn new(
         service: IdentityWorkflowService,
         authored_by: Author,
         oidc_verifier: O,
         app_attest_verifier: A,
+        identity_proofing_provider: G,
         liveness_verifier: L,
         live_presence_challenge_store: C,
         continuity_provider: P,
@@ -78,6 +81,7 @@ impl<M, E, O, A, L, C, P, I, K>
             authored_by,
             oidc_verifier,
             app_attest_verifier,
+            identity_proofing_provider,
             liveness_verifier,
             live_presence_challenge_store,
             continuity_provider,
@@ -141,13 +145,14 @@ where
 }
 
 #[cfg(all(feature = "mobile-http", feature = "postgres-adapter"))]
-impl<M, E, O, A, L, C, P, I, K>
-    PostgresEncryptedMobileIdentityOnboardingRuntime<M, E, O, A, L, C, P, I, K>
+impl<M, E, O, A, G, L, C, P, I, K>
+    PostgresEncryptedMobileIdentityOnboardingRuntime<M, E, O, A, G, L, C, P, I, K>
 where
     M: FactEncryptionMetadataPlanner,
     E: FactPayloadEncryptor,
     O: OidcSessionVerifier,
     A: AppAttestAssertionVerifier,
+    G: IdentityProofingProvider,
     L: LivenessCeremonyVerifier,
     C: LivePresenceChallengeStore,
     P: ContinuityVaultProvider,
@@ -165,6 +170,7 @@ where
             self.authored_by.clone(),
             &self.oidc_verifier,
             &self.app_attest_verifier,
+            &self.identity_proofing_provider,
             &self.liveness_verifier,
             &self.live_presence_challenge_store,
             &self.continuity_provider,

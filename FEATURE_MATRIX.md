@@ -39,6 +39,15 @@ cargo test --features postgres-adapter \
   -- --nocapture
 ```
 
+PostgreSQL App Attest key registration:
+
+```sh
+IDENTITY_MODEL_POSTGRES_URL="postgres://USER:PASSWORD@127.0.0.1:5432/DATABASE" \
+cargo test --features postgres-adapter \
+  live_postgres_app_attest_key_registration_store_round_trips_when_env_is_set \
+  -- --nocapture
+```
+
 Keycloak/OIDC:
 
 ```sh
@@ -64,6 +73,20 @@ Runtime server compile path:
 ```sh
 cargo check --features runtime-server --bin mobile_onboarding_server
 ```
+
+Runtime server identity-onboarding E2E:
+
+```sh
+IDENTITY_MODEL_POSTGRES_URL="postgres://USER:PASSWORD@127.0.0.1:5432/DATABASE" \
+IDENTITY_MODEL_KEYCLOAK_ISSUER="http://127.0.0.1:8080/realms/fen-dev" \
+IDENTITY_MODEL_KEYCLOAK_CLIENT_ID="fen-identity-dev" \
+IDENTITY_MODEL_KEYCLOAK_TOKEN="$TOKEN" \
+cargo test --features runtime-server \
+  live_runtime_server_identity_onboarding_e2e_when_env_is_set \
+  -- --nocapture
+```
+
+See `LOCAL_BACKEND_E2E.md` for the full local setup.
 
 ## Boundary Rule
 

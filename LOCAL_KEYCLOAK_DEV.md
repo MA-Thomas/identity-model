@@ -87,13 +87,14 @@ Inside the `fen-dev` realm:
 1. Go to **Users**.
 2. Choose **Create new user**.
 3. Set **Username** to `marcus`.
-4. Set **Email** to any test email.
-5. Turn **Email verified** on if you want the FEN flow to emit a verified-email identity attribute fact.
-6. Save.
-7. Open the **Credentials** tab.
-8. Set a password, for example `local-password`.
-9. Turn **Temporary** off.
-10. Save.
+4. Set **First name** and **Last name** to any local test values, for example `Marcus` and `Dev`.
+5. Set **Email** to any test email.
+6. Turn **Email verified** on if you want the FEN flow to emit a verified-email identity attribute fact.
+7. Save.
+8. Open the **Credentials** tab.
+9. Set a password, for example `local-password`.
+10. Turn **Temporary** off.
+11. Save.
 
 ## 5. Get A Token
 
@@ -147,6 +148,10 @@ If it passes, the repo has proven that it can:
 ### The Token Is Empty
 
 Check that the user password is not temporary, the username/password are correct, and **Direct access grants** is enabled for the client.
+
+### Account Is Not Fully Set Up
+
+Set first name, last name, email, and a non-temporary password for the local user, then request a fresh token.
 
 ### Issuer Mismatch
 

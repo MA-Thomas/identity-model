@@ -60,6 +60,62 @@ fn live_presence_challenge_consumes_passed_ceremony_once() {
 }
 
 #[test]
+fn liveness_provider_callback_verifier_maps_normalized_result_without_raw_media() {
+    let verifier = StaticLivenessProviderCallbackVerifier::new(
+        "MockLivePresenceProvider",
+        "valid-callback-assertion",
+    );
+
+    let verified = verifier
+        .verify_liveness_provider_callback(
+            LivenessProviderCallbackVerificationRequest {
+                provider_metadata: ContinuityProviderMetadata {
+                    provider_name: "MockLivePresenceProvider".to_string(),
+                    provider_event_id: Some("callback-event-1".to_string()),
+                    provider_subject_ref: Some("callback-subject-1".to_string()),
+                    sdk_or_api_version: Some("mock-live-presence-v1".to_string()),
+                },
+                assertion: "valid-callback-assertion".to_string(),
+                challenge_nonce: "callback-nonce-1".to_string(),
+                device_ref: "iphone-callback-device".to_string(),
+                observed_at: ts("2026-05-29T00:05:10Z"),
+                expires_at: ts("2026-05-29T00:06:00Z"),
+                result: IdentityWitnessResult::Inconclusive,
+                assurance_level: AssuranceLevel::Medium,
+                pad_result: PresentationAttackDetectionResult::Inconclusive,
+                retention_policy_refs: vec![id("live-presence-retention@v1")],
+            },
+            &ts("2026-05-29T00:05:30Z"),
+        )
+        .expect("normalized callback evidence should verify");
+
+    assert_eq!(verified.challenge_nonce, "callback-nonce-1");
+    assert_eq!(verified.device_ref, "iphone-callback-device");
+    assert_eq!(verified.result, IdentityWitnessResult::Inconclusive);
+    assert_eq!(
+        verified.pad_result,
+        PresentationAttackDetectionResult::Inconclusive
+    );
+    assert_eq!(
+        verified.external_refs(),
+        vec![
+            ExternalRef {
+                system: ExternalSystem::ContinuityProvider,
+                resource_type: Some("liveness_ceremony_event".to_string()),
+                resource_id: "callback-event-1".to_string(),
+                uri: None,
+            },
+            ExternalRef {
+                system: ExternalSystem::ContinuityProvider,
+                resource_type: Some("liveness_provider_subject".to_string()),
+                resource_id: "callback-subject-1".to_string(),
+                uri: None,
+            },
+        ]
+    );
+}
+
+#[test]
 fn live_presence_challenge_records_expiry_and_wrong_device_failures() {
     let subject_id = id("subject-live-presence-expiry");
     let evidence = mobile_evidence_fixture(

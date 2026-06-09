@@ -1,8 +1,9 @@
+use crate::continuity::*;
 use crate::device::*;
 use crate::fen::*;
-use crate::flows::*;
 use crate::iam::*;
 use crate::identity::*;
+use crate::identity_proofing::*;
 use crate::ids::*;
 use crate::liveness::*;
 use crate::mobile::*;
@@ -14,6 +15,10 @@ use serde::{Deserialize, Serialize};
 pub const MOBILE_ONBOARDING_HTTP_METHOD: &str = "POST";
 pub const MOBILE_ONBOARDING_HTTP_PATH: &str = "/mobile/onboarding";
 pub const MOBILE_IDENTITY_ONBOARDING_HTTP_PATH: &str = "/mobile/identity-onboarding";
+pub const MOBILE_IDENTITY_ONBOARDING_LIVE_PRESENCE_CHALLENGE_HTTP_PATH: &str =
+    "/mobile/identity-onboarding/live-presence-challenge";
+pub const MOBILE_IDENTITY_ONBOARDING_LIVE_PRESENCE_CALLBACK_HTTP_PATH: &str =
+    "/mobile/identity-onboarding/live-presence-callback";
 pub const APPLICATION_JSON: &str = "application/json";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,6 +170,7 @@ pub fn handle_mobile_identity_onboarding_http_request(
     authored_by: Author,
     oidc_verifier: &impl OidcSessionVerifier,
     app_attest_verifier: &impl AppAttestAssertionVerifier,
+    identity_proofing_provider: &impl IdentityProofingProvider,
     liveness_verifier: &impl LivenessCeremonyVerifier,
     live_presence_challenge_store: &impl LivePresenceChallengeStore,
     continuity_provider: &impl ContinuityVaultProvider,
@@ -181,6 +187,7 @@ pub fn handle_mobile_identity_onboarding_http_request(
         command,
         oidc_verifier,
         app_attest_verifier,
+        identity_proofing_provider,
         liveness_verifier,
         live_presence_challenge_store,
         continuity_provider,
@@ -198,12 +205,81 @@ pub fn handle_mobile_identity_onboarding_http_request(
     }
 }
 
+pub fn handle_mobile_identity_onboarding_live_presence_challenge_http_request(
+    request: MobileOnboardingHttpRequest,
+    live_presence_challenge_store: &impl LivePresenceChallengeStore,
+    issue_context: MobileLivePresenceChallengeIssueContext,
+) -> MobileOnboardingHttpResponse {
+    let (parsed, request_id) = match live_presence_challenge_issue_from_http_request(request) {
+        Ok(parsed) => parsed,
+        Err(response) => return response,
+    };
+
+    let mut challenge = LivePresenceChallenge::onboarding(
+        issue_context.challenge_id.clone(),
+        issue_context.challenge_nonce.clone(),
+        parsed.subject_id.map(Id),
+        parsed.expected_device_ref,
+        Some(parsed.expected_app.into_expected_app()),
+        issue_context.issued_at.clone(),
+        issue_context.expires_at.clone(),
+    );
+    challenge.retry_policy_refs = issue_context.retry_policy_refs.clone();
+    challenge.manual_review_policy_refs = issue_context.manual_review_policy_refs.clone();
+    challenge.retention_policy_refs = issue_context.retention_policy_refs.clone();
+
+    match live_presence_challenge_store.issue_live_presence_challenge(challenge) {
+        Ok(challenge) => json_response(
+            200,
+            MobileLivePresenceChallengeIssueHttpResponseBody::Issued {
+                challenge: MobileLivePresenceChallengeHttpSummary::from_challenge(
+                    challenge,
+                    &issue_context,
+                ),
+                request_id,
+            },
+        ),
+        Err(error) => live_presence_challenge_issue_error_response(error),
+    }
+}
+
+pub fn handle_mobile_identity_onboarding_live_presence_callback_http_request(
+    request: MobileOnboardingHttpRequest,
+    callback_verifier: &impl LivenessProviderCallbackVerifier,
+    callback_context: MobileLivePresenceCallbackContext,
+) -> MobileOnboardingHttpResponse {
+    let (parsed, request_id) = match live_presence_callback_from_http_request(request) {
+        Ok(parsed) => parsed,
+        Err(response) => return response,
+    };
+    let liveness_assertion = parsed.assertion.clone();
+
+    match callback_verifier.verify_liveness_provider_callback(
+        parsed.into_callback_request(),
+        &callback_context.observed_at,
+    ) {
+        Ok(ceremony) => json_response(
+            200,
+            MobileLivePresenceCallbackHttpResponseBody::Verified {
+                liveness: MobileLivePresenceCallbackLivenessHttpInput::from_ceremony(
+                    &ceremony,
+                    liveness_assertion,
+                ),
+                ceremony: MobileLivePresenceCallbackHttpSummary::from_ceremony(ceremony),
+                request_id,
+            },
+        ),
+        Err(error) => live_presence_callback_error_response(error),
+    }
+}
+
 pub fn handle_encrypted_mobile_identity_onboarding_http_request<R, M, E>(
     request: MobileOnboardingHttpRequest,
     service: &IdentityWorkflowService,
     authored_by: Author,
     oidc_verifier: &impl OidcSessionVerifier,
     app_attest_verifier: &impl AppAttestAssertionVerifier,
+    identity_proofing_provider: &impl IdentityProofingProvider,
     liveness_verifier: &impl LivenessCeremonyVerifier,
     live_presence_challenge_store: &impl LivePresenceChallengeStore,
     continuity_provider: &impl ContinuityVaultProvider,
@@ -227,6 +303,7 @@ where
         command,
         oidc_verifier,
         app_attest_verifier,
+        identity_proofing_provider,
         liveness_verifier,
         live_presence_challenge_store,
         continuity_provider,
@@ -253,6 +330,7 @@ pub async fn handle_postgres_encrypted_mobile_identity_onboarding_http_request<M
     authored_by: Author,
     oidc_verifier: &impl OidcSessionVerifier,
     app_attest_verifier: &impl AppAttestAssertionVerifier,
+    identity_proofing_provider: &impl IdentityProofingProvider,
     liveness_verifier: &impl LivenessCeremonyVerifier,
     live_presence_challenge_store: &impl LivePresenceChallengeStore,
     continuity_provider: &impl ContinuityVaultProvider,
@@ -275,6 +353,7 @@ where
         command,
         oidc_verifier,
         app_attest_verifier,
+        identity_proofing_provider,
         liveness_verifier,
         live_presence_challenge_store,
         continuity_provider,
@@ -356,6 +435,82 @@ fn identity_command_from_http_request(
         })?;
 
     Ok(parsed.into_command_request(authored_by))
+}
+
+fn live_presence_challenge_issue_from_http_request(
+    request: MobileOnboardingHttpRequest,
+) -> Result<
+    (
+        MobileLivePresenceChallengeIssueHttpRequestBody,
+        Option<String>,
+    ),
+    MobileOnboardingHttpResponse,
+> {
+    if request.path != MOBILE_IDENTITY_ONBOARDING_LIVE_PRESENCE_CHALLENGE_HTTP_PATH {
+        return Err(live_presence_challenge_issue_error_response_with_code(
+            404,
+            "not_found",
+            "mobile identity live-presence challenge endpoint not found",
+        ));
+    }
+    if request.method != MOBILE_ONBOARDING_HTTP_METHOD {
+        return Err(live_presence_challenge_issue_error_response_with_code(
+            405,
+            "method_not_allowed",
+            "mobile identity live-presence challenge issuance accepts POST requests",
+        ));
+    }
+
+    let parsed =
+        serde_json::from_str::<MobileLivePresenceChallengeIssueHttpRequestBody>(&request.body)
+            .map_err(|_| {
+                live_presence_challenge_issue_error_response_with_code(
+                    400,
+                    "invalid_request_json",
+                    "request body must be valid live-presence challenge JSON",
+                )
+            })?;
+    let request_id = parsed
+        .client_context
+        .as_ref()
+        .and_then(|context| context.request_id.clone());
+
+    Ok((parsed, request_id))
+}
+
+fn live_presence_callback_from_http_request(
+    request: MobileOnboardingHttpRequest,
+) -> Result<(MobileLivePresenceCallbackHttpRequestBody, Option<String>), MobileOnboardingHttpResponse>
+{
+    if request.path != MOBILE_IDENTITY_ONBOARDING_LIVE_PRESENCE_CALLBACK_HTTP_PATH {
+        return Err(live_presence_callback_error_response_with_code(
+            404,
+            "not_found",
+            "mobile identity live-presence callback endpoint not found",
+        ));
+    }
+    if request.method != MOBILE_ONBOARDING_HTTP_METHOD {
+        return Err(live_presence_callback_error_response_with_code(
+            405,
+            "method_not_allowed",
+            "mobile identity live-presence callback accepts POST requests",
+        ));
+    }
+
+    let parsed = serde_json::from_str::<MobileLivePresenceCallbackHttpRequestBody>(&request.body)
+        .map_err(|_| {
+        live_presence_callback_error_response_with_code(
+            400,
+            "invalid_request_json",
+            "request body must be valid live-presence callback JSON",
+        )
+    })?;
+    let request_id = parsed
+        .client_context
+        .as_ref()
+        .and_then(|context| context.request_id.clone());
+
+    Ok((parsed, request_id))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -458,7 +613,7 @@ pub struct MobileIdentityOnboardingHttpRequestBody {
     pub oidc: MobileOnboardingOidcHttpInput,
     pub app_attest: MobileOnboardingAppAttestHttpInput,
     pub liveness: MobileIdentityOnboardingLivenessHttpInput,
-    pub government_id: MobileIdentityOnboardingGovernmentIdHttpInput,
+    pub identity_proofing: MobileIdentityOnboardingIdentityProofingHttpInput,
     #[serde(default)]
     pub expected_device_ref: Option<String>,
     #[serde(default)]
@@ -471,10 +626,108 @@ pub struct MobileIdentityOnboardingHttpRequestBody {
     pub continuity_modality: Option<MobileIdentityOnboardingBiometricModalityHttpInput>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MobileLivePresenceChallengeIssueContext {
+    pub challenge_id: LivePresenceChallengeId,
+    pub challenge_nonce: String,
+    pub issued_at: Timestamp,
+    pub expires_at: Timestamp,
+    pub provider_name: String,
+    pub handoff_uri: Option<String>,
+    pub callback_path: String,
+    pub retry_policy_refs: Vec<PolicyRef>,
+    pub manual_review_policy_refs: Vec<PolicyRef>,
+    pub retention_policy_refs: Vec<PolicyRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MobileLivePresenceCallbackContext {
+    pub observed_at: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct MobileLivePresenceChallengeIssueHttpRequestBody {
+    #[serde(default)]
+    pub subject_id: Option<String>,
+    #[serde(default)]
+    pub expected_device_ref: Option<String>,
+    pub expected_app: MobileLivePresenceExpectedAppHttpInput,
+    #[serde(default)]
+    pub client_context: Option<MobileOnboardingClientHttpInput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct MobileLivePresenceCallbackHttpRequestBody {
+    pub provider_name: String,
+    pub assertion: String,
+    pub challenge_nonce: String,
+    pub device_ref: String,
+    pub observed_at: String,
+    pub expires_at: String,
+    pub result: MobileLivePresenceCallbackResultHttpInput,
+    pub pad_result: MobileLivePresenceCallbackPadResultHttpInput,
+    pub assurance_level: MobileIdentityOnboardingAssuranceLevelHttpInput,
+    #[serde(default)]
+    pub provider_event_id: Option<String>,
+    #[serde(default)]
+    pub provider_subject_ref: Option<String>,
+    #[serde(default)]
+    pub sdk_or_api_version: Option<String>,
+    #[serde(default)]
+    pub retention_policy_refs: Option<Vec<String>>,
+    #[serde(default)]
+    pub client_context: Option<MobileOnboardingClientHttpInput>,
+}
+
+impl MobileLivePresenceCallbackHttpRequestBody {
+    fn into_callback_request(self) -> LivenessProviderCallbackVerificationRequest {
+        LivenessProviderCallbackVerificationRequest {
+            provider_metadata: ContinuityProviderMetadata {
+                provider_name: self.provider_name,
+                provider_event_id: self.provider_event_id,
+                provider_subject_ref: self.provider_subject_ref,
+                sdk_or_api_version: self.sdk_or_api_version,
+            },
+            assertion: self.assertion,
+            challenge_nonce: self.challenge_nonce,
+            device_ref: self.device_ref,
+            observed_at: Timestamp(self.observed_at),
+            expires_at: Timestamp(self.expires_at),
+            result: self.result.into_identity_witness_result(),
+            assurance_level: self.assurance_level.into_assurance_level(),
+            pad_result: self.pad_result.into_pad_result(),
+            retention_policy_refs: self
+                .retention_policy_refs
+                .unwrap_or_default()
+                .into_iter()
+                .map(Id)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct MobileLivePresenceExpectedAppHttpInput {
+    pub team_id: String,
+    pub bundle_id: String,
+    pub environment: MobileOnboardingAppAttestEnvironmentHttpInput,
+}
+
+impl MobileLivePresenceExpectedAppHttpInput {
+    fn into_expected_app(self) -> LivePresenceExpectedAppContext {
+        LivePresenceExpectedAppContext::from_app_attest_config(&AppAttestClientConfig::ios_app(
+            self.team_id,
+            self.bundle_id,
+            self.environment.into_app_attest_environment(),
+        ))
+    }
+}
+
 impl MobileIdentityOnboardingHttpRequestBody {
     fn into_command_request(self, authored_by: Author) -> MobileIdentityOnboardingCommandRequest {
         let client_context = self.client_context.unwrap_or_default();
         let platform = client_context.platform.into_command_platform();
+        let observed_at = self.observed_at;
         let liveness_expected_device_ref = self
             .liveness
             .expected_device_ref
@@ -484,7 +737,7 @@ impl MobileIdentityOnboardingHttpRequestBody {
             account: AccountTokenBootstrapRequest {
                 subject_id: Id(self.subject_id),
                 authored_by,
-                observed_at: Timestamp(self.observed_at),
+                observed_at: Timestamp(observed_at.clone()),
                 id_namespace: self
                     .id_namespace
                     .unwrap_or_else(|| "mobile-identity-onboarding".to_string()),
@@ -514,7 +767,7 @@ impl MobileIdentityOnboardingHttpRequestBody {
                 challenge_nonce: self.liveness.challenge_nonce,
                 expected_device_ref: liveness_expected_device_ref,
             },
-            government_id: self.government_id.into_command_input(),
+            identity_proofing: self.identity_proofing.into_command_input(),
             client_context: MobileOnboardingClientContext {
                 platform,
                 request_id: client_context.request_id,
@@ -550,38 +803,266 @@ pub struct MobileIdentityOnboardingLivenessHttpInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct MobileIdentityOnboardingGovernmentIdHttpInput {
+pub struct MobileIdentityOnboardingIdentityProofingHttpInput {
     #[serde(default)]
-    pub source_system: Option<String>,
+    pub provider_name: Option<String>,
+    pub workflow_id: String,
     #[serde(default)]
     pub provider_event_id: Option<String>,
     #[serde(default)]
     pub evidence_ref: Option<String>,
     #[serde(default)]
-    pub assurance_level: Option<MobileIdentityOnboardingAssuranceLevelHttpInput>,
+    pub evidence_types: Vec<MobileIdentityOnboardingIdentityProofingEvidenceTypeHttpInput>,
+    pub verification_result: MobileIdentityOnboardingIdentityProofingResultHttpInput,
+    pub assurance_level: MobileIdentityOnboardingAssuranceLevelHttpInput,
+    #[serde(default)]
+    pub asserted_attributes: Vec<MobileIdentityOnboardingAssertedAttributeHttpInput>,
+    #[serde(default)]
+    pub risk_signals: Vec<MobileIdentityOnboardingRiskSignalHttpInput>,
+    pub verified_at: String,
     #[serde(default)]
     pub expires_at: Option<String>,
+    #[serde(default)]
+    pub audit_ref: Option<String>,
     #[serde(default)]
     pub retention_policy_refs: Option<Vec<String>>,
 }
 
-impl MobileIdentityOnboardingGovernmentIdHttpInput {
-    fn into_command_input(self) -> GovernmentIdWitnessInput {
-        GovernmentIdWitnessInput {
-            source_system: self.source_system,
+impl MobileIdentityOnboardingIdentityProofingHttpInput {
+    fn into_command_input(self) -> IdentityProofingVerificationRequest {
+        IdentityProofingVerificationRequest {
+            provider_name: self
+                .provider_name
+                .unwrap_or_else(|| PERSONA_PROVIDER_NAME.to_string()),
+            workflow_id: self.workflow_id,
             provider_event_id: self.provider_event_id,
-            evidence_ref: self.evidence_ref,
-            assurance_level: self
-                .assurance_level
-                .unwrap_or(MobileIdentityOnboardingAssuranceLevelHttpInput::High)
-                .into_assurance_level(),
+            asserted_attributes: self
+                .asserted_attributes
+                .into_iter()
+                .map(MobileIdentityOnboardingAssertedAttributeHttpInput::into_asserted_attribute)
+                .collect(),
+            evidence_types: self
+                .evidence_types
+                .into_iter()
+                .map(MobileIdentityOnboardingIdentityProofingEvidenceTypeHttpInput::into_evidence_type)
+                .collect(),
+            verification_result: self.verification_result.into_identity_witness_result(),
+            assurance_level: self.assurance_level.into_assurance_level(),
+            risk_signals: self
+                .risk_signals
+                .into_iter()
+                .map(MobileIdentityOnboardingRiskSignalHttpInput::into_risk_signal)
+                .collect(),
+            verified_at: Timestamp(self.verified_at),
             expires_at: self.expires_at.map(Timestamp),
+            audit_ref: self.audit_ref,
+            evidence_ref: self.evidence_ref,
             retention_policy_refs: self
                 .retention_policy_refs
                 .unwrap_or_default()
                 .into_iter()
                 .map(Id)
                 .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct MobileIdentityOnboardingAssertedAttributeHttpInput {
+    pub attribute: MobileIdentityOnboardingAttributeHttpInput,
+    pub value: String,
+    #[serde(default)]
+    pub confidence: Option<MobileIdentityOnboardingMatchConfidenceHttpInput>,
+}
+
+impl MobileIdentityOnboardingAssertedAttributeHttpInput {
+    fn into_asserted_attribute(self) -> IdentityProofingAssertedAttribute {
+        let attribute = self.attribute.into_identity_attribute();
+        let value = match attribute {
+            IdentityAttribute::DateOfBirth => IdentityAttributeValue::DateValue(Date(self.value)),
+            _ => IdentityAttributeValue::StringValue(self.value),
+        };
+
+        IdentityProofingAssertedAttribute {
+            attribute,
+            value,
+            confidence: self
+                .confidence
+                .unwrap_or(MobileIdentityOnboardingMatchConfidenceHttpInput::High)
+                .into_match_confidence(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct MobileIdentityOnboardingRiskSignalHttpInput {
+    pub signal_type: String,
+    pub result: MobileIdentityOnboardingRiskResultHttpInput,
+    #[serde(default)]
+    pub required_assurance: Option<MobileIdentityOnboardingAssuranceLevelHttpInput>,
+    #[serde(default)]
+    pub affects_policy: Option<bool>,
+}
+
+impl MobileIdentityOnboardingRiskSignalHttpInput {
+    fn into_risk_signal(self) -> IdentityProofingRiskSignal {
+        IdentityProofingRiskSignal {
+            signal_type: self.signal_type,
+            action: SensitiveAction::AuthorizeDataTransaction,
+            result: self.result.into_risk_evaluation_result(),
+            required_assurance: self
+                .required_assurance
+                .unwrap_or(MobileIdentityOnboardingAssuranceLevelHttpInput::High)
+                .into_assurance_level(),
+            affects_policy: self.affects_policy.unwrap_or(true),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MobileIdentityOnboardingIdentityProofingEvidenceTypeHttpInput {
+    GovernmentIdDocument,
+    Passport,
+    DriversLicense,
+    NationalId,
+    AddressDocument,
+    SelfieCapture,
+}
+
+impl MobileIdentityOnboardingIdentityProofingEvidenceTypeHttpInput {
+    fn into_evidence_type(self) -> IdentityProofingEvidenceType {
+        match self {
+            Self::GovernmentIdDocument => IdentityProofingEvidenceType::GovernmentIdDocument,
+            Self::Passport => IdentityProofingEvidenceType::Passport,
+            Self::DriversLicense => IdentityProofingEvidenceType::DriversLicense,
+            Self::NationalId => IdentityProofingEvidenceType::NationalId,
+            Self::AddressDocument => IdentityProofingEvidenceType::AddressDocument,
+            Self::SelfieCapture => IdentityProofingEvidenceType::SelfieCapture,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MobileIdentityOnboardingIdentityProofingResultHttpInput {
+    Passed,
+    Failed,
+    Inconclusive,
+}
+
+impl MobileIdentityOnboardingIdentityProofingResultHttpInput {
+    fn into_identity_witness_result(self) -> IdentityWitnessResult {
+        match self {
+            Self::Passed => IdentityWitnessResult::Passed,
+            Self::Failed => IdentityWitnessResult::Failed,
+            Self::Inconclusive => IdentityWitnessResult::Inconclusive,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MobileLivePresenceCallbackResultHttpInput {
+    Passed,
+    Failed,
+    Inconclusive,
+}
+
+impl MobileLivePresenceCallbackResultHttpInput {
+    fn into_identity_witness_result(self) -> IdentityWitnessResult {
+        match self {
+            Self::Passed => IdentityWitnessResult::Passed,
+            Self::Failed => IdentityWitnessResult::Failed,
+            Self::Inconclusive => IdentityWitnessResult::Inconclusive,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MobileLivePresenceCallbackPadResultHttpInput {
+    Passed,
+    Failed,
+    Inconclusive,
+    NotPerformed,
+}
+
+impl MobileLivePresenceCallbackPadResultHttpInput {
+    fn into_pad_result(self) -> PresentationAttackDetectionResult {
+        match self {
+            Self::Passed => PresentationAttackDetectionResult::Passed,
+            Self::Failed => PresentationAttackDetectionResult::Failed,
+            Self::Inconclusive => PresentationAttackDetectionResult::Inconclusive,
+            Self::NotPerformed => PresentationAttackDetectionResult::NotPerformed,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MobileIdentityOnboardingAttributeHttpInput {
+    LegalName,
+    DateOfBirth,
+    Address,
+    PhoneNumber,
+    Email,
+    SexAdministrative,
+}
+
+impl MobileIdentityOnboardingAttributeHttpInput {
+    fn into_identity_attribute(self) -> IdentityAttribute {
+        match self {
+            Self::LegalName => IdentityAttribute::LegalName,
+            Self::DateOfBirth => IdentityAttribute::DateOfBirth,
+            Self::Address => IdentityAttribute::Address,
+            Self::PhoneNumber => IdentityAttribute::PhoneNumber,
+            Self::Email => IdentityAttribute::Email,
+            Self::SexAdministrative => IdentityAttribute::SexAdministrative,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MobileIdentityOnboardingMatchConfidenceHttpInput {
+    Low,
+    Medium,
+    High,
+    Exact,
+    Ambiguous,
+    Conflicting,
+}
+
+impl MobileIdentityOnboardingMatchConfidenceHttpInput {
+    fn into_match_confidence(self) -> MatchConfidence {
+        match self {
+            Self::Low => MatchConfidence::Low,
+            Self::Medium => MatchConfidence::Medium,
+            Self::High => MatchConfidence::High,
+            Self::Exact => MatchConfidence::Exact,
+            Self::Ambiguous => MatchConfidence::Ambiguous,
+            Self::Conflicting => MatchConfidence::Conflicting,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MobileIdentityOnboardingRiskResultHttpInput {
+    Passed,
+    Failed,
+    RequiresStepUp,
+    RequiresManualReview,
+}
+
+impl MobileIdentityOnboardingRiskResultHttpInput {
+    fn into_risk_evaluation_result(self) -> RiskEvaluationResult {
+        match self {
+            Self::Passed => RiskEvaluationResult::Passed,
+            Self::Failed => RiskEvaluationResult::Failed,
+            Self::RequiresStepUp => RiskEvaluationResult::RequiresStepUp,
+            Self::RequiresManualReview => RiskEvaluationResult::RequiresManualReview,
         }
     }
 }
@@ -731,6 +1212,202 @@ pub enum MobileIdentityOnboardingHttpResponseBody {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum MobileLivePresenceChallengeIssueHttpResponseBody {
+    Issued {
+        challenge: MobileLivePresenceChallengeHttpSummary,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
+    },
+    Error {
+        error: MobileOnboardingHttpErrorBody,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum MobileLivePresenceCallbackHttpResponseBody {
+    Verified {
+        liveness: MobileLivePresenceCallbackLivenessHttpInput,
+        ceremony: MobileLivePresenceCallbackHttpSummary,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
+    },
+    Error {
+        error: MobileOnboardingHttpErrorBody,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileLivePresenceChallengeHttpSummary {
+    pub challenge_id: String,
+    pub challenge_nonce: String,
+    pub intended_workflow: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_subject_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_device_ref: Option<String>,
+    pub expected_app: MobileLivePresenceExpectedAppHttpSummary,
+    pub issued_at: String,
+    pub expires_at: String,
+    pub retry_policy_refs: Vec<String>,
+    pub manual_review_policy_refs: Vec<String>,
+    pub retention_policy_refs: Vec<String>,
+    pub provider_handoff: MobileLivePresenceProviderHandoffHttpSummary,
+}
+
+impl MobileLivePresenceChallengeHttpSummary {
+    fn from_challenge(
+        challenge: LivePresenceChallenge,
+        issue_context: &MobileLivePresenceChallengeIssueContext,
+    ) -> Self {
+        let handoff_challenge_nonce = challenge.challenge_nonce.clone();
+        let handoff_expires_at = challenge.expires_at.0.clone();
+        Self {
+            challenge_id: challenge.challenge_id.0,
+            challenge_nonce: challenge.challenge_nonce,
+            intended_workflow: match challenge.intended_workflow {
+                LivePresenceChallengeWorkflow::MobileIdentityOnboarding => {
+                    "mobile_identity_onboarding".to_string()
+                }
+                LivePresenceChallengeWorkflow::AccountRecovery => "account_recovery".to_string(),
+                LivePresenceChallengeWorkflow::SensitiveActionStepUp => {
+                    "sensitive_action_step_up".to_string()
+                }
+            },
+            expected_subject_id: challenge.expected_subject_id.map(|subject_id| subject_id.0),
+            expected_device_ref: challenge.expected_device_ref,
+            expected_app: MobileLivePresenceExpectedAppHttpSummary::from_expected_app(
+                challenge
+                    .expected_app
+                    .expect("issued onboarding challenge should include expected app context"),
+            ),
+            issued_at: challenge.issued_at.0,
+            expires_at: challenge.expires_at.0,
+            retry_policy_refs: challenge
+                .retry_policy_refs
+                .into_iter()
+                .map(|policy_ref| policy_ref.0)
+                .collect(),
+            manual_review_policy_refs: challenge
+                .manual_review_policy_refs
+                .into_iter()
+                .map(|policy_ref| policy_ref.0)
+                .collect(),
+            retention_policy_refs: challenge
+                .retention_policy_refs
+                .into_iter()
+                .map(|policy_ref| policy_ref.0)
+                .collect(),
+            provider_handoff: MobileLivePresenceProviderHandoffHttpSummary {
+                provider_name: issue_context.provider_name.clone(),
+                challenge_nonce: handoff_challenge_nonce,
+                handoff_uri: issue_context.handoff_uri.clone(),
+                callback_path: issue_context.callback_path.clone(),
+                expires_at: handoff_expires_at,
+                retention_policy_refs: issue_context
+                    .retention_policy_refs
+                    .iter()
+                    .map(|policy_ref| policy_ref.0.clone())
+                    .collect(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileLivePresenceProviderHandoffHttpSummary {
+    pub provider_name: String,
+    pub challenge_nonce: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handoff_uri: Option<String>,
+    pub callback_path: String,
+    pub expires_at: String,
+    pub retention_policy_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileLivePresenceExpectedAppHttpSummary {
+    pub team_id: String,
+    pub bundle_id: String,
+    pub app_id: String,
+    pub environment: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileLivePresenceCallbackLivenessHttpInput {
+    pub assertion: String,
+    pub challenge_nonce: String,
+    pub expected_device_ref: String,
+}
+
+impl MobileLivePresenceCallbackLivenessHttpInput {
+    fn from_ceremony(ceremony: &VerifiedLivenessCeremony, assertion: String) -> Self {
+        Self {
+            assertion,
+            challenge_nonce: ceremony.challenge_nonce.clone(),
+            expected_device_ref: ceremony.device_ref.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileLivePresenceCallbackHttpSummary {
+    pub provider_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_subject_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sdk_or_api_version: Option<String>,
+    pub challenge_nonce: String,
+    pub device_ref: String,
+    pub observed_at: String,
+    pub expires_at: String,
+    pub result: String,
+    pub pad_result: String,
+    pub assurance_level: String,
+    pub retention_policy_refs: Vec<String>,
+}
+
+impl MobileLivePresenceCallbackHttpSummary {
+    fn from_ceremony(ceremony: VerifiedLivenessCeremony) -> Self {
+        Self {
+            provider_name: ceremony.provider_metadata.provider_name,
+            provider_event_id: ceremony.provider_metadata.provider_event_id,
+            provider_subject_ref: ceremony.provider_metadata.provider_subject_ref,
+            sdk_or_api_version: ceremony.provider_metadata.sdk_or_api_version,
+            challenge_nonce: ceremony.challenge_nonce,
+            device_ref: ceremony.device_ref,
+            observed_at: ceremony.observed_at.0,
+            expires_at: ceremony.expires_at.0,
+            result: identity_witness_result_wire(ceremony.result).to_string(),
+            pad_result: pad_result_wire(ceremony.pad_result).to_string(),
+            assurance_level: assurance_level_wire(ceremony.assurance_level).to_string(),
+            retention_policy_refs: ceremony
+                .retention_policy_refs
+                .into_iter()
+                .map(|policy_ref| policy_ref.0)
+                .collect(),
+        }
+    }
+}
+
+impl MobileLivePresenceExpectedAppHttpSummary {
+    fn from_expected_app(expected_app: LivePresenceExpectedAppContext) -> Self {
+        Self {
+            team_id: expected_app.team_id,
+            bundle_id: expected_app.bundle_id,
+            app_id: expected_app.app_id,
+            environment: match expected_app.environment {
+                AppAttestEnvironment::Development => "development".to_string(),
+                AppAttestEnvironment::Production => "production".to_string(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MobileIdentityOnboardingHttpSummary {
     pub subject_id: String,
     pub decision: String,
@@ -758,7 +1435,10 @@ impl MobileIdentityOnboardingHttpSummary {
                     .verified_email_attribute_fact_id
                     .map(|fact_id| fact_id.0),
                 device_binding_fact_id: summary.fact_ids.device_binding_fact_id.0,
-                government_id_witness_fact_id: summary.fact_ids.government_id_witness_fact_id.0,
+                identity_proofing_witness_fact_id: summary
+                    .fact_ids
+                    .identity_proofing_witness_fact_id
+                    .0,
                 selfie_liveness_witness_fact_id: summary.fact_ids.selfie_liveness_witness_fact_id.0,
                 enrollment_fact_id: summary.fact_ids.enrollment_fact_id.map(|fact_id| fact_id.0),
             },
@@ -775,7 +1455,7 @@ pub struct MobileIdentityOnboardingHttpFactIds {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verified_email_attribute_fact_id: Option<String>,
     pub device_binding_fact_id: String,
-    pub government_id_witness_fact_id: String,
+    pub identity_proofing_witness_fact_id: String,
     pub selfie_liveness_witness_fact_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enrollment_fact_id: Option<String>,
@@ -892,6 +1572,11 @@ fn identity_command_error_response(
             "app_attest_verification_failed",
             "App Attest evidence was rejected",
         ),
+        MobileIdentityOnboardingCommandError::IdentityProofing(_) => identity_error_response(
+            422,
+            "identity_proofing_verification_failed",
+            "identity proofing evidence was rejected",
+        ),
         MobileIdentityOnboardingCommandError::Liveness(_) => identity_error_response(
             422,
             "liveness_verification_failed",
@@ -985,6 +1670,142 @@ fn live_presence_challenge_error_response(
     }
 }
 
+fn live_presence_challenge_issue_error_response(
+    error: LivePresenceChallengeError,
+) -> MobileOnboardingHttpResponse {
+    match error {
+        LivePresenceChallengeError::MissingChallengeNonce => {
+            live_presence_challenge_issue_error_response_with_code(
+                422,
+                "live_presence_challenge_missing_nonce",
+                "live-presence challenge nonce was missing",
+            )
+        }
+        LivePresenceChallengeError::DuplicateChallengeId
+        | LivePresenceChallengeError::DuplicateChallengeNonce => {
+            live_presence_challenge_issue_error_response_with_code(
+                409,
+                "live_presence_challenge_duplicate",
+                "live-presence challenge already exists",
+            )
+        }
+        LivePresenceChallengeError::StorageUnavailable => {
+            live_presence_challenge_issue_error_response_with_code(
+                500,
+                "live_presence_challenge_storage_unavailable",
+                "live-presence challenge state could not be stored",
+            )
+        }
+        LivePresenceChallengeError::InvalidTimestamp => {
+            live_presence_challenge_issue_error_response_with_code(
+                422,
+                "live_presence_challenge_invalid_timestamp",
+                "live-presence challenge timestamp was invalid",
+            )
+        }
+        _ => live_presence_challenge_issue_error_response_with_code(
+            409,
+            "live_presence_challenge_unavailable",
+            "live-presence challenge could not be issued",
+        ),
+    }
+}
+
+fn live_presence_challenge_issue_error_response_with_code(
+    status_code: u16,
+    code: impl Into<String>,
+    message: impl Into<String>,
+) -> MobileOnboardingHttpResponse {
+    json_response(
+        status_code,
+        MobileLivePresenceChallengeIssueHttpResponseBody::Error {
+            error: MobileOnboardingHttpErrorBody {
+                code: code.into(),
+                message: message.into(),
+            },
+        },
+    )
+}
+
+fn live_presence_callback_error_response(
+    error: LivenessProviderCallbackVerificationError,
+) -> MobileOnboardingHttpResponse {
+    match error {
+        LivenessProviderCallbackVerificationError::InvalidAssertion => {
+            live_presence_callback_error_response_with_code(
+                422,
+                "live_presence_callback_verification_failed",
+                "live-presence callback assertion was rejected",
+            )
+        }
+        LivenessProviderCallbackVerificationError::ProviderMismatch => {
+            live_presence_callback_error_response_with_code(
+                422,
+                "live_presence_callback_provider_mismatch",
+                "live-presence callback provider did not match the configured provider",
+            )
+        }
+        LivenessProviderCallbackVerificationError::MissingProviderName => {
+            live_presence_callback_error_response_with_code(
+                422,
+                "live_presence_callback_missing_provider",
+                "live-presence callback provider was missing",
+            )
+        }
+        LivenessProviderCallbackVerificationError::MissingChallengeNonce => {
+            live_presence_callback_error_response_with_code(
+                422,
+                "live_presence_callback_missing_nonce",
+                "live-presence callback challenge nonce was missing",
+            )
+        }
+        LivenessProviderCallbackVerificationError::MissingDeviceRef => {
+            live_presence_callback_error_response_with_code(
+                422,
+                "live_presence_callback_missing_device",
+                "live-presence callback device reference was missing",
+            )
+        }
+        LivenessProviderCallbackVerificationError::FutureObservedAt => {
+            live_presence_callback_error_response_with_code(
+                422,
+                "live_presence_callback_future_observed_at",
+                "live-presence callback observed time was in the future",
+            )
+        }
+        LivenessProviderCallbackVerificationError::Expired => {
+            live_presence_callback_error_response_with_code(
+                409,
+                "live_presence_callback_expired",
+                "live-presence callback evidence has expired",
+            )
+        }
+        LivenessProviderCallbackVerificationError::InvalidTimestamp => {
+            live_presence_callback_error_response_with_code(
+                422,
+                "live_presence_callback_invalid_timestamp",
+                "live-presence callback timestamp was invalid",
+            )
+        }
+    }
+}
+
+fn live_presence_callback_error_response_with_code(
+    status_code: u16,
+    code: impl Into<String>,
+    message: impl Into<String>,
+) -> MobileOnboardingHttpResponse {
+    json_response(
+        status_code,
+        MobileLivePresenceCallbackHttpResponseBody::Error {
+            error: MobileOnboardingHttpErrorBody {
+                code: code.into(),
+                message: message.into(),
+            },
+        },
+    )
+}
+
 fn json_response<T: Serialize>(status_code: u16, body: T) -> MobileOnboardingHttpResponse {
     MobileOnboardingHttpResponse {
         status_code,
@@ -1031,6 +1852,23 @@ fn assurance_level_wire(level: AssuranceLevel) -> &'static str {
         AssuranceLevel::Medium => "medium",
         AssuranceLevel::High => "high",
         AssuranceLevel::VeryHigh => "very_high",
+    }
+}
+
+fn identity_witness_result_wire(result: IdentityWitnessResult) -> &'static str {
+    match result {
+        IdentityWitnessResult::Passed => "passed",
+        IdentityWitnessResult::Failed => "failed",
+        IdentityWitnessResult::Inconclusive => "inconclusive",
+    }
+}
+
+fn pad_result_wire(result: PresentationAttackDetectionResult) -> &'static str {
+    match result {
+        PresentationAttackDetectionResult::Passed => "passed",
+        PresentationAttackDetectionResult::Failed => "failed",
+        PresentationAttackDetectionResult::Inconclusive => "inconclusive",
+        PresentationAttackDetectionResult::NotPerformed => "not_performed",
     }
 }
 

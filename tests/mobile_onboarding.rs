@@ -387,7 +387,7 @@ fn mobile_allowed_policy(policy_refs: Vec<PolicyRef>) -> PolicyEvaluation {
 }
 
 #[test]
-fn mobile_identity_onboarding_records_government_id_liveness_and_enrollment() {
+fn mobile_identity_onboarding_records_persona_proofing_liveness_and_enrollment() {
     let author = system_author();
     let service = IdentityWorkflowService::new(FenTranslator {
         system_author: author.clone(),
@@ -410,6 +410,7 @@ fn mobile_identity_onboarding_records_government_id_liveness_and_enrollment() {
         ),
     );
     let provider = MockPhase1ContinuityProvider::successful();
+    let identity_proofing_provider = PersonaIdentityProofingProvider::new();
     let challenge_store = InMemoryLivePresenceChallengeStore::new();
     issue_live_presence_challenge(
         &challenge_store,
@@ -433,6 +434,7 @@ fn mobile_identity_onboarding_records_government_id_liveness_and_enrollment() {
         ),
         &evidence.oidc_verifier,
         &evidence.app_attest_verifier,
+        &identity_proofing_provider,
         &liveness_verifier,
         &challenge_store,
         &provider,
@@ -445,14 +447,14 @@ fn mobile_identity_onboarding_records_government_id_liveness_and_enrollment() {
         outcome.summary.decision,
         MobileIdentityOnboardingDecision::Accepted
     );
-    assert_eq!(outcome.summary.committed_fact_count, 8);
+    assert_eq!(outcome.summary.committed_fact_count, 10);
     assert_eq!(
         outcome.summary.fact_ids.enrollment_fact_id,
         Some(id("fact-mobile-identity-enroll-continuity-0"))
     );
-    assert_eq!(repository.all_facts().len(), 8);
+    assert_eq!(repository.all_facts().len(), 10);
     assert_eq!(repository.all_episodes().len(), 5);
-    assert_eq!(repository.all_memberships().len(), 8);
+    assert_eq!(repository.all_memberships().len(), 10);
     assert_eq!(repository.all_episode_relations().len(), 4);
 
     let facts = repository.all_facts();
@@ -467,21 +469,42 @@ fn mobile_identity_onboarding_records_government_id_liveness_and_enrollment() {
         FactPayload::BiometricEnrollmentReferenceAdded { .. }
     )));
 
-    let government_id = fact_by_id(
+    let identity_proofing = fact_by_id(
         &facts,
-        &outcome.summary.fact_ids.government_id_witness_fact_id,
+        &outcome.summary.fact_ids.identity_proofing_witness_fact_id,
     );
     assert!(matches!(
-        &government_id.payload,
+        &identity_proofing.payload,
         FactPayload::IdentityWitnessRecorded {
             witness_type: IdentityWitnessType::GovernmentIdVerification,
             assurance_level: AssuranceLevel::High,
             evidence_ref: Some(evidence_ref),
             context,
             ..
-        } if evidence_ref == "government-id-mobile-identity"
+        } if evidence_ref == "identity-proofing-mobile-identity"
+            && context.witness_result == Some(IdentityWitnessResult::Passed)
             && context.retention_policy_refs == vec![id("identity-proof-retention@v1")]
     ));
+    assert!(identity_proofing.external_refs.iter().any(|external_ref| {
+        external_ref.resource_type.as_deref() == Some("identity_proofing_workflow")
+            && external_ref.resource_id == "persona-workflow-mobile-identity"
+    }));
+    assert!(facts.iter().any(|fact| matches!(
+        &fact.payload,
+        FactPayload::IdentityAttributeAsserted {
+            attribute: IdentityAttribute::LegalName,
+            value: IdentityAttributeValue::StringValue(value),
+            confidence: MatchConfidence::High,
+        } if value == "Mobile Identity Patient"
+    )));
+    assert!(facts.iter().any(|fact| matches!(
+        &fact.payload,
+        FactPayload::IdentityAttributeAsserted {
+            attribute: IdentityAttribute::DateOfBirth,
+            value: IdentityAttributeValue::DateValue(date),
+            confidence: MatchConfidence::High,
+        } if date == &Date("1990-01-01".to_string())
+    )));
 
     let selfie = fact_by_id(
         &facts,
@@ -522,6 +545,85 @@ fn mobile_identity_onboarding_records_government_id_liveness_and_enrollment() {
 }
 
 #[test]
+fn identity_proofing_manual_review_records_evidence_without_enrollment() {
+    let author = system_author();
+    let service = IdentityWorkflowService::new(FenTranslator {
+        system_author: author.clone(),
+    });
+    let subject_id = id("subject-mobile-proofing-review");
+    let evidence = mobile_evidence_fixture(
+        "proofing-review",
+        "valid-proofing-review-token",
+        "valid-proofing-review-app-attest",
+        "iphone-proofing-review-device",
+    );
+    let liveness_verifier = StaticLivenessCeremonyVerifier::new(
+        "valid-proofing-review-live-presence",
+        liveness_ceremony(
+            "proofing-review",
+            &evidence,
+            IdentityWitnessResult::Passed,
+            PresentationAttackDetectionResult::Passed,
+            AssuranceLevel::High,
+        ),
+    );
+    let provider = MockPhase1ContinuityProvider::successful();
+    let identity_proofing_provider = PersonaIdentityProofingProvider::new();
+    let challenge_store = InMemoryLivePresenceChallengeStore::new();
+    issue_live_presence_challenge(&challenge_store, "proofing-review", &subject_id, &evidence);
+    let mut ids = DeterministicIdGenerator::new();
+    let mut repository = InMemoryIdentityRepository::new();
+    let mut request = mobile_identity_onboarding_request(
+        author,
+        &subject_id.0,
+        "mobile-proofing-review",
+        &evidence,
+        "valid-proofing-review-token",
+        "valid-proofing-review-app-attest",
+        "valid-proofing-review-live-presence",
+    );
+    request.identity_proofing.verification_result = IdentityWitnessResult::Inconclusive;
+
+    let outcome = execute_mobile_identity_onboarding_command(
+        &service,
+        request,
+        &evidence.oidc_verifier,
+        &evidence.app_attest_verifier,
+        &identity_proofing_provider,
+        &liveness_verifier,
+        &challenge_store,
+        &provider,
+        &mut ids,
+        &mut repository,
+    )
+    .expect("manual-review identity proofing should still append evidence");
+
+    assert_eq!(
+        outcome.summary.decision,
+        MobileIdentityOnboardingDecision::ManualReviewRequired
+    );
+    assert_eq!(outcome.summary.fact_ids.enrollment_fact_id, None);
+    assert_eq!(repository.all_facts().len(), 9);
+    assert!(!repository.all_facts().iter().any(|fact| matches!(
+        fact.payload,
+        FactPayload::BiometricEnrollmentReferenceAdded { .. }
+    )));
+    let facts = repository.all_facts();
+    let proofing = fact_by_id(
+        &facts,
+        &outcome.summary.fact_ids.identity_proofing_witness_fact_id,
+    );
+    assert!(matches!(
+        &proofing.payload,
+        FactPayload::IdentityWitnessRecorded {
+            witness_type: IdentityWitnessType::GovernmentIdVerification,
+            context,
+            ..
+        } if context.witness_result == Some(IdentityWitnessResult::Inconclusive)
+    ));
+}
+
+#[test]
 fn failed_or_inconclusive_mobile_liveness_creates_manual_review_evidence() {
     for (label, result, pad_result) in [
         (
@@ -550,6 +652,7 @@ fn failed_or_inconclusive_mobile_liveness_creates_manual_review_evidence() {
             liveness_ceremony(label, &evidence, result, pad_result, AssuranceLevel::Low),
         );
         let provider = MockPhase1ContinuityProvider::successful();
+        let identity_proofing_provider = PersonaIdentityProofingProvider::new();
         let subject_id = id(&format!("subject-mobile-{label}"));
         let challenge_store = InMemoryLivePresenceChallengeStore::new();
         issue_live_presence_challenge(
@@ -574,6 +677,7 @@ fn failed_or_inconclusive_mobile_liveness_creates_manual_review_evidence() {
             ),
             &evidence.oidc_verifier,
             &evidence.app_attest_verifier,
+            &identity_proofing_provider,
             &liveness_verifier,
             &challenge_store,
             &provider,
@@ -587,7 +691,7 @@ fn failed_or_inconclusive_mobile_liveness_creates_manual_review_evidence() {
             MobileIdentityOnboardingDecision::ManualReviewRequired
         );
         assert_eq!(outcome.summary.fact_ids.enrollment_fact_id, None);
-        assert_eq!(repository.all_facts().len(), 7);
+        assert_eq!(repository.all_facts().len(), 9);
         assert!(!repository.all_facts().iter().any(|fact| matches!(
             fact.payload,
             FactPayload::BiometricEnrollmentReferenceAdded { .. }
@@ -657,6 +761,7 @@ fn mobile_identity_onboarding_requires_issued_live_presence_challenge() {
         ),
     );
     let provider = MockPhase1ContinuityProvider::successful();
+    let identity_proofing_provider = PersonaIdentityProofingProvider::new();
     let challenge_store = InMemoryLivePresenceChallengeStore::new();
     let mut ids = DeterministicIdGenerator::new();
     let mut repository = InMemoryIdentityRepository::new();
@@ -674,6 +779,7 @@ fn mobile_identity_onboarding_requires_issued_live_presence_challenge() {
         ),
         &evidence.oidc_verifier,
         &evidence.app_attest_verifier,
+        &identity_proofing_provider,
         &liveness_verifier,
         &challenge_store,
         &provider,
@@ -715,6 +821,7 @@ fn mobile_liveness_must_bind_to_app_attest_challenge() {
     let liveness_verifier =
         StaticLivenessCeremonyVerifier::new("valid-binding-live-presence", ceremony);
     let provider = MockPhase1ContinuityProvider::successful();
+    let identity_proofing_provider = PersonaIdentityProofingProvider::new();
     let challenge_store = InMemoryLivePresenceChallengeStore::new();
     let mut ids = DeterministicIdGenerator::new();
     let mut repository = InMemoryIdentityRepository::new();
@@ -732,6 +839,7 @@ fn mobile_liveness_must_bind_to_app_attest_challenge() {
         ),
         &evidence.oidc_verifier,
         &evidence.app_attest_verifier,
+        &identity_proofing_provider,
         &liveness_verifier,
         &challenge_store,
         &provider,
@@ -780,14 +888,7 @@ fn mobile_identity_onboarding_request(
             challenge_nonce: evidence.app_attest_challenge_nonce.clone(),
             expected_device_ref: Some(evidence.device_ref.clone()),
         },
-        government_id: GovernmentIdWitnessInput {
-            source_system: Some("IdentityProofingVendor".to_string()),
-            provider_event_id: Some(format!("government-id-event-{id_namespace}")),
-            evidence_ref: Some(format!("government-id-{id_namespace}")),
-            assurance_level: AssuranceLevel::High,
-            expires_at: None,
-            retention_policy_refs: vec![id("identity-proof-retention@v1")],
-        },
+        identity_proofing: persona_identity_proofing_request(id_namespace),
         client_context: MobileOnboardingClientContext::iphone(format!("request-{id_namespace}")),
         subject_kind: SubjectKind::HumanPerson,
         stable_profile: StableIdentityProfile {

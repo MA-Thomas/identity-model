@@ -75,6 +75,91 @@ impl VerifiedLivenessCeremony {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LivenessProviderCallbackVerificationRequest {
+    pub provider_metadata: ContinuityProviderMetadata,
+    pub assertion: String,
+    pub challenge_nonce: String,
+    pub device_ref: DeviceRef,
+    pub observed_at: Timestamp,
+    pub expires_at: Timestamp,
+    pub result: IdentityWitnessResult,
+    pub assurance_level: AssuranceLevel,
+    pub pad_result: PresentationAttackDetectionResult,
+    pub retention_policy_refs: Vec<PolicyRef>,
+}
+
+impl LivenessProviderCallbackVerificationRequest {
+    pub fn into_verified_ceremony(self) -> VerifiedLivenessCeremony {
+        VerifiedLivenessCeremony {
+            provider_metadata: self.provider_metadata,
+            challenge_nonce: self.challenge_nonce,
+            device_ref: self.device_ref,
+            observed_at: self.observed_at,
+            expires_at: self.expires_at,
+            result: self.result,
+            assurance_level: self.assurance_level,
+            pad_result: self.pad_result,
+            retention_policy_refs: self.retention_policy_refs,
+        }
+    }
+}
+
+pub trait LivenessProviderCallbackVerifier {
+    fn verify_liveness_provider_callback(
+        &self,
+        request: LivenessProviderCallbackVerificationRequest,
+        observed_at: &Timestamp,
+    ) -> Result<VerifiedLivenessCeremony, LivenessProviderCallbackVerificationError>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaticLivenessProviderCallbackVerifier {
+    pub expected_provider_name: String,
+    pub expected_assertion: String,
+}
+
+impl StaticLivenessProviderCallbackVerifier {
+    pub fn new(
+        expected_provider_name: impl Into<String>,
+        expected_assertion: impl Into<String>,
+    ) -> Self {
+        Self {
+            expected_provider_name: expected_provider_name.into(),
+            expected_assertion: expected_assertion.into(),
+        }
+    }
+}
+
+impl LivenessProviderCallbackVerifier for StaticLivenessProviderCallbackVerifier {
+    fn verify_liveness_provider_callback(
+        &self,
+        request: LivenessProviderCallbackVerificationRequest,
+        observed_at: &Timestamp,
+    ) -> Result<VerifiedLivenessCeremony, LivenessProviderCallbackVerificationError> {
+        if request.provider_metadata.provider_name != self.expected_provider_name {
+            return Err(LivenessProviderCallbackVerificationError::ProviderMismatch);
+        }
+        if request.assertion != self.expected_assertion {
+            return Err(LivenessProviderCallbackVerificationError::InvalidAssertion);
+        }
+        validate_liveness_provider_callback_request(&request, observed_at)?;
+        Ok(request.into_verified_ceremony())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LivenessProviderCallbackVerificationError {
+    InvalidAssertion,
+    ProviderMismatch,
+    MissingProviderName,
+    MissingChallengeNonce,
+    MissingDeviceRef,
+    FutureObservedAt,
+    Expired,
+    InvalidTimestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LivePresenceExpectedAppContext {
     pub team_id: String,
     pub bundle_id: String,
@@ -366,6 +451,7 @@ pub trait LivenessCeremonyVerifier {
 pub struct StaticLivenessCeremonyVerifier {
     pub expected_assertion: String,
     pub verified_ceremony: VerifiedLivenessCeremony,
+    pub bind_request_challenge_nonce: bool,
 }
 
 impl StaticLivenessCeremonyVerifier {
@@ -376,7 +462,13 @@ impl StaticLivenessCeremonyVerifier {
         Self {
             expected_assertion: expected_assertion.into(),
             verified_ceremony,
+            bind_request_challenge_nonce: false,
         }
+    }
+
+    pub fn with_request_challenge_nonce(mut self) -> Self {
+        self.bind_request_challenge_nonce = true;
+        self
     }
 }
 
@@ -390,9 +482,14 @@ impl LivenessCeremonyVerifier for StaticLivenessCeremonyVerifier {
             return Err(LivenessCeremonyVerificationError::InvalidAssertion);
         }
 
-        validate_liveness_ceremony_context(&self.verified_ceremony, request, observed_at)?;
+        let mut verified_ceremony = self.verified_ceremony.clone();
+        if self.bind_request_challenge_nonce {
+            verified_ceremony.challenge_nonce = request.challenge_nonce.clone();
+        }
 
-        Ok(self.verified_ceremony.clone())
+        validate_liveness_ceremony_context(&verified_ceremony, request, observed_at)?;
+
+        Ok(verified_ceremony)
     }
 }
 
@@ -492,6 +589,37 @@ pub fn validate_liveness_ceremony_context(
         .map_err(|_| LivenessCeremonyVerificationError::InvalidTimestamp)?;
     if expired {
         return Err(LivenessCeremonyVerificationError::Expired);
+    }
+
+    Ok(())
+}
+
+pub fn validate_liveness_provider_callback_request(
+    request: &LivenessProviderCallbackVerificationRequest,
+    observed_at: &Timestamp,
+) -> Result<(), LivenessProviderCallbackVerificationError> {
+    if request.provider_metadata.provider_name.trim().is_empty() {
+        return Err(LivenessProviderCallbackVerificationError::MissingProviderName);
+    }
+    if request.challenge_nonce.is_empty() {
+        return Err(LivenessProviderCallbackVerificationError::MissingChallengeNonce);
+    }
+    if request.device_ref.is_empty() {
+        return Err(LivenessProviderCallbackVerificationError::MissingDeviceRef);
+    }
+
+    time::timestamp_to_unix_seconds(observed_at)
+        .map_err(|_| LivenessProviderCallbackVerificationError::InvalidTimestamp)?;
+    let callback_after_observed = time::timestamp_after(&request.observed_at, observed_at)
+        .map_err(|_| LivenessProviderCallbackVerificationError::InvalidTimestamp)?;
+    if callback_after_observed {
+        return Err(LivenessProviderCallbackVerificationError::FutureObservedAt);
+    }
+
+    let expired = time::timestamp_at_or_after(observed_at, &request.expires_at)
+        .map_err(|_| LivenessProviderCallbackVerificationError::InvalidTimestamp)?;
+    if expired {
+        return Err(LivenessProviderCallbackVerificationError::Expired);
     }
 
     Ok(())
