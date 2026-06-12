@@ -79,7 +79,7 @@ impl AccountSessionBootstrapRequest {
             observed_at,
             id_plan: WorkflowIdPlan::deterministic(
                 "account-session",
-                Id("episode-account-session".to_string()),
+                ProblemEpisodeId("episode-account-session".to_string()),
                 account_session_bootstrap_fact_count(&session),
             ),
             session,

@@ -115,7 +115,7 @@ impl RecoveryRequest {
             started_at,
             id_plan: WorkflowIdPlan::deterministic(
                 id_namespace,
-                Id(episode_id.to_string()),
+                ProblemEpisodeId(episode_id.to_string()),
                 fact_count,
             ),
         }
@@ -293,7 +293,7 @@ fn approved_recovery_drafts(
             SensitiveAction::ChangeRecoveryMethod,
             AccessDecisionResult::Allowed,
             vec![request.id_plan.fact_id(0), request.id_plan.fact_id(1)],
-            vec![Id("recovery-method-change-policy".to_string())],
+            vec![PolicyRef("recovery-method-change-policy".to_string())],
         ),
     ];
 
@@ -337,7 +337,7 @@ fn denied_recovery_drafts(
             SensitiveAction::ChangeRecoveryMethod,
             AccessDecisionResult::Denied,
             vec![request.id_plan.fact_id(0), request.id_plan.fact_id(1)],
-            vec![Id("recovery-method-change-policy".to_string())],
+            vec![PolicyRef("recovery-method-change-policy".to_string())],
         ),
     ];
 
@@ -378,7 +378,7 @@ fn trusted_device_recovery_drafts(
             SensitiveAction::ChangeRecoveryMethod,
             AccessDecisionResult::Allowed,
             vec![request.id_plan.fact_id(0), request.id_plan.fact_id(1)],
-            vec![Id("trusted-device-recovery-policy".to_string())],
+            vec![PolicyRef("trusted-device-recovery-policy".to_string())],
         ),
     ];
 

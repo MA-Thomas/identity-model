@@ -12,7 +12,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 pub type AppendSequence = u64;
-pub type PersistenceTransactionId = Id;
+typed_id!(PersistenceTransactionId);
 pub type FactEncryptionKeyId = String;
 
 pub const ENCRYPTED_FACT_AAD_PROFILE_NAME: &str = "fen-encrypted-fact";

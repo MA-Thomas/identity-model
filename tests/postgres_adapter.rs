@@ -365,7 +365,7 @@ fn postgres_row_round_trips_period_time_and_superseded_status_payload() {
 fn postgres_rows_sort_by_append_sequence_for_replay() {
     let key = active_key();
     let encryptor = DeterministicTestFactEncryptor::new();
-    let subject_id = id("subject-postgres-replay");
+    let subject_id: SubjectId = id("subject-postgres-replay");
     let first = fact(
         "fact-postgres-first",
         subject_id.clone(),
@@ -425,7 +425,7 @@ fn postgres_rows_sort_by_append_sequence_for_replay() {
 #[test]
 fn postgres_workflow_rows_round_trip_typed_episode_membership_and_relation_values() {
     let author = system_author();
-    let transaction_id = id("tx-postgres-workflow");
+    let transaction_id: PersistenceTransactionId = id("tx-postgres-workflow");
     let committed_at = ts("2026-05-29T00:03:00Z");
     let episode = StoredProblemEpisode {
         append_sequence: 10,
@@ -870,7 +870,7 @@ fn live_postgres_repository_exercises_append_query_duplicates_and_audit_when_url
         run_live_postgres_migration(&repository).await;
 
         let suffix = live_test_suffix();
-        let subject_id = id(&format!("subject-live-postgres-{suffix}"));
+        let subject_id: SubjectId = id(&format!("subject-live-postgres-{suffix}"));
         let first_fact_id = format!("fact-live-postgres-{suffix}-first");
         let second_fact_id = format!("fact-live-postgres-{suffix}-second");
         let duplicate_sequence_fact_id = format!("fact-live-postgres-{suffix}-duplicate-sequence");
@@ -1147,7 +1147,7 @@ fn live_postgres_encrypted_replay_reconstructs_materialized_state_when_env_is_se
         run_live_postgres_migration(&repository).await;
 
         let suffix = live_test_suffix();
-        let subject_id = id(&format!("subject-live-postgres-replay-{suffix}"));
+        let subject_id: SubjectId = id(&format!("subject-live-postgres-replay-{suffix}"));
         let device_fact_id = format!("fact-live-postgres-replay-{suffix}-device");
         let continuity_fact_id = format!("fact-live-postgres-replay-{suffix}-continuity");
         let link_fact_id = format!("fact-live-postgres-replay-{suffix}-link");
@@ -1309,7 +1309,7 @@ fn live_postgres_encryption_aware_workflow_repository_appends_and_replays_when_e
         run_live_postgres_migration(&storage).await;
 
         let suffix = live_test_suffix();
-        let subject_id = id(&format!("subject-live-postgres-facade-{suffix}"));
+        let subject_id: SubjectId = id(&format!("subject-live-postgres-facade-{suffix}"));
         let fact_id = format!("fact-live-postgres-facade-{suffix}");
         let episode_id = format!("episode-live-postgres-facade-{suffix}");
         let membership_id = format!("membership-live-postgres-facade-{suffix}");
@@ -1406,7 +1406,7 @@ fn live_postgres_workflow_slice_rolls_back_partial_writes_when_env_is_set() {
         run_live_postgres_migration(&repository).await;
 
         let suffix = live_test_suffix();
-        let subject_id = id(&format!("subject-live-postgres-rollback-{suffix}"));
+        let subject_id: SubjectId = id(&format!("subject-live-postgres-rollback-{suffix}"));
         let seed_fact_id = format!("fact-live-postgres-rollback-{suffix}-seed");
         let seed_episode_id = format!("episode-live-postgres-rollback-{suffix}-seed");
         let seed_membership_id = format!("membership-live-postgres-rollback-{suffix}-seed");
@@ -1745,7 +1745,7 @@ fn live_postgres_episode_composition_rolls_back_partial_writes_when_env_is_set()
         run_live_postgres_migration(&repository).await;
 
         let suffix = live_test_suffix();
-        let subject_id = id(&format!(
+        let subject_id: SubjectId = id(&format!(
             "subject-live-postgres-composition-rollback-{suffix}"
         ));
         let seed_parent_episode_id =

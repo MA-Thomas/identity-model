@@ -5,7 +5,7 @@ use common::*;
 
 #[test]
 fn access_authorization_episode_memberships_keep_evidence_roles_explicit() {
-    let subject_id = id("subject-1");
+    let subject_id: SubjectId = id("subject-1");
     let episode = access_authorization_episode(
         id("episode-export"),
         subject_id,
@@ -32,7 +32,7 @@ fn access_authorization_episode_memberships_keep_evidence_roles_explicit() {
 
 #[test]
 fn mock_onboarding_slice_records_core_identity_facts_and_memberships() {
-    let subject_id = id("subject-onboarding");
+    let subject_id: SubjectId = id("subject-onboarding");
     let translator = FenTranslator {
         system_author: system_author(),
     };
@@ -73,7 +73,7 @@ fn mock_onboarding_slice_records_core_identity_facts_and_memberships() {
 
 #[test]
 fn complete_record_export_step_up_allows_passed_continuity_and_steps_up_failed_checks() {
-    let subject_id = id("subject-step-up");
+    let subject_id: SubjectId = id("subject-step-up");
     let translator = FenTranslator {
         system_author: system_author(),
     };
@@ -190,8 +190,8 @@ fn complete_record_export_step_up_allows_passed_continuity_and_steps_up_failed_c
 
 #[test]
 fn delegation_and_recovery_slices_preserve_audit_history_and_projection_rules() {
-    let actor_subject_id = id("caregiver-1");
-    let target_subject_id = id("patient-1");
+    let actor_subject_id: SubjectId = id("caregiver-1");
+    let target_subject_id: SubjectId = id("patient-1");
     let translator = FenTranslator {
         system_author: system_author(),
     };
@@ -274,7 +274,7 @@ fn delegation_and_recovery_slices_preserve_audit_history_and_projection_rules() 
 
 #[test]
 fn dispute_merge_split_and_witness_supersession_slices_change_projection_without_losing_audit() {
-    let subject_id = id("patient-dispute");
+    let subject_id: SubjectId = id("patient-dispute");
     let translator = FenTranslator {
         system_author: system_author(),
     };
@@ -345,7 +345,7 @@ fn dispute_merge_split_and_witness_supersession_slices_change_projection_without
 
 #[test]
 fn recovery_slices_cover_approved_denied_and_trusted_device_paths() {
-    let subject_id = id("patient-recovery");
+    let subject_id: SubjectId = id("patient-recovery");
     let translator = FenTranslator {
         system_author: system_author(),
     };

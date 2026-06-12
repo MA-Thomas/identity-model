@@ -5,7 +5,7 @@ use common::*;
 
 #[test]
 fn verified_continuity_assertion_translates_to_canonical_fact_payload() {
-    let subject_id = id("subject-1");
+    let subject_id: SubjectId = id("subject-1");
     let translator = FenTranslator {
         system_author: system_author(),
     };
@@ -50,7 +50,7 @@ fn verified_continuity_assertion_translates_to_canonical_fact_payload() {
 
 #[test]
 fn continuity_nonce_lifecycle_rejects_unknown_expired_reused_and_mismatched_assertions() {
-    let subject_id = id("subject-1");
+    let subject_id: SubjectId = id("subject-1");
     let provider = MockPhase1ContinuityProvider::successful();
     let verifier = provider.signature_verifier();
     let mapper = ResultBasedAssuranceMapper;
@@ -180,7 +180,7 @@ fn continuity_nonce_lifecycle_rejects_unknown_expired_reused_and_mismatched_asse
 
 #[test]
 fn registry_backed_signature_verifier_handles_key_rotation_and_replay() {
-    let subject_id = id("subject-registry");
+    let subject_id: SubjectId = id("subject-registry");
     let assertion = ContinuityAssertion {
         enrollment_ref: "enrollment-registry".to_string(),
         challenge_nonce: "nonce-registry".to_string(),

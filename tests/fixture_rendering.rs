@@ -5,7 +5,7 @@ use common::*;
 
 #[test]
 fn workflow_fixture_renderer_produces_stable_demo_output() {
-    let subject_id = id("subject-fixture");
+    let subject_id: SubjectId = id("subject-fixture");
     let translator = FenTranslator {
         system_author: system_author(),
     };
@@ -44,7 +44,7 @@ fn workflow_examples_match_golden_fixture_contract() {
 
 #[test]
 fn workflow_narratives_explain_access_recovery_delegation_and_disputes() {
-    let subject_id = id("subject-narrative");
+    let subject_id: SubjectId = id("subject-narrative");
     let translator = FenTranslator {
         system_author: system_author(),
     };
@@ -124,7 +124,7 @@ fn render_workflow_example_fixtures() -> String {
     };
     let mut output = String::new();
 
-    let onboarding_subject = id("subject-demo-onboarding");
+    let onboarding_subject: SubjectId = id("subject-demo-onboarding");
     let onboarding_provider = MockPhase1ContinuityProvider::successful();
     let onboarding = onboarding_vertical_slice(
         onboarding_subject.clone(),
@@ -140,7 +140,7 @@ fn render_workflow_example_fixtures() -> String {
         onboarding,
     ));
 
-    let export_subject = id("subject-demo-export");
+    let export_subject: SubjectId = id("subject-demo-export");
     let export_provider = MockPhase1ContinuityProvider::successful();
     let mut lifecycle = InMemoryNonceLifecycle::new();
     let export = complete_record_export_step_up_slice(
@@ -174,7 +174,7 @@ fn render_workflow_example_fixtures() -> String {
         delegation,
     ));
 
-    let recovery_subject = id("subject-demo-recovery");
+    let recovery_subject: SubjectId = id("subject-demo-recovery");
     let approved = approved_recovery_slice(
         recovery_subject.clone(),
         &translator,
@@ -209,7 +209,7 @@ fn render_workflow_example_fixtures() -> String {
         trusted_device,
     ));
 
-    let resolution_subject = id("subject-demo-resolution");
+    let resolution_subject: SubjectId = id("subject-demo-resolution");
     let rejected_link = contested_provider_link_resolution_slice(
         resolution_subject.clone(),
         DisputeResolutionOutcome::Rejected,

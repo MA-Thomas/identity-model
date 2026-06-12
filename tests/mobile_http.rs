@@ -88,7 +88,7 @@ fn mobile_identity_onboarding_http_endpoint_accepts_composed_request() {
     let service = IdentityWorkflowService::new(FenTranslator {
         system_author: author.clone(),
     });
-    let subject_id = id("subject-mobile-identity-http");
+    let subject_id: SubjectId = id("subject-mobile-identity-http");
     let fixture = mobile_evidence_fixture(
         "identity-http",
         "valid-identity-http-token",
@@ -408,7 +408,7 @@ fn mobile_identity_onboarding_http_requires_explicit_identity_proofing_outcome_f
     let service = IdentityWorkflowService::new(FenTranslator {
         system_author: author.clone(),
     });
-    let subject_id = id("subject-mobile-identity-http-proofing-required");
+    let subject_id: SubjectId = id("subject-mobile-identity-http-proofing-required");
     let fixture = mobile_evidence_fixture(
         "identity-http-proofing-required",
         "valid-identity-http-proofing-required-token",
@@ -491,7 +491,7 @@ fn mobile_identity_onboarding_http_endpoint_rejects_missing_live_presence_challe
     let service = IdentityWorkflowService::new(FenTranslator {
         system_author: author.clone(),
     });
-    let subject_id = id("subject-mobile-identity-http-missing-challenge");
+    let subject_id: SubjectId = id("subject-mobile-identity-http-missing-challenge");
     let fixture = mobile_evidence_fixture(
         "identity-http-missing-challenge",
         "valid-identity-http-missing-challenge-token",
@@ -711,7 +711,7 @@ fn mobile_identity_onboarding_http_endpoint_can_append_composition_through_encry
     let service = IdentityWorkflowService::new(FenTranslator {
         system_author: author.clone(),
     });
-    let subject_id = id("subject-encrypted-identity-http");
+    let subject_id: SubjectId = id("subject-encrypted-identity-http");
     let fixture = mobile_evidence_fixture(
         "identity-encrypted-http",
         "valid-encrypted-identity-http-token",
@@ -878,8 +878,8 @@ fn live_postgres_mobile_onboarding_http_endpoint_uses_durable_encrypted_facade_w
             OidcClientConfig::keycloak("https://id.example.test/realms/fen", "fen-identity");
         let suffix = live_http_test_suffix();
         let id_namespace = format!("live-postgres-mobile-http-{suffix}");
-        let subject_id = id(&format!("subject-{id_namespace}"));
-        let transaction_id = id(&format!("tx-{id_namespace}"));
+        let subject_id: SubjectId = id(&format!("subject-{id_namespace}"));
+        let transaction_id: PersistenceTransactionId = id(&format!("tx-{id_namespace}"));
         let device_ref = format!("iphone-{id_namespace}");
         let fact_ids = [
             format!("fact-{id_namespace}-0"),

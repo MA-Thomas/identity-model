@@ -10,8 +10,8 @@ fn main() {
 
     let workflow = service
         .delegate_authority_detailed(DelegationRequest::fixture(
-            Id("subject-demo-caregiver".to_string()),
-            Id("subject-demo-patient".to_string()),
+            SubjectId("subject-demo-caregiver".to_string()),
+            SubjectId("subject-demo-patient".to_string()),
             author,
             authored_at,
         ))
@@ -30,7 +30,7 @@ fn main() {
 fn system_author() -> Author {
     Author {
         author_type: AuthorType::System,
-        author_id: Some(Id("author-fen-demo".to_string())),
+        author_id: Some(AuthorId("author-fen-demo".to_string())),
         display_name: Some("FEN Demo".to_string()),
     }
 }

@@ -5,7 +5,7 @@ use common::*;
 
 #[test]
 fn provider_swap_preserves_canonical_continuity_and_policy_shape() {
-    let subject_id = id("subject-provider-swap");
+    let subject_id: SubjectId = id("subject-provider-swap");
     let translator = FenTranslator {
         system_author: system_author(),
     };
@@ -52,7 +52,7 @@ fn provider_swap_preserves_canonical_continuity_and_policy_shape() {
 
 #[test]
 fn scripted_hosted_adapter_maps_provider_shapes_without_changing_fen_facts() {
-    let subject_id = id("subject-scripted-hosted");
+    let subject_id: SubjectId = id("subject-scripted-hosted");
     let translator = FenTranslator {
         system_author: system_author(),
     };
@@ -122,7 +122,7 @@ fn scripted_hosted_adapter_maps_provider_shapes_without_changing_fen_facts() {
 #[cfg(feature = "ed25519-dalek-verifier")]
 #[test]
 fn fen_native_ed25519_hosted_adapter_drives_service_step_up() {
-    let subject_id = id("subject-ed25519-provider");
+    let subject_id: SubjectId = id("subject-ed25519-provider");
     let translator = FenTranslator {
         system_author: system_author(),
     };

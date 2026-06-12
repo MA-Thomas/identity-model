@@ -29,7 +29,7 @@ fn live_runtime_server_identity_onboarding_e2e_when_env_is_set() {
 async fn run_live_runtime_server_identity_onboarding_e2e(env: RuntimeServerE2eEnv) {
     let suffix = runtime_e2e_suffix();
     let id_namespace = format!("runtime-server-e2e-{suffix}");
-    let subject_id = Id(format!("subject-{id_namespace}"));
+    let subject_id = SubjectId(format!("subject-{id_namespace}"));
     let device_ref = format!("iphone-{id_namespace}");
     let challenge_nonce = format!("app-attest-nonce-{id_namespace}");
     let app_attest_key_id = format!("app-attest-key-{id_namespace}");

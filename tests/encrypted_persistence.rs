@@ -136,7 +136,7 @@ fn encrypted_fact_repository_preserves_explicit_append_sequence_for_replay() {
     let key = active_key();
     let resolver = StaticFactKeyResolver::from_keys([key.clone()]);
     let encryptor = DeterministicTestFactEncryptor::new();
-    let subject_id = id("subject-encrypted-replay");
+    let subject_id: SubjectId = id("subject-encrypted-replay");
     let witness = fact(
         "fact-encrypted-witness",
         subject_id.clone(),

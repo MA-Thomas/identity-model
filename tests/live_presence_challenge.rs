@@ -5,7 +5,7 @@ use common::*;
 
 #[test]
 fn live_presence_challenge_consumes_passed_ceremony_once() {
-    let subject_id = id("subject-live-presence");
+    let subject_id: SubjectId = id("subject-live-presence");
     let evidence = mobile_evidence_fixture(
         "live-presence",
         "live-presence-token",
@@ -117,7 +117,7 @@ fn liveness_provider_callback_verifier_maps_normalized_result_without_raw_media(
 
 #[test]
 fn live_presence_challenge_records_expiry_and_wrong_device_failures() {
-    let subject_id = id("subject-live-presence-expiry");
+    let subject_id: SubjectId = id("subject-live-presence-expiry");
     let evidence = mobile_evidence_fixture(
         "live-presence-expiry",
         "live-presence-expiry-token",
@@ -212,7 +212,7 @@ fn live_presence_challenge_records_expiry_and_wrong_device_failures() {
 
 #[test]
 fn live_presence_challenge_records_failed_and_manual_review_ceremonies() {
-    let subject_id = id("subject-live-presence-results");
+    let subject_id: SubjectId = id("subject-live-presence-results");
     for (label, result, pad_result, expected_status) in [
         (
             "live-presence-failed",

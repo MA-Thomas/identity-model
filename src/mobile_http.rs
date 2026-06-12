@@ -218,7 +218,7 @@ pub fn handle_mobile_identity_onboarding_live_presence_challenge_http_request(
     let mut challenge = LivePresenceChallenge::onboarding(
         issue_context.challenge_id.clone(),
         issue_context.challenge_nonce.clone(),
-        parsed.subject_id.map(Id),
+        parsed.subject_id.map(SubjectId),
         parsed.expected_device_ref,
         Some(parsed.expected_app.into_expected_app()),
         issue_context.issued_at.clone(),
@@ -533,7 +533,7 @@ impl MobileOnboardingHttpRequestBody {
         let platform = client_context.platform.into_command_platform();
         MobileOnboardingCommandRequest {
             account: AccountTokenBootstrapRequest {
-                subject_id: Id(self.subject_id),
+                subject_id: SubjectId(self.subject_id),
                 authored_by,
                 observed_at: Timestamp(self.observed_at),
                 id_namespace: self
@@ -700,7 +700,7 @@ impl MobileLivePresenceCallbackHttpRequestBody {
                 .retention_policy_refs
                 .unwrap_or_default()
                 .into_iter()
-                .map(Id)
+                .map(PolicyRef)
                 .collect(),
         }
     }
@@ -735,7 +735,7 @@ impl MobileIdentityOnboardingHttpRequestBody {
             .or_else(|| self.expected_device_ref.clone());
         MobileIdentityOnboardingCommandRequest {
             account: AccountTokenBootstrapRequest {
-                subject_id: Id(self.subject_id),
+                subject_id: SubjectId(self.subject_id),
                 authored_by,
                 observed_at: Timestamp(observed_at.clone()),
                 id_namespace: self
@@ -861,7 +861,7 @@ impl MobileIdentityOnboardingIdentityProofingHttpInput {
                 .retention_policy_refs
                 .unwrap_or_default()
                 .into_iter()
-                .map(Id)
+                .map(PolicyRef)
                 .collect(),
         }
     }

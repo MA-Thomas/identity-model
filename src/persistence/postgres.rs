@@ -1631,10 +1631,10 @@ impl PostgresEncryptedFactRow {
 
         Ok(StoredEncryptedFact {
             append_sequence: self.append_sequence as AppendSequence,
-            transaction_id: Id(self.transaction_id),
+            transaction_id: PersistenceTransactionId(self.transaction_id),
             committed_at: Timestamp(self.committed_at),
-            fact_id: Id(self.fact_id),
-            subject_id: Id(self.subject_id),
+            fact_id: FactId(self.fact_id),
+            subject_id: SubjectId(self.subject_id),
             occurred_at: PostgresTemporalAnchorRecord {
                 kind: self.occurred_kind,
                 start: self.occurred_start,
@@ -1648,7 +1648,7 @@ impl PostgresEncryptedFactRow {
             materialization_policy_refs: self
                 .materialization_policy_refs
                 .into_iter()
-                .map(Id)
+                .map(PolicyRef)
                 .collect(),
             encryption: FactEncryptionMetadata {
                 algorithm: FactEncryptionAlgorithm::from_str_label(&self.encryption_algorithm)
@@ -3037,14 +3037,14 @@ impl PostgresMaterializationAuditRow {
 
     pub fn try_into_event(self) -> Result<FactMaterializationAuditEvent, PostgresAdapterError> {
         Ok(FactMaterializationAuditEvent {
-            subject_id: Id(self.subject_id),
-            fact_ids: self.fact_ids.into_iter().map(Id).collect(),
+            subject_id: SubjectId(self.subject_id),
+            fact_ids: self.fact_ids.into_iter().map(FactId).collect(),
             materialization_policy_refs: self
                 .materialization_policy_refs
                 .into_iter()
-                .map(Id)
+                .map(PolicyRef)
                 .collect(),
-            evaluated_policy_refs: self.evaluated_policy_refs.into_iter().map(Id).collect(),
+            evaluated_policy_refs: self.evaluated_policy_refs.into_iter().map(PolicyRef).collect(),
             caller: self.caller,
             purpose: self.purpose,
             requested_at: self.requested_at.map(Timestamp),
@@ -3200,12 +3200,12 @@ impl PostgresLivePresenceChallengeRow {
         };
 
         Ok(LivePresenceChallenge {
-            challenge_id: Id(self.challenge_id),
+            challenge_id: LivePresenceChallengeId(self.challenge_id),
             challenge_nonce: self.challenge_nonce,
             intended_workflow: live_presence_challenge_workflow_from_postgres(
                 &self.intended_workflow,
             )?,
-            expected_subject_id: self.expected_subject_id.map(Id),
+            expected_subject_id: self.expected_subject_id.map(SubjectId),
             expected_device_ref: self.expected_device_ref,
             expected_app,
             issued_at: Timestamp(self.issued_at),
@@ -3214,9 +3214,9 @@ impl PostgresLivePresenceChallengeRow {
                 &self.status_kind,
                 self.status_payload,
             )?,
-            retry_policy_refs: self.retry_policy_refs.into_iter().map(Id).collect(),
-            manual_review_policy_refs: self.manual_review_policy_refs.into_iter().map(Id).collect(),
-            retention_policy_refs: self.retention_policy_refs.into_iter().map(Id).collect(),
+            retry_policy_refs: self.retry_policy_refs.into_iter().map(PolicyRef).collect(),
+            manual_review_policy_refs: self.manual_review_policy_refs.into_iter().map(PolicyRef).collect(),
+            retention_policy_refs: self.retention_policy_refs.into_iter().map(PolicyRef).collect(),
         })
     }
 }
@@ -3302,11 +3302,11 @@ impl PostgresProblemEpisodeRow {
 
         Ok(StoredProblemEpisode {
             append_sequence: self.append_sequence as AppendSequence,
-            transaction_id: Id(self.transaction_id),
+            transaction_id: PersistenceTransactionId(self.transaction_id),
             committed_at: Timestamp(self.committed_at),
             episode: ProblemEpisode {
-                id: Id(self.episode_id),
-                subject_id: Id(self.subject_id),
+                id: ProblemEpisodeId(self.episode_id),
+                subject_id: SubjectId(self.subject_id),
                 episode_kind: episode_kind_from_postgres(&self.episode_kind)?,
                 label: self.label,
                 problem_code: self
@@ -3363,12 +3363,12 @@ impl PostgresEpisodeMembershipRow {
 
         Ok(StoredEpisodeMembership {
             append_sequence: self.append_sequence as AppendSequence,
-            transaction_id: Id(self.transaction_id),
+            transaction_id: PersistenceTransactionId(self.transaction_id),
             committed_at: Timestamp(self.committed_at),
             membership: EpisodeMembership {
-                id: Id(self.membership_id),
-                fact_id: Id(self.fact_id),
-                episode_id: Id(self.episode_id),
+                id: MembershipId(self.membership_id),
+                fact_id: FactId(self.fact_id),
+                episode_id: ProblemEpisodeId(self.episode_id),
                 role: fact_role_from_postgres(&self.role)?,
                 asserted_by: self.asserted_by.try_into_author()?,
                 asserted_at: PostgresTemporalAnchorRecord {
@@ -3421,12 +3421,12 @@ impl PostgresEpisodeRelationRow {
 
         Ok(StoredEpisodeRelation {
             append_sequence: self.append_sequence as AppendSequence,
-            transaction_id: Id(self.transaction_id),
+            transaction_id: PersistenceTransactionId(self.transaction_id),
             committed_at: Timestamp(self.committed_at),
             relation: EpisodeRelation {
-                id: Id(self.relation_id),
-                source_episode_id: Id(self.source_episode_id),
-                target_episode_id: Id(self.target_episode_id),
+                id: RelationId(self.relation_id),
+                source_episode_id: ProblemEpisodeId(self.source_episode_id),
+                target_episode_id: ProblemEpisodeId(self.target_episode_id),
                 relation_type: episode_relation_type_from_postgres(&self.relation_type)?,
                 asserted_by: self.asserted_by.try_into_author()?,
                 asserted_at: PostgresTemporalAnchorRecord {
@@ -3687,7 +3687,7 @@ fn fact_status_from_postgres(
         ) => Ok(FactStatus::Superseded {
             superseded_by: superseded_by.try_into_author()?,
             superseded_at: superseded_at.try_into_temporal_anchor()?,
-            replaced_by: replaced_by.map(Id),
+            replaced_by: replaced_by.map(FactId),
             reason: supersession_reason_from_postgres(&reason)?,
         }),
         (
@@ -3700,7 +3700,7 @@ fn fact_status_from_postgres(
         ) => Ok(FactStatus::EnteredInError {
             corrected_by: corrected_by.try_into_author()?,
             corrected_at: corrected_at.try_into_temporal_anchor()?,
-            replaced_by: replaced_by.map(Id),
+            replaced_by: replaced_by.map(FactId),
         }),
         ("active" | "superseded" | "entered_in_error", _) => {
             Err(PostgresAdapterError::InvalidFactStatusPayload)
@@ -3726,7 +3726,7 @@ impl PostgresAuthorRecord {
     fn try_into_author(self) -> Result<Author, PostgresAdapterError> {
         Ok(Author {
             author_type: author_type_from_postgres(&self.author_type)?,
-            author_id: self.author_id.map(Id),
+            author_id: self.author_id.map(AuthorId),
             display_name: self.display_name,
         })
     }

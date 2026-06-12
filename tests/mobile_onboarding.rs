@@ -392,7 +392,7 @@ fn mobile_identity_onboarding_records_persona_proofing_liveness_and_enrollment()
     let service = IdentityWorkflowService::new(FenTranslator {
         system_author: author.clone(),
     });
-    let subject_id = id("subject-mobile-identity");
+    let subject_id: SubjectId = id("subject-mobile-identity");
     let evidence = mobile_evidence_fixture(
         "identity-onboarding",
         "valid-identity-token",
@@ -550,7 +550,7 @@ fn identity_proofing_manual_review_records_evidence_without_enrollment() {
     let service = IdentityWorkflowService::new(FenTranslator {
         system_author: author.clone(),
     });
-    let subject_id = id("subject-mobile-proofing-review");
+    let subject_id: SubjectId = id("subject-mobile-proofing-review");
     let evidence = mobile_evidence_fixture(
         "proofing-review",
         "valid-proofing-review-token",
@@ -653,7 +653,7 @@ fn failed_or_inconclusive_mobile_liveness_creates_manual_review_evidence() {
         );
         let provider = MockPhase1ContinuityProvider::successful();
         let identity_proofing_provider = PersonaIdentityProofingProvider::new();
-        let subject_id = id(&format!("subject-mobile-{label}"));
+        let subject_id: SubjectId = id(&format!("subject-mobile-{label}"));
         let challenge_store = InMemoryLivePresenceChallengeStore::new();
         issue_live_presence_challenge(
             &challenge_store,

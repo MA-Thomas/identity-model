@@ -7,7 +7,7 @@ use crate::time;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-pub type LivePresenceChallengeId = Id;
+typed_id!(LivePresenceChallengeId);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LivenessCeremonyVerificationRequest {

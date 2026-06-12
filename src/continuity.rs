@@ -9,7 +9,7 @@ pub use canonical::*;
 #[cfg(feature = "ed25519-dalek-verifier")]
 pub use ed25519::*;
 
-pub type ChallengeId = Id;
+typed_id!(ChallengeId);
 pub type Nonce = String;
 pub type Signature = Vec<u8>;
 pub type VerificationKeyId = String;

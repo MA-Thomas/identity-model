@@ -1,7 +1,7 @@
 use identity_model::*;
 
 fn main() {
-    let subject_id = Id("subject-demo-recovery".to_string());
+    let subject_id = SubjectId("subject-demo-recovery".to_string());
     let authored_at = Timestamp("2026-05-29T00:00:00Z".to_string());
     let author = system_author();
     let translator = FenTranslator {
@@ -34,7 +34,7 @@ fn main() {
 fn system_author() -> Author {
     Author {
         author_type: AuthorType::System,
-        author_id: Some(Id("author-fen-demo".to_string())),
+        author_id: Some(AuthorId("author-fen-demo".to_string())),
         display_name: Some("FEN Demo".to_string()),
     }
 }

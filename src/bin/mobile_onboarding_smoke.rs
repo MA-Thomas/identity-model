@@ -77,7 +77,7 @@ fn run() -> Result<MobileOnboardingCommandOutcome, SmokeError> {
         &service,
         MobileOnboardingCommandRequest {
             account: AccountTokenBootstrapRequest {
-                subject_id: Id(required_env("IDENTITY_MODEL_MOBILE_SUBJECT_ID")?),
+                subject_id: SubjectId(required_env("IDENTITY_MODEL_MOBILE_SUBJECT_ID")?),
                 authored_by: author,
                 observed_at,
                 id_namespace: optional_env("IDENTITY_MODEL_MOBILE_ID_NAMESPACE")
@@ -197,7 +197,7 @@ fn print_outcome(outcome: MobileOnboardingCommandOutcome) {
 fn system_author() -> Author {
     Author {
         author_type: AuthorType::System,
-        author_id: Some(Id("author-mobile-smoke".to_string())),
+        author_id: Some(AuthorId("author-mobile-smoke".to_string())),
         display_name: Some("FEN mobile smoke".to_string()),
     }
 }

@@ -37,7 +37,7 @@ impl RegisterSubjectRequest {
             started_at,
             id_plan: WorkflowIdPlan::deterministic(
                 "register-subject",
-                Id("episode-register-subject".to_string()),
+                ProblemEpisodeId("episode-register-subject".to_string()),
                 1,
             ),
             subject_kind: SubjectKind::HumanPerson,
@@ -138,7 +138,7 @@ impl BindDeviceRequest {
             started_at,
             id_plan: WorkflowIdPlan::deterministic(
                 "bind-device",
-                Id("episode-bind-device".to_string()),
+                ProblemEpisodeId("episode-bind-device".to_string()),
                 1,
             ),
             device_ref: "device-passkey-1".to_string(),
@@ -183,7 +183,7 @@ impl EnrollContinuityRequest {
             started_at,
             id_plan: WorkflowIdPlan::deterministic(
                 "enroll-continuity",
-                Id("episode-enroll-continuity".to_string()),
+                ProblemEpisodeId("episode-enroll-continuity".to_string()),
                 1,
             ),
             modality: BiometricModality::Face,
@@ -274,7 +274,7 @@ impl LinkProviderIdentityRequest {
             started_at,
             id_plan: WorkflowIdPlan::deterministic(
                 "link-provider",
-                Id("episode-link-provider".to_string()),
+                ProblemEpisodeId("episode-link-provider".to_string()),
                 1,
             ),
             provider_org: "Example Health".to_string(),
@@ -333,7 +333,7 @@ impl LinkPayerIdentityRequest {
             started_at,
             id_plan: WorkflowIdPlan::deterministic(
                 "link-payer",
-                Id("episode-link-payer".to_string()),
+                ProblemEpisodeId("episode-link-payer".to_string()),
                 1,
             ),
             payer: "Example Payer".to_string(),
@@ -367,7 +367,7 @@ impl OnboardingRequest {
             started_at,
             id_plan: WorkflowIdPlan::deterministic(
                 "onboarding",
-                Id("episode-onboarding".to_string()),
+                ProblemEpisodeId("episode-onboarding".to_string()),
                 6,
             ),
             stable_profile: StableIdentityProfile {

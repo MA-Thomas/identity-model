@@ -248,7 +248,7 @@ impl ContinuityChallengeRequest {
         id_generator: &mut impl IdGenerator,
     ) -> Self {
         Self {
-            challenge_id: id_generator.next_episode_id(&format!("challenge-{id_namespace}")),
+            challenge_id: id_generator.next_challenge_id(&format!("challenge-{id_namespace}")),
             subject_id,
             enrollment_ref,
             nonce: id_generator

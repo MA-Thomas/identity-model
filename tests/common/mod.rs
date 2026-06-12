@@ -2,8 +2,8 @@
 
 use identity_model::*;
 
-pub fn id(value: &str) -> Id {
-    Id(value.to_string())
+pub fn id<T: From<String>>(value: &str) -> T {
+    T::from(value.to_string())
 }
 
 pub fn ts(value: &str) -> Timestamp {

@@ -1,4 +1,5 @@
-use crate::fen::{FactId, Id, MembershipId, ProblemEpisodeId, RelationId, SubjectId};
+use crate::continuity::ChallengeId;
+use crate::fen::{FactId, MembershipId, ProblemEpisodeId, RelationId, SubjectId};
 use std::collections::BTreeMap;
 
 pub trait IdGenerator {
@@ -6,9 +7,17 @@ pub trait IdGenerator {
     fn next_episode_id(&mut self, prefix: &str) -> ProblemEpisodeId;
     fn next_membership_id(&mut self, prefix: &str) -> MembershipId;
     fn next_relation_id(&mut self, prefix: &str) -> RelationId {
-        self.next_membership_id(prefix)
+        // Default implementation shares the membership counter sequence but
+        // returns a distinct RelationId; the kinds no longer unify silently.
+        RelationId(self.next_membership_id(prefix).0)
     }
     fn next_subject_id(&mut self, prefix: &str) -> SubjectId;
+    fn next_challenge_id(&mut self, prefix: &str) -> ChallengeId {
+        // Default implementation shares the episode counter sequence, which
+        // preserves the exact ID strings produced before challenge IDs became
+        // a distinct type (callers previously used next_episode_id directly).
+        ChallengeId(self.next_episode_id(prefix).0)
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -21,35 +30,35 @@ impl DeterministicIdGenerator {
         Self::default()
     }
 
-    fn next_id(&mut self, prefix: &str) -> Id {
+    fn next_id(&mut self, prefix: &str) -> String {
         let next = self
             .counters_by_prefix
             .entry(prefix.to_string())
             .and_modify(|counter| *counter += 1)
             .or_insert(0);
 
-        Id(format!("{prefix}-{next}"))
+        format!("{prefix}-{next}")
     }
 }
 
 impl IdGenerator for DeterministicIdGenerator {
     fn next_fact_id(&mut self, prefix: &str) -> FactId {
-        self.next_id(prefix)
+        FactId(self.next_id(prefix))
     }
 
     fn next_episode_id(&mut self, prefix: &str) -> ProblemEpisodeId {
-        self.next_id(prefix)
+        ProblemEpisodeId(self.next_id(prefix))
     }
 
     fn next_membership_id(&mut self, prefix: &str) -> MembershipId {
-        self.next_id(prefix)
+        MembershipId(self.next_id(prefix))
     }
 
     fn next_relation_id(&mut self, prefix: &str) -> RelationId {
-        self.next_id(prefix)
+        RelationId(self.next_id(prefix))
     }
 
     fn next_subject_id(&mut self, prefix: &str) -> SubjectId {
-        self.next_id(prefix)
+        SubjectId(self.next_id(prefix))
     }
 }

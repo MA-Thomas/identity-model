@@ -10,7 +10,7 @@ fn service_facade_returns_workflow_projection_and_narrative() {
         system_author: author.clone(),
     });
     let provider = MockPhase1ContinuityProvider::successful();
-    let subject_id = id("subject-service-onboarding");
+    let subject_id: SubjectId = id("subject-service-onboarding");
 
     let outcome = service
         .enroll_subject(
@@ -60,7 +60,7 @@ fn service_detailed_onboarding_surfaces_core_fact_ids() {
 #[test]
 fn service_split_onboarding_steps_do_not_require_provider_or_payer_links() {
     let author = system_author();
-    let subject_id = id("subject-service-split-onboarding");
+    let subject_id: SubjectId = id("subject-service-split-onboarding");
     let service = IdentityWorkflowService::new(FenTranslator {
         system_author: author.clone(),
     });
@@ -359,7 +359,7 @@ fn service_can_append_core_onboarding_composition_and_replay_repository_state() 
 #[test]
 fn service_can_append_workflows_and_replay_repository_state() {
     let author = system_author();
-    let subject_id = id("subject-service-repository-replay");
+    let subject_id: SubjectId = id("subject-service-repository-replay");
     let service = IdentityWorkflowService::new(FenTranslator {
         system_author: author.clone(),
     });
@@ -445,7 +445,7 @@ fn service_can_assign_subject_id_during_registration() {
 #[test]
 fn service_links_provider_and_payer_identity_as_independent_optional_steps() {
     let author = system_author();
-    let subject_id = id("subject-service-optional-links");
+    let subject_id: SubjectId = id("subject-service-optional-links");
     let service = IdentityWorkflowService::new(FenTranslator {
         system_author: author.clone(),
     });

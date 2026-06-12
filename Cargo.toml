@@ -16,6 +16,7 @@ runtime-server = [
   "oidc-jwks-verifier",
   "production-crypto",
   "dep:tokio",
+  "tokio/signal",
 ]
 
 [dependencies]

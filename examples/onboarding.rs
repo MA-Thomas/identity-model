@@ -35,7 +35,7 @@ fn main() {
 fn system_author() -> Author {
     Author {
         author_type: AuthorType::System,
-        author_id: Some(Id("author-fen-demo".to_string())),
+        author_id: Some(AuthorId("author-fen-demo".to_string())),
         display_name: Some("FEN Demo".to_string()),
     }
 }

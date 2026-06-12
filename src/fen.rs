@@ -1,19 +1,66 @@
 use crate::identity::*;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Id(pub String);
+/// Generates a distinct newtype per identifier kind.
+///
+/// These were previously transparent aliases of a single `Id(pub String)`,
+/// which let one ID kind be passed where another was expected. Distinct
+/// newtypes make ID-kind confusion a compile error. The inner `String`
+/// stays public so existing `.0` access and pattern matching keep working.
+macro_rules! typed_id {
+    ($(#[$meta:meta])* $name:ident) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        pub struct $name(pub String);
 
-pub type FactId = Id;
-pub type SubjectId = Id;
-pub type ProblemEpisodeId = Id;
-pub type MembershipId = Id;
-pub type RelationId = Id;
-pub type NarrativeId = Id;
-pub type SectionId = Id;
-pub type DecisionPointId = Id;
-pub type AuthorId = Id;
-pub type DocumentId = Id;
-pub type PolicyRef = Id;
+        impl $name {
+            pub fn new(value: impl Into<String>) -> Self {
+                Self(value.into())
+            }
+
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl From<String> for $name {
+            fn from(value: String) -> Self {
+                Self(value)
+            }
+        }
+
+        impl From<&str> for $name {
+            fn from(value: &str) -> Self {
+                Self(value.to_string())
+            }
+        }
+
+        impl AsRef<str> for $name {
+            fn as_ref(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(&self.0)
+            }
+        }
+    };
+}
+
+pub(crate) use typed_id;
+
+typed_id!(FactId);
+typed_id!(SubjectId);
+typed_id!(ProblemEpisodeId);
+typed_id!(MembershipId);
+typed_id!(RelationId);
+typed_id!(NarrativeId);
+typed_id!(SectionId);
+typed_id!(DecisionPointId);
+typed_id!(AuthorId);
+typed_id!(DocumentId);
+typed_id!(PolicyRef);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Timestamp(pub String);

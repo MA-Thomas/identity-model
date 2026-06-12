@@ -2,9 +2,9 @@ use super::contract::*;
 use crate::continuity::*;
 use crate::fen::*;
 use crate::identity::*;
-use std::cell::Cell;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct MockPhase1ContinuityProvider {
     pub provider_name: String,
     pub sdk_or_api_version: String,
@@ -13,7 +13,24 @@ pub struct MockPhase1ContinuityProvider {
     pub result: ContinuityCheckResult,
     pub pad_result: PresentationAttackDetectionResult,
     pub derived_assurance: AssuranceLevel,
-    event_counter: Cell<u64>,
+    // AtomicU64 rather than Cell<u64> so the provider is Sync: the runtime
+    // server shares its config across worker threads.
+    event_counter: AtomicU64,
+}
+
+impl Clone for MockPhase1ContinuityProvider {
+    fn clone(&self) -> Self {
+        Self {
+            provider_name: self.provider_name.clone(),
+            sdk_or_api_version: self.sdk_or_api_version.clone(),
+            key_id: self.key_id.clone(),
+            signature: self.signature.clone(),
+            result: self.result,
+            pad_result: self.pad_result,
+            derived_assurance: self.derived_assurance,
+            event_counter: AtomicU64::new(self.event_counter.load(Ordering::Relaxed)),
+        }
+    }
 }
 
 impl MockPhase1ContinuityProvider {
@@ -54,7 +71,7 @@ impl MockPhase1ContinuityProvider {
             result,
             pad_result,
             derived_assurance,
-            event_counter: Cell::new(0),
+            event_counter: AtomicU64::new(0),
         }
     }
 
@@ -66,8 +83,7 @@ impl MockPhase1ContinuityProvider {
     }
 
     fn next_event_id(&self, prefix: &str) -> String {
-        let next = self.event_counter.get() + 1;
-        self.event_counter.set(next);
+        let next = self.event_counter.fetch_add(1, Ordering::Relaxed) + 1;
         format!("{prefix}-{next}")
     }
 

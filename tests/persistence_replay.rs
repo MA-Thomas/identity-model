@@ -10,7 +10,7 @@ fn append_only_repository_replays_workflow_facts_into_projection() {
         system_author: author.clone(),
     };
     let provider = MockPhase1ContinuityProvider::successful();
-    let subject_id = id("subject-replay-onboarding");
+    let subject_id: SubjectId = id("subject-replay-onboarding");
     let onboarding = onboarding_vertical_slice(
         subject_id.clone(),
         &provider,
@@ -40,7 +40,7 @@ fn workflow_slice_append_rejects_duplicates_atomically() {
         system_author: author.clone(),
     };
     let provider = MockPhase1ContinuityProvider::successful();
-    let subject_id = id("subject-replay-atomic");
+    let subject_id: SubjectId = id("subject-replay-atomic");
     let onboarding = onboarding_vertical_slice(
         subject_id.clone(),
         &provider,
@@ -75,7 +75,7 @@ fn workflow_slice_append_rejects_duplicates_atomically() {
 
 #[test]
 fn append_only_repository_rejects_duplicate_ids_without_mutating_history() {
-    let subject_id = id("subject-replay-duplicates");
+    let subject_id: SubjectId = id("subject-replay-duplicates");
     let first = fact(
         "duplicate-fact",
         subject_id.clone(),
@@ -105,7 +105,7 @@ fn append_only_repository_rejects_duplicate_ids_without_mutating_history() {
 
 #[test]
 fn membership_repository_finds_episode_edges_for_a_fact() {
-    let subject_id = id("subject-membership-lookup");
+    let subject_id: SubjectId = id("subject-membership-lookup");
     let author = system_author();
     let mut repository = InMemoryIdentityRepository::new();
     let episode_a = access_authorization_episode(
@@ -122,7 +122,7 @@ fn membership_repository_finds_episode_edges_for_a_fact() {
         author.clone(),
         ts("2026-05-29T00:05:00Z"),
     );
-    let fact_id = id("shared-continuity-fact");
+    let fact_id: FactId = id("shared-continuity-fact");
     let membership_a = episode_membership(
         id("membership-a"),
         fact_id.clone(),
@@ -161,7 +161,7 @@ fn membership_repository_finds_episode_edges_for_a_fact() {
 
 #[test]
 fn episode_relation_repository_tracks_part_of_children_for_parent_episode() {
-    let subject_id = id("subject-relation-lookup");
+    let subject_id: SubjectId = id("subject-relation-lookup");
     let author = system_author();
     let parent = identity_verification_episode(
         id("episode-onboarding-parent"),
@@ -260,7 +260,7 @@ fn episode_relation_repository_rejects_duplicate_relation_ids_without_mutating_h
 
 #[test]
 fn episode_composition_append_persists_parent_children_and_relations_atomically() {
-    let subject_id = id("subject-composition-append");
+    let subject_id: SubjectId = id("subject-composition-append");
     let author = system_author();
     let translator = FenTranslator {
         system_author: author.clone(),
@@ -340,7 +340,7 @@ fn episode_composition_append_persists_parent_children_and_relations_atomically(
 
 #[test]
 fn episode_composition_append_rejects_duplicate_parent_episode_without_mutating_history() {
-    let subject_id = id("subject-composition-parent-duplicate");
+    let subject_id: SubjectId = id("subject-composition-parent-duplicate");
     let author = system_author();
     let translator = FenTranslator {
         system_author: author.clone(),
@@ -388,7 +388,7 @@ fn episode_composition_append_rejects_duplicate_parent_episode_without_mutating_
 
 #[test]
 fn episode_composition_append_rejects_duplicate_relation_ids_without_mutating_history() {
-    let subject_id = id("subject-composition-relation-duplicate");
+    let subject_id: SubjectId = id("subject-composition-relation-duplicate");
     let author = system_author();
     let translator = FenTranslator {
         system_author: author.clone(),
@@ -435,8 +435,8 @@ fn episode_composition_append_rejects_duplicate_relation_ids_without_mutating_hi
 
 #[test]
 fn replay_respects_revoked_contested_expired_and_superseded_history() {
-    let subject_id = id("subject-replay-history");
-    let clinical_link_id = id("clinical-link-replay");
+    let subject_id: SubjectId = id("subject-replay-history");
+    let clinical_link_id: FactId = id("clinical-link-replay");
     let active_witness = fact(
         "active-witness",
         subject_id.clone(),

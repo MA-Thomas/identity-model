@@ -350,7 +350,7 @@ impl PolicyArtifactDefinition {
 }
 
 pub fn versioned_policy_ref(policy_id: &PolicyRef, version: &str) -> PolicyRef {
-    Id(format!("{}@{}", policy_id.0, version))
+    PolicyRef(format!("{}@{}", policy_id.0, version))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

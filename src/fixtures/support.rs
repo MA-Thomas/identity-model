@@ -1,13 +1,11 @@
-use super::*;
-
 pub(super) fn push_line(output: &mut String, line: &str) {
     output.push_str(line);
     output.push('\n');
 }
 
-pub(super) fn join_ids(ids: &[Id]) -> String {
+pub(super) fn join_ids<T: AsRef<str>>(ids: &[T]) -> String {
     ids.iter()
-        .map(|id| id.0.as_str())
+        .map(|id| id.as_ref())
         .collect::<Vec<_>>()
         .join(",")
 }

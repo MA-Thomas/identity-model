@@ -19,7 +19,10 @@ mod server {
     use std::env;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     type AppAttestVerifier = StatefulAppAttestAssertionVerifier<
         RuntimeAppAttestAssertionVerifier,
@@ -56,12 +59,6 @@ mod server {
     impl Runtime {
         async fn run_migrations(&self) -> Result<(), PostgresAdapterError> {
             self.account.run_migrations().await
-        }
-
-        async fn readiness_check(
-            &self,
-        ) -> Result<PostgresEncryptedMobileOnboardingReadiness, PostgresAdapterError> {
-            self.account.readiness_check().await
         }
     }
 
@@ -131,6 +128,8 @@ mod server {
             .build()
             .map_err(|error| format!("could not start async runtime: {error}"))?;
         let storage = tokio_runtime.block_on(connect_storage(&config))?;
+        let readiness_pool = storage.pool().clone();
+        let challenge_store = PostgresLivePresenceChallengeStore::from_pool(readiness_pool.clone());
         let runtime = build_runtime(&config, storage);
         if config.run_migrations {
             tokio_runtime
@@ -138,7 +137,27 @@ mod server {
                 .map_err(|error| format!("could not run migrations: {error:?}"))?;
         }
 
-        serve(config, runtime, &tokio_runtime)
+        serve(config, runtime, tokio_runtime, readiness_pool, challenge_store)
+    }
+
+    /// State shared by every worker thread.
+    ///
+    /// The two onboarding runtimes require `&mut self` (the deterministic ID
+    /// generator and the encryption-aware repository are process-global
+    /// mutable state), so handler execution is serialized behind one mutex.
+    /// Socket reads and writes happen *outside* the lock, which removes the
+    /// head-of-line blocking that mattered: a slow or trickling client no
+    /// longer stalls other connections. Running the database-bound handler
+    /// bodies in parallel is deliberately deferred until the runtimes are
+    /// async-native and the ID source is concurrency-safe; duplicating the
+    /// deterministic generator across workers would let two workers mint
+    /// identical fact IDs.
+    struct Shared {
+        runtime: Mutex<Runtime>,
+        tokio: tokio::runtime::Runtime,
+        config: ServerConfig,
+        readiness_pool: sqlx::PgPool,
+        challenge_store: PostgresLivePresenceChallengeStore,
     }
 
     async fn connect_storage(
@@ -223,39 +242,176 @@ mod server {
 
     fn serve(
         config: ServerConfig,
-        mut runtime: Runtime,
-        tokio_runtime: &tokio::runtime::Runtime,
+        runtime: Runtime,
+        tokio_runtime: tokio::runtime::Runtime,
+        readiness_pool: sqlx::PgPool,
+        challenge_store: PostgresLivePresenceChallengeStore,
     ) -> Result<(), String> {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        install_shutdown_signal_handler(Arc::clone(&shutdown))?;
+
         let listener = TcpListener::bind(&config.bind_addr)
             .map_err(|error| format!("could not bind {}: {error}", config.bind_addr))?;
+        listener
+            .set_nonblocking(true)
+            .map_err(|error| format!("could not configure listener: {error}"))?;
         println!("mobile onboarding server listening on {}", config.bind_addr);
 
-        for stream in listener.incoming() {
-            match stream {
-                Ok(mut stream) => {
-                    let _ = stream.set_read_timeout(Some(config.read_timeout));
-                    let _ = stream.set_write_timeout(Some(config.read_timeout));
-                    if let Err(error) =
-                        handle_connection(&mut stream, &mut runtime, &config, tokio_runtime)
-                    {
-                        eprintln!("request failed: {error}");
+        let worker_threads = config.worker_threads;
+        let queue_depth = config.queue_depth;
+        let shutdown_grace = config.shutdown_grace;
+        let shared = Arc::new(Shared {
+            runtime: Mutex::new(runtime),
+            tokio: tokio_runtime,
+            config,
+            readiness_pool,
+            challenge_store,
+        });
+
+        // Bounded hand-off: when every worker is busy and the queue is full,
+        // new connections get an immediate 503 instead of queueing without
+        // bound behind slow requests.
+        let (sender, receiver) = mpsc::sync_channel::<TcpStream>(queue_depth);
+        let receiver = Arc::new(Mutex::new(receiver));
+        let workers: Vec<std::thread::JoinHandle<()>> = (0..worker_threads)
+            .map(|index| {
+                let shared = Arc::clone(&shared);
+                let receiver = Arc::clone(&receiver);
+                std::thread::Builder::new()
+                    .name(format!("http-worker-{index}"))
+                    .spawn(move || worker_loop(shared, receiver))
+                    .expect("could not spawn http worker thread")
+            })
+            .collect();
+
+        while !shutdown.load(Ordering::SeqCst) {
+            match listener.accept() {
+                Ok((stream, _)) => match sender.try_send(stream) {
+                    Ok(()) => {}
+                    Err(mpsc::TrySendError::Full(mut stream)) => {
+                        reject_overloaded(&mut stream, &shared.config);
                     }
+                    Err(mpsc::TrySendError::Disconnected(_)) => break,
+                },
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(50));
                 }
-                Err(error) => return Err(format!("could not accept connection: {error}")),
+                Err(error) => {
+                    // Transient accept failures (e.g. fd exhaustion) must not
+                    // take the server down; log, back off, keep serving.
+                    eprintln!("could not accept connection: {error}");
+                    std::thread::sleep(Duration::from_millis(100));
+                }
             }
         }
+
+        // Graceful drain: stop accepting, let workers finish queued and
+        // in-flight requests. Total drain time is bounded by the queue depth
+        // and the per-request deadline; the grace period is a backstop that
+        // lets operators bound it explicitly.
+        println!("mobile onboarding server draining (grace {shutdown_grace:?})");
+        drop(sender);
+        let drain_deadline = Instant::now() + shutdown_grace;
+        for worker in workers {
+            if Instant::now() >= drain_deadline {
+                eprintln!("shutdown grace period elapsed; exiting with workers still busy");
+                break;
+            }
+            let _ = worker.join();
+        }
+        println!("mobile onboarding server stopped");
 
         Ok(())
     }
 
-    fn handle_connection(
-        stream: &mut TcpStream,
-        runtime: &mut Runtime,
-        config: &ServerConfig,
-        tokio_runtime: &tokio::runtime::Runtime,
-    ) -> Result<(), String> {
-        let response = match read_http_request(stream, config.max_body_bytes) {
-            Ok(request) => handle_request(request, runtime, config, tokio_runtime),
+    fn worker_loop(shared: Arc<Shared>, receiver: Arc<Mutex<mpsc::Receiver<TcpStream>>>) {
+        loop {
+            let stream = {
+                let receiver = match receiver.lock() {
+                    Ok(receiver) => receiver,
+                    Err(_) => return,
+                };
+                match receiver.recv() {
+                    Ok(stream) => stream,
+                    Err(_) => return,
+                }
+            };
+            let mut stream = stream;
+            if let Err(error) = handle_connection(&mut stream, &shared) {
+                eprintln!("request failed: {error}");
+            }
+        }
+    }
+
+    fn reject_overloaded(stream: &mut TcpStream, config: &ServerConfig) {
+        let _ = stream.set_write_timeout(Some(config.read_timeout));
+        let _ = write_http_response(
+            stream,
+            wire_json_response(
+                503,
+                r#"{"status":"error","error":{"code":"overloaded","message":"server is at capacity; retry shortly"}}"#,
+            ),
+        );
+    }
+
+    #[cfg(unix)]
+    fn install_shutdown_signal_handler(shutdown: Arc<AtomicBool>) -> Result<(), String> {
+        let signal_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .build()
+            .map_err(|error| format!("could not start signal listener runtime: {error}"))?;
+        std::thread::Builder::new()
+            .name("signal-listener".to_string())
+            .spawn(move || {
+                signal_runtime.block_on(async {
+                    use tokio::signal::unix::{signal, SignalKind};
+                    let mut terminate = match signal(SignalKind::terminate()) {
+                        Ok(signal) => signal,
+                        Err(error) => {
+                            eprintln!("could not listen for SIGTERM: {error}");
+                            return;
+                        }
+                    };
+                    let mut interrupt = match signal(SignalKind::interrupt()) {
+                        Ok(signal) => signal,
+                        Err(error) => {
+                            eprintln!("could not listen for SIGINT: {error}");
+                            return;
+                        }
+                    };
+                    std::future::poll_fn(|context| {
+                        if terminate.poll_recv(context).is_ready()
+                            || interrupt.poll_recv(context).is_ready()
+                        {
+                            std::task::Poll::Ready(())
+                        } else {
+                            std::task::Poll::Pending
+                        }
+                    })
+                    .await;
+                });
+                println!("shutdown signal received; draining in-flight requests");
+                shutdown.store(true, Ordering::SeqCst);
+            })
+            .map_err(|error| format!("could not spawn signal listener thread: {error}"))?;
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    fn install_shutdown_signal_handler(_shutdown: Arc<AtomicBool>) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn handle_connection(stream: &mut TcpStream, shared: &Shared) -> Result<(), String> {
+        let config = &shared.config;
+        let _ = stream.set_read_timeout(Some(config.read_timeout));
+        let _ = stream.set_write_timeout(Some(config.read_timeout));
+        // Wall-clock deadline for the whole request. Socket timeouts only
+        // bound each individual read; a client trickling one byte per second
+        // would otherwise hold a worker indefinitely.
+        let deadline = Instant::now() + config.request_deadline;
+        let response = match read_http_request(stream, config.max_body_bytes, deadline) {
+            Ok(request) => handle_request(request, shared),
             Err(ReadHttpRequestError::PayloadTooLarge) => wire_json_response(
                 413,
                 r#"{"status":"error","error":{"code":"payload_too_large","message":"request body exceeds configured limit"}}"#,
@@ -264,34 +420,41 @@ mod server {
                 400,
                 r#"{"status":"error","error":{"code":"bad_request","message":"request must be a valid HTTP request"}}"#,
             ),
+            Err(ReadHttpRequestError::DeadlineExceeded) => wire_json_response(
+                408,
+                r#"{"status":"error","error":{"code":"request_timeout","message":"request was not received within the configured deadline"}}"#,
+            ),
             Err(ReadHttpRequestError::Io(error)) => return Err(format!("read failed: {error}")),
         };
         write_http_response(stream, response).map_err(|error| format!("write failed: {error}"))
     }
 
-    fn handle_request(
-        request: ParsedHttpRequest,
-        runtime: &mut Runtime,
-        config: &ServerConfig,
-        tokio_runtime: &tokio::runtime::Runtime,
-    ) -> WireResponse {
+    fn handle_request(request: ParsedHttpRequest, shared: &Shared) -> WireResponse {
+        let config = &shared.config;
         let route_path = request
             .path
             .split('?')
             .next()
             .unwrap_or(request.path.as_str());
         match (request.method.as_str(), route_path) {
+            // Liveness and readiness must answer even while a long-running
+            // onboarding request holds the runtime lock, so neither takes it:
+            // readiness probes the pool directly.
             ("GET", "/health") => wire_json_response(200, r#"{"status":"ok"}"#),
-            ("GET", "/ready") => match tokio_runtime.block_on(runtime.readiness_check()) {
-                Ok(readiness) if readiness.database_reachable => {
-                    wire_json_response(200, r#"{"status":"ready"}"#)
+            ("GET", "/ready") => {
+                let probe = shared.tokio.block_on(async {
+                    sqlx::query_scalar::<_, i32>("SELECT 1")
+                        .fetch_one(&shared.readiness_pool)
+                        .await
+                });
+                match probe {
+                    Ok(1) => wire_json_response(200, r#"{"status":"ready"}"#),
+                    Ok(_) | Err(_) => wire_json_response(503, r#"{"status":"not_ready"}"#),
                 }
-                Ok(_) => wire_json_response(503, r#"{"status":"not_ready"}"#),
-                Err(_) => wire_json_response(503, r#"{"status":"not_ready"}"#),
-            },
+            }
             (method, MOBILE_IDENTITY_ONBOARDING_LIVE_PRESENCE_CHALLENGE_HTTP_PATH) => {
                 handle_live_presence_challenge_issue_http_request(
-                    &runtime.identity.live_presence_challenge_store,
+                    &shared.challenge_store,
                     method,
                     route_path,
                     request.body,
@@ -301,23 +464,47 @@ mod server {
             (method, MOBILE_IDENTITY_ONBOARDING_LIVE_PRESENCE_CALLBACK_HTTP_PATH) => {
                 handle_live_presence_callback_http_request(method, route_path, request.body, config)
             }
-            (method, MOBILE_IDENTITY_ONBOARDING_HTTP_PATH) => handle_identity_runtime_http_request(
-                &mut runtime.identity,
-                method,
-                route_path,
-                request.body,
-                config,
-                tokio_runtime,
-            ),
-            _ => handle_account_runtime_http_request(
-                &mut runtime.account,
-                &request.method,
-                route_path,
-                request.body,
-                config,
-                tokio_runtime,
-            ),
+            (method, MOBILE_IDENTITY_ONBOARDING_HTTP_PATH) => {
+                let mut runtime = match shared.runtime.lock() {
+                    Ok(runtime) => runtime,
+                    Err(poisoned) => return runtime_lock_poisoned_response(poisoned),
+                };
+                handle_identity_runtime_http_request(
+                    &mut runtime.identity,
+                    method,
+                    route_path,
+                    request.body,
+                    config,
+                    &shared.tokio,
+                )
+            }
+            _ => {
+                let mut runtime = match shared.runtime.lock() {
+                    Ok(runtime) => runtime,
+                    Err(poisoned) => return runtime_lock_poisoned_response(poisoned),
+                };
+                handle_account_runtime_http_request(
+                    &mut runtime.account,
+                    &request.method,
+                    route_path,
+                    request.body,
+                    config,
+                    &shared.tokio,
+                )
+            }
         }
+    }
+
+    fn runtime_lock_poisoned_response(
+        _poisoned: std::sync::PoisonError<std::sync::MutexGuard<'_, Runtime>>,
+    ) -> WireResponse {
+        // A worker panicked while holding the runtime lock. Refuse further
+        // stateful work rather than running on possibly inconsistent
+        // in-memory state; /health and /ready stay up for diagnosis.
+        wire_json_response(
+            500,
+            r#"{"status":"error","error":{"code":"runtime_unavailable","message":"runtime state is unavailable after an internal error"}}"#,
+        )
     }
 
     fn handle_account_runtime_http_request(
@@ -438,6 +625,10 @@ mod server {
         run_migrations: bool,
         max_body_bytes: usize,
         read_timeout: Duration,
+        request_deadline: Duration,
+        worker_threads: usize,
+        queue_depth: usize,
+        shutdown_grace: Duration,
         authored_by: Author,
         fact_key_id: String,
         fact_key_material: Vec<u8>,
@@ -468,9 +659,19 @@ mod server {
             let max_body_bytes = usize_env("IDENTITY_MODEL_RUNTIME_MAX_BODY_BYTES", 65_536)?;
             let read_timeout =
                 Duration::from_secs(u64_env("IDENTITY_MODEL_RUNTIME_READ_TIMEOUT_SECONDS", 5)?);
+            let request_deadline = Duration::from_secs(u64_env(
+                "IDENTITY_MODEL_RUNTIME_REQUEST_DEADLINE_SECONDS",
+                15,
+            )?);
+            let worker_threads = usize_env("IDENTITY_MODEL_RUNTIME_WORKER_THREADS", 8)?.max(1);
+            let queue_depth = usize_env("IDENTITY_MODEL_RUNTIME_QUEUE_DEPTH", 32)?.max(1);
+            let shutdown_grace = Duration::from_secs(u64_env(
+                "IDENTITY_MODEL_RUNTIME_SHUTDOWN_GRACE_SECONDS",
+                20,
+            )?);
             let authored_by = Author {
                 author_type: AuthorType::System,
-                author_id: Some(Id(optional_env("IDENTITY_MODEL_RUNTIME_AUTHOR_ID")
+                author_id: Some(AuthorId(optional_env("IDENTITY_MODEL_RUNTIME_AUTHOR_ID")
                     .unwrap_or_else(|| "author-mobile-runtime".to_string()))),
                 display_name: Some(
                     optional_env("IDENTITY_MODEL_RUNTIME_AUTHOR_DISPLAY")
@@ -509,13 +710,15 @@ mod server {
                 });
             let live_presence_retry_policy_refs =
                 optional_policy_refs_env("IDENTITY_MODEL_LIVE_PRESENCE_RETRY_POLICY_REFS")?
-                    .unwrap_or_else(|| vec![Id("live-presence-retry@v1".to_string())]);
+                    .unwrap_or_else(|| vec![PolicyRef("live-presence-retry@v1".to_string())]);
             let live_presence_manual_review_policy_refs =
                 optional_policy_refs_env("IDENTITY_MODEL_LIVE_PRESENCE_MANUAL_REVIEW_POLICY_REFS")?
-                    .unwrap_or_else(|| vec![Id("live-presence-manual-review@v1".to_string())]);
+                    .unwrap_or_else(|| {
+                        vec![PolicyRef("live-presence-manual-review@v1".to_string())]
+                    });
             let live_presence_retention_policy_refs =
                 optional_policy_refs_env("IDENTITY_MODEL_LIVE_PRESENCE_RETENTION_POLICY_REFS")?
-                    .unwrap_or_else(|| vec![Id("live-presence-retention@v1".to_string())]);
+                    .unwrap_or_else(|| vec![PolicyRef("live-presence-retention@v1".to_string())]);
 
             Ok(Self {
                 bind_addr,
@@ -523,6 +726,10 @@ mod server {
                 run_migrations,
                 max_body_bytes,
                 read_timeout,
+                request_deadline,
+                worker_threads,
+                queue_depth,
+                shutdown_grace,
                 authored_by,
                 fact_key_id,
                 fact_key_material,
@@ -550,7 +757,10 @@ mod server {
         ) -> Result<MobileOnboardingEncryptedPersistenceContext, String> {
             let (now, nanos) = now_timestamp_and_nanos()?;
             Ok(MobileOnboardingEncryptedPersistenceContext {
-                transaction_id: Id(format!("{}-{nanos}", self.transaction_id_prefix)),
+                transaction_id: PersistenceTransactionId(format!(
+                    "{}-{nanos}",
+                    self.transaction_id_prefix
+                )),
                 committed_at: now.clone(),
                 materialization_policy: PolicyEvaluation {
                     action: SensitiveAction::ViewRecord,
@@ -577,7 +787,7 @@ mod server {
                 issued_at_seconds + self.live_presence_challenge_ttl_seconds as i64,
             );
             Ok(MobileLivePresenceChallengeIssueContext {
-                challenge_id: Id(format!("live-presence-{nanos}")),
+                challenge_id: LivePresenceChallengeId(format!("live-presence-{nanos}")),
                 challenge_nonce: generate_live_presence_challenge_nonce()?,
                 issued_at,
                 expires_at,
@@ -696,7 +906,7 @@ mod server {
             })?;
         let retention_policy_refs =
             optional_policy_refs_env("IDENTITY_MODEL_LIVENESS_RETENTION_POLICY_REFS")?
-                .unwrap_or_else(|| vec![Id("live-presence-retention@v1".to_string())]);
+                .unwrap_or_else(|| vec![PolicyRef("live-presence-retention@v1".to_string())]);
 
         Ok(StaticLivenessCeremonyVerifier::new(
             expected_assertion,
@@ -740,17 +950,22 @@ mod server {
     enum ReadHttpRequestError {
         BadRequest,
         PayloadTooLarge,
+        DeadlineExceeded,
         Io(std::io::Error),
     }
 
     fn read_http_request(
         stream: &mut TcpStream,
         max_body_bytes: usize,
+        deadline: Instant,
     ) -> Result<ParsedHttpRequest, ReadHttpRequestError> {
         let mut buffer = Vec::new();
         let mut chunk = [0_u8; 1024];
         let header_end = loop {
-            let read = stream.read(&mut chunk).map_err(ReadHttpRequestError::Io)?;
+            if Instant::now() >= deadline {
+                return Err(ReadHttpRequestError::DeadlineExceeded);
+            }
+            let read = stream.read(&mut chunk).map_err(read_error)?;
             if read == 0 {
                 return Err(ReadHttpRequestError::BadRequest);
             }
@@ -783,7 +998,10 @@ mod server {
 
         let body_start = header_end + 4;
         while buffer.len() < body_start + content_length {
-            let read = stream.read(&mut chunk).map_err(ReadHttpRequestError::Io)?;
+            if Instant::now() >= deadline {
+                return Err(ReadHttpRequestError::DeadlineExceeded);
+            }
+            let read = stream.read(&mut chunk).map_err(read_error)?;
             if read == 0 {
                 return Err(ReadHttpRequestError::BadRequest);
             }
@@ -793,6 +1011,18 @@ mod server {
             .map_err(|_| ReadHttpRequestError::BadRequest)?;
 
         Ok(ParsedHttpRequest { method, path, body })
+    }
+
+    fn read_error(error: std::io::Error) -> ReadHttpRequestError {
+        // A per-read socket timeout surfaces as WouldBlock/TimedOut; report
+        // it as a request timeout rather than an opaque I/O failure so the
+        // client gets a 408 instead of a dropped connection.
+        match error.kind() {
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
+                ReadHttpRequestError::DeadlineExceeded
+            }
+            _ => ReadHttpRequestError::Io(error),
+        }
     }
 
     fn find_header_end(buffer: &[u8]) -> Option<usize> {
@@ -847,6 +1077,7 @@ mod server {
             400 => "Bad Request",
             401 => "Unauthorized",
             404 => "Not Found",
+            408 => "Request Timeout",
             405 => "Method Not Allowed",
             409 => "Conflict",
             413 => "Payload Too Large",
@@ -904,7 +1135,7 @@ mod server {
             .split(',')
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .map(|value| Id(value.to_string()))
+            .map(|value| PolicyRef(value.to_string()))
             .collect::<Vec<_>>();
         if refs.is_empty() {
             return Err(format!("{name} must contain at least one policy ref"));
@@ -919,7 +1150,7 @@ mod server {
                     .split(',')
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
-                    .map(|value| Id(value.to_string()))
+                    .map(|value| PolicyRef(value.to_string()))
                     .collect::<Vec<_>>();
                 if refs.is_empty() {
                     return Err(format!("{name} must contain at least one policy ref"));

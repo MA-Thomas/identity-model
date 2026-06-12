@@ -31,7 +31,7 @@ impl CompleteRecordExportStepUpRequest {
         id_namespace: &str,
         id_generator: &mut impl IdGenerator,
     ) -> Self {
-        let challenge_id = id_generator.next_episode_id(&format!("challenge-{id_namespace}"));
+        let challenge_id = id_generator.next_challenge_id(&format!("challenge-{id_namespace}"));
         let nonce = id_generator
             .next_fact_id(&format!("nonce-{id_namespace}"))
             .0;
@@ -63,21 +63,21 @@ impl CompleteRecordExportStepUpRequest {
             started_at,
             id_plan: WorkflowIdPlan::deterministic_with_fact_overrides(
                 "export",
-                Id("episode-export-step-up".to_string()),
+                ProblemEpisodeId("episode-export-step-up".to_string()),
                 4,
                 vec![
-                    (0, Id("fact-export-credential".to_string())),
-                    (1, Id("fact-export-continuity".to_string())),
-                    (2, Id("fact-export-risk".to_string())),
-                    (3, Id("fact-export-access-decision".to_string())),
+                    (0, FactId("fact-export-credential".to_string())),
+                    (1, FactId("fact-export-continuity".to_string())),
+                    (2, FactId("fact-export-risk".to_string())),
+                    (3, FactId("fact-export-access-decision".to_string())),
                 ],
             )
             .with_challenge(
-                Id("challenge-export-step-up".to_string()),
+                ChallengeId("challenge-export-step-up".to_string()),
                 "nonce-export-step-up".to_string(),
             ),
             challenge_expires_at: Timestamp("2026-05-29T00:10:00Z".to_string()),
-            policy_ref: Id("complete-record-export-policy".to_string()),
+            policy_ref: PolicyRef("complete-record-export-policy".to_string()),
             device_ref: Some("device-passkey-1".to_string()),
         }
     }
@@ -137,7 +137,7 @@ pub fn complete_record_export_step_up_outcome_from_request(
         .issue_challenge(ContinuityChallenge {
             challenge_id: request
                 .id_plan
-                .challenge_id_or(Id("challenge-export-step-up".to_string())),
+                .challenge_id_or(ChallengeId("challenge-export-step-up".to_string())),
             subject_id: request.subject_id.clone(),
             enrollment_ref: request.enrollment_ref,
             nonce: request.id_plan.nonce_or("nonce-export-step-up".to_string()),

@@ -56,7 +56,7 @@ impl IdentityDisputeResolutionRequest {
             started_at,
             id_plan: WorkflowIdPlan::deterministic(
                 "provider-link-dispute",
-                Id("episode-provider-link-dispute".to_string()),
+                ProblemEpisodeId("episode-provider-link-dispute".to_string()),
                 4,
             ),
         }
@@ -77,7 +77,7 @@ impl IdentityDisputeResolutionRequest {
             started_at,
             id_plan: WorkflowIdPlan::deterministic(
                 "subject-merge",
-                Id("episode-duplicate-subject-merge".to_string()),
+                ProblemEpisodeId("episode-duplicate-subject-merge".to_string()),
                 2,
             ),
         }
@@ -98,7 +98,7 @@ impl IdentityDisputeResolutionRequest {
             started_at,
             id_plan: WorkflowIdPlan::deterministic(
                 "subject-split",
-                Id("episode-incorrect-merge-split".to_string()),
+                ProblemEpisodeId("episode-incorrect-merge-split".to_string()),
                 2,
             ),
         }
@@ -116,7 +116,7 @@ impl IdentityDisputeResolutionRequest {
             started_at,
             id_plan: WorkflowIdPlan::deterministic(
                 "witness-supersession",
-                Id("episode-witness-supersession".to_string()),
+                ProblemEpisodeId("episode-witness-supersession".to_string()),
                 3,
             ),
         }

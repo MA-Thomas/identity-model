@@ -749,7 +749,7 @@ mod live_jwks {
         let Ok(token) = env::var("IDENTITY_MODEL_KEYCLOAK_TOKEN") else {
             return;
         };
-        let subject_id = env::var("IDENTITY_MODEL_KEYCLOAK_SUBJECT_ID")
+        let subject_id: SubjectId = env::var("IDENTITY_MODEL_KEYCLOAK_SUBJECT_ID")
             .map(|value| id(&value))
             .unwrap_or_else(|_| id("subject-live-keycloak"));
         let device_ref = env::var("IDENTITY_MODEL_KEYCLOAK_DEVICE_REF").ok();

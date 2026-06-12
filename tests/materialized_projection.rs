@@ -5,7 +5,7 @@ use common::*;
 
 #[test]
 fn materialized_state_excludes_revoked_devices_and_contested_links() {
-    let subject_id = id("subject-1");
+    let subject_id: SubjectId = id("subject-1");
     let clinical_link_id = id("clinical-link");
     let device_ref = "device-1".to_string();
     let facts = vec![
@@ -59,7 +59,7 @@ fn materialized_state_excludes_revoked_devices_and_contested_links() {
 
 #[test]
 fn materialized_state_respects_validity_witness_expiration_and_continuity_outcomes() {
-    let subject_id = id("subject-materialized");
+    let subject_id: SubjectId = id("subject-materialized");
     let facts = vec![
         fact(
             "expired-witness",
@@ -121,7 +121,7 @@ fn materialized_state_respects_validity_witness_expiration_and_continuity_outcom
 
 #[test]
 fn materialized_state_deduplicates_replayed_active_views() {
-    let subject_id = id("subject-materialized-dedupe");
+    let subject_id: SubjectId = id("subject-materialized-dedupe");
     let device_ref = "device-dedupe".to_string();
     let clinical_link = fact(
         "clinical-link-dedupe",

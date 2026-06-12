@@ -49,16 +49,16 @@ impl DelegationRequest {
             started_at: started_at.clone(),
             id_plan: WorkflowIdPlan::deterministic_with_fact_overrides(
                 "delegation",
-                Id("episode-delegation".to_string()),
+                ProblemEpisodeId("episode-delegation".to_string()),
                 5,
-                vec![(2, Id("fact-delegation-authority".to_string()))],
+                vec![(2, FactId("fact-delegation-authority".to_string()))],
             ),
             scope: AuthorityScope {
                 permitted_actions: vec![
                     AuthorizedAction::ViewRecord,
                     AuthorizedAction::ShareRecord,
                 ],
-                constrained_by_policy: vec![Id("caregiver-delegation-policy".to_string())],
+                constrained_by_policy: vec![PolicyRef("caregiver-delegation-policy".to_string())],
             },
             valid_period: Some(TimeInterval {
                 start: started_at,
