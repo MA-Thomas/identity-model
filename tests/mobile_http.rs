@@ -303,6 +303,123 @@ fn mobile_identity_onboarding_live_presence_challenge_endpoint_issues_challenge(
 }
 
 #[test]
+fn mobile_app_attest_key_registration_challenge_endpoint_issues_challenge() {
+    let request_body = json!({
+        "client_context": {
+            "platform": "iphone",
+            "request_id": "request-app-attest-registration-challenge"
+        }
+    });
+
+    let response = handle_mobile_app_attest_key_registration_challenge_http_request(
+        MobileOnboardingHttpRequest::post(
+            MOBILE_APP_ATTEST_KEY_REGISTRATION_CHALLENGE_HTTP_PATH,
+            request_body.to_string(),
+        ),
+        MobileAppAttestKeyRegistrationChallengeIssueContext {
+            challenge_nonce: "app-attest-registration-nonce".to_string(),
+            issued_at: ts("2026-05-29T00:04:50Z"),
+            expires_at: ts("2026-05-29T00:09:50Z"),
+            expected_config: AppAttestClientConfig::ios_app(
+                "TEAMID1234",
+                "com.fen.identity",
+                AppAttestEnvironment::Development,
+            ),
+        },
+    );
+
+    assert_eq!(response.status_code, 200, "{}", response.body);
+    assert_eq!(response.content_type, APPLICATION_JSON);
+    let body: MobileAppAttestKeyRegistrationChallengeHttpResponseBody =
+        serde_json::from_str(&response.body).expect("issued response should be JSON");
+    assert_eq!(
+        body,
+        MobileAppAttestKeyRegistrationChallengeHttpResponseBody::Issued {
+            request_id: Some("request-app-attest-registration-challenge".to_string()),
+            challenge: MobileAppAttestKeyRegistrationChallengeHttpSummary {
+                challenge_nonce: "app-attest-registration-nonce".to_string(),
+                issued_at: "2026-05-29T00:04:50Z".to_string(),
+                expires_at: "2026-05-29T00:09:50Z".to_string(),
+                expected_app: MobileLivePresenceExpectedAppHttpSummary {
+                    team_id: "TEAMID1234".to_string(),
+                    bundle_id: "com.fen.identity".to_string(),
+                    app_id: "TEAMID1234.com.fen.identity".to_string(),
+                    environment: "development".to_string(),
+                },
+            },
+        }
+    );
+}
+
+#[cfg(feature = "production-crypto")]
+#[test]
+fn mobile_app_attest_key_registration_endpoint_records_verified_registration() {
+    let store = InMemoryAppAttestKeyStateStore::new();
+    let config = AppAttestClientConfig::ios_app(
+        "TEAMID1234",
+        "com.fen.identity",
+        AppAttestEnvironment::Development,
+    );
+    let request_body = json!({
+        "key_id": "app-attest-key-http",
+        "device_ref": "iphone-app-attest-http",
+        "challenge_nonce": "app-attest-registration-nonce",
+        "public_key_bytes_hex": "04",
+        "certificate_chain_der_hex": ["01"],
+        "credential_id_hex": "6170702d6174746573742d6b65792d68747470",
+        "authenticator_data_hex": "02",
+        "client_data_hash_hex": "03",
+        "attestation_format": "apple-app-attest",
+        "client_context": {
+            "platform": "iphone",
+            "request_id": "request-app-attest-registration"
+        }
+    });
+
+    let response = handle_mobile_app_attest_key_registration_http_request(
+        MobileOnboardingHttpRequest::post(
+            MOBILE_APP_ATTEST_KEY_REGISTRATION_HTTP_PATH,
+            request_body.to_string(),
+        ),
+        &AcceptingAppAttestKeyRegistrationVerifier,
+        &store,
+        MobileAppAttestKeyRegistrationContext {
+            observed_at: ts("2026-05-29T00:05:00Z"),
+            expected_config: config,
+        },
+    );
+
+    assert_eq!(response.status_code, 200, "{}", response.body);
+    assert_eq!(response.content_type, APPLICATION_JSON);
+    let body: MobileAppAttestKeyRegistrationHttpResponseBody =
+        serde_json::from_str(&response.body).expect("registered response should be JSON");
+    assert_eq!(
+        body,
+        MobileAppAttestKeyRegistrationHttpResponseBody::Registered {
+            request_id: Some("request-app-attest-registration".to_string()),
+            registration: MobileAppAttestKeyRegistrationHttpSummary {
+                key_id: "app-attest-key-http".to_string(),
+                device_ref: "iphone-app-attest-http".to_string(),
+                team_id: "TEAMID1234".to_string(),
+                bundle_id: "com.fen.identity".to_string(),
+                app_id: "TEAMID1234.com.fen.identity".to_string(),
+                environment: "development".to_string(),
+                registered_at: "2026-05-29T00:05:00Z".to_string(),
+                attestation_challenge_nonce: "app-attest-registration-nonce".to_string(),
+                attestation_format: "apple-app-attest".to_string(),
+            },
+        }
+    );
+
+    let registration = store
+        .app_attest_key_registration("app-attest-key-http")
+        .expect("registration lookup should succeed")
+        .expect("registration should be stored");
+    assert_eq!(registration.device_ref, "iphone-app-attest-http");
+    assert_eq!(registration.public_key_bytes, vec![0x04]);
+}
+
+#[test]
 fn mobile_identity_onboarding_live_presence_callback_maps_provider_result_to_liveness_input() {
     let callback_verifier = StaticLivenessProviderCallbackVerifier::new(
         "MockLivePresenceProvider",
@@ -1210,6 +1327,31 @@ fn assert_callback_error_code(
         MobileLivePresenceCallbackHttpResponseBody::Error { error }
             if error.code == code
     ));
+}
+
+#[cfg(feature = "production-crypto")]
+struct AcceptingAppAttestKeyRegistrationVerifier;
+
+#[cfg(feature = "production-crypto")]
+impl AppAttestKeyRegistrationVerifier for AcceptingAppAttestKeyRegistrationVerifier {
+    fn verify_app_attest_key_registration(
+        &self,
+        request: &AppleAppAttestKeyRegistrationVerificationRequest,
+        _observed_at: &Timestamp,
+    ) -> Result<AppAttestKeyRegistration, AppAttestAssertionVerificationError> {
+        Ok(AppAttestKeyRegistration {
+            key_id: request.key_id.clone(),
+            team_id: request.config.team_id.clone(),
+            bundle_id: request.config.bundle_id.clone(),
+            app_id: request.config.app_id.clone(),
+            environment: request.config.environment,
+            device_ref: request.device_ref.clone(),
+            public_key_bytes: request.public_key_bytes.clone(),
+            registered_at: request.registered_at.clone(),
+            attestation_challenge_nonce: request.challenge_nonce.clone(),
+            attestation_format: request.attestation_format.clone(),
+        })
+    }
 }
 
 fn persona_identity_proofing_json(label: &str) -> serde_json::Value {

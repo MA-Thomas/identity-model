@@ -19,6 +19,10 @@ pub const MOBILE_IDENTITY_ONBOARDING_LIVE_PRESENCE_CHALLENGE_HTTP_PATH: &str =
     "/mobile/identity-onboarding/live-presence-challenge";
 pub const MOBILE_IDENTITY_ONBOARDING_LIVE_PRESENCE_CALLBACK_HTTP_PATH: &str =
     "/mobile/identity-onboarding/live-presence-callback";
+pub const MOBILE_APP_ATTEST_KEY_REGISTRATION_CHALLENGE_HTTP_PATH: &str =
+    "/mobile/app-attest/key-registration-challenge";
+pub const MOBILE_APP_ATTEST_KEY_REGISTRATION_HTTP_PATH: &str =
+    "/mobile/app-attest/key-registration";
 pub const APPLICATION_JSON: &str = "application/json";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -273,6 +277,68 @@ pub fn handle_mobile_identity_onboarding_live_presence_callback_http_request(
     }
 }
 
+pub fn handle_mobile_app_attest_key_registration_challenge_http_request(
+    request: MobileOnboardingHttpRequest,
+    issue_context: MobileAppAttestKeyRegistrationChallengeIssueContext,
+) -> MobileOnboardingHttpResponse {
+    let request_id = match app_attest_key_registration_challenge_from_http_request(request) {
+        Ok(request_id) => request_id,
+        Err(response) => return response,
+    };
+
+    json_response(
+        200,
+        MobileAppAttestKeyRegistrationChallengeHttpResponseBody::Issued {
+            challenge: MobileAppAttestKeyRegistrationChallengeHttpSummary::from_context(
+                issue_context,
+            ),
+            request_id,
+        },
+    )
+}
+
+#[cfg(feature = "production-crypto")]
+pub fn handle_mobile_app_attest_key_registration_http_request(
+    request: MobileOnboardingHttpRequest,
+    registration_verifier: &impl AppAttestKeyRegistrationVerifier,
+    registration_store: &impl AppAttestKeyRegistrationStore,
+    registration_context: MobileAppAttestKeyRegistrationContext,
+) -> MobileOnboardingHttpResponse {
+    let (parsed, request_id) = match app_attest_key_registration_from_http_request(request) {
+        Ok(parsed) => parsed,
+        Err(response) => return response,
+    };
+
+    let registration_request = match parsed.into_registration_request(
+        registration_context.expected_config.clone(),
+        registration_context.observed_at.clone(),
+    ) {
+        Ok(request) => request,
+        Err(error) => return app_attest_key_registration_error_response(error),
+    };
+
+    let registration = match registration_verifier.verify_app_attest_key_registration(
+        &registration_request,
+        &registration_context.observed_at,
+    ) {
+        Ok(registration) => registration,
+        Err(error) => return app_attest_key_registration_error_response(error),
+    };
+
+    match registration_store.record_app_attest_key_registration(&registration) {
+        Ok(registration) => json_response(
+            200,
+            MobileAppAttestKeyRegistrationHttpResponseBody::Registered {
+                registration: MobileAppAttestKeyRegistrationHttpSummary::from_registration(
+                    registration,
+                ),
+                request_id,
+            },
+        ),
+        Err(error) => app_attest_key_registration_error_response(error),
+    }
+}
+
 pub fn handle_encrypted_mobile_identity_onboarding_http_request<R, M, E>(
     request: MobileOnboardingHttpRequest,
     service: &IdentityWorkflowService,
@@ -513,6 +579,86 @@ fn live_presence_callback_from_http_request(
     Ok((parsed, request_id))
 }
 
+fn app_attest_key_registration_challenge_from_http_request(
+    request: MobileOnboardingHttpRequest,
+) -> Result<Option<String>, MobileOnboardingHttpResponse> {
+    if request.path != MOBILE_APP_ATTEST_KEY_REGISTRATION_CHALLENGE_HTTP_PATH {
+        return Err(
+            app_attest_key_registration_challenge_error_response_with_code(
+                404,
+                "not_found",
+                "App Attest key-registration challenge endpoint not found",
+            ),
+        );
+    }
+    if request.method != MOBILE_ONBOARDING_HTTP_METHOD {
+        return Err(
+            app_attest_key_registration_challenge_error_response_with_code(
+                405,
+                "method_not_allowed",
+                "App Attest key-registration challenge issuance accepts POST requests",
+            ),
+        );
+    }
+
+    let parsed = serde_json::from_str::<MobileAppAttestKeyRegistrationChallengeHttpRequestBody>(
+        &request.body,
+    )
+    .map_err(|_| {
+        app_attest_key_registration_challenge_error_response_with_code(
+            400,
+            "invalid_request_json",
+            "request body must be valid App Attest key-registration challenge JSON",
+        )
+    })?;
+    Ok(parsed
+        .client_context
+        .as_ref()
+        .and_then(|context| context.request_id.clone()))
+}
+
+#[cfg(feature = "production-crypto")]
+fn app_attest_key_registration_from_http_request(
+    request: MobileOnboardingHttpRequest,
+) -> Result<
+    (
+        MobileAppAttestKeyRegistrationHttpRequestBody,
+        Option<String>,
+    ),
+    MobileOnboardingHttpResponse,
+> {
+    if request.path != MOBILE_APP_ATTEST_KEY_REGISTRATION_HTTP_PATH {
+        return Err(app_attest_key_registration_error_response_with_code(
+            404,
+            "not_found",
+            "App Attest key-registration endpoint not found",
+        ));
+    }
+    if request.method != MOBILE_ONBOARDING_HTTP_METHOD {
+        return Err(app_attest_key_registration_error_response_with_code(
+            405,
+            "method_not_allowed",
+            "App Attest key registration accepts POST requests",
+        ));
+    }
+
+    let parsed =
+        serde_json::from_str::<MobileAppAttestKeyRegistrationHttpRequestBody>(&request.body)
+            .map_err(|_| {
+                app_attest_key_registration_error_response_with_code(
+                    400,
+                    "invalid_request_json",
+                    "request body must be valid App Attest key-registration JSON",
+                )
+            })?;
+    let request_id = parsed
+        .client_context
+        .as_ref()
+        .and_then(|context| context.request_id.clone());
+
+    Ok((parsed, request_id))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct MobileOnboardingHttpRequestBody {
     pub subject_id: String,
@@ -645,6 +791,26 @@ pub struct MobileLivePresenceCallbackContext {
     pub observed_at: Timestamp,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MobileAppAttestKeyRegistrationChallengeIssueContext {
+    pub challenge_nonce: String,
+    pub issued_at: Timestamp,
+    pub expires_at: Timestamp,
+    pub expected_config: AppAttestClientConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MobileAppAttestKeyRegistrationContext {
+    pub observed_at: Timestamp,
+    pub expected_config: AppAttestClientConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct MobileAppAttestKeyRegistrationChallengeHttpRequestBody {
+    #[serde(default)]
+    pub client_context: Option<MobileOnboardingClientHttpInput>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct MobileLivePresenceChallengeIssueHttpRequestBody {
     #[serde(default)]
@@ -677,6 +843,82 @@ pub struct MobileLivePresenceCallbackHttpRequestBody {
     pub retention_policy_refs: Option<Vec<String>>,
     #[serde(default)]
     pub client_context: Option<MobileOnboardingClientHttpInput>,
+}
+
+#[cfg(feature = "production-crypto")]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct MobileAppAttestKeyRegistrationHttpRequestBody {
+    pub key_id: String,
+    pub device_ref: String,
+    pub challenge_nonce: String,
+    #[serde(default)]
+    pub attestation_object_hex: Option<String>,
+    #[serde(default)]
+    pub public_key_bytes_hex: Option<String>,
+    #[serde(default)]
+    pub certificate_chain_der_hex: Vec<String>,
+    #[serde(default)]
+    pub credential_id_hex: Option<String>,
+    #[serde(default)]
+    pub authenticator_data_hex: Option<String>,
+    #[serde(default)]
+    pub client_data_hash_hex: Option<String>,
+    #[serde(default)]
+    pub attestation_format: Option<String>,
+    #[serde(default)]
+    pub client_context: Option<MobileOnboardingClientHttpInput>,
+}
+
+#[cfg(feature = "production-crypto")]
+impl MobileAppAttestKeyRegistrationHttpRequestBody {
+    fn into_registration_request(
+        self,
+        expected_config: AppAttestClientConfig,
+        observed_at: Timestamp,
+    ) -> Result<AppleAppAttestKeyRegistrationVerificationRequest, AppAttestAssertionVerificationError>
+    {
+        if let Some(attestation_object_hex) = self.attestation_object_hex {
+            let attestation_object = parse_apple_app_attest_attestation_object(
+                &mobile_hex_decode(&attestation_object_hex)?,
+            )?;
+            return AppleAppAttestKeyRegistrationVerificationRequest::from_attestation_object(
+                self.key_id,
+                self.device_ref,
+                self.challenge_nonce,
+                observed_at,
+                expected_config,
+                attestation_object,
+            );
+        }
+
+        Ok(AppleAppAttestKeyRegistrationVerificationRequest {
+            key_id: self.key_id,
+            device_ref: self.device_ref,
+            public_key_bytes: mobile_hex_decode(required_registration_field(
+                self.public_key_bytes_hex.as_deref(),
+            )?)?,
+            certificate_chain_der: self
+                .certificate_chain_der_hex
+                .iter()
+                .map(|certificate| mobile_hex_decode(certificate))
+                .collect::<Result<Vec<_>, _>>()?,
+            credential_id: mobile_hex_decode(required_registration_field(
+                self.credential_id_hex.as_deref(),
+            )?)?,
+            authenticator_data: mobile_hex_decode(required_registration_field(
+                self.authenticator_data_hex.as_deref(),
+            )?)?,
+            client_data_hash: mobile_hex_decode(required_registration_field(
+                self.client_data_hash_hex.as_deref(),
+            )?)?,
+            challenge_nonce: self.challenge_nonce,
+            registered_at: observed_at,
+            attestation_format: self
+                .attestation_format
+                .unwrap_or_else(|| "apple-app-attest".to_string()),
+            config: expected_config,
+        })
+    }
 }
 
 impl MobileLivePresenceCallbackHttpRequestBody {
@@ -1236,6 +1478,86 @@ pub enum MobileLivePresenceCallbackHttpResponseBody {
     Error {
         error: MobileOnboardingHttpErrorBody,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum MobileAppAttestKeyRegistrationChallengeHttpResponseBody {
+    Issued {
+        challenge: MobileAppAttestKeyRegistrationChallengeHttpSummary,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
+    },
+    Error {
+        error: MobileOnboardingHttpErrorBody,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum MobileAppAttestKeyRegistrationHttpResponseBody {
+    Registered {
+        registration: MobileAppAttestKeyRegistrationHttpSummary,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
+    },
+    Error {
+        error: MobileOnboardingHttpErrorBody,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileAppAttestKeyRegistrationChallengeHttpSummary {
+    pub challenge_nonce: String,
+    pub issued_at: String,
+    pub expires_at: String,
+    pub expected_app: MobileLivePresenceExpectedAppHttpSummary,
+}
+
+impl MobileAppAttestKeyRegistrationChallengeHttpSummary {
+    fn from_context(context: MobileAppAttestKeyRegistrationChallengeIssueContext) -> Self {
+        Self {
+            challenge_nonce: context.challenge_nonce,
+            issued_at: context.issued_at.0,
+            expires_at: context.expires_at.0,
+            expected_app: MobileLivePresenceExpectedAppHttpSummary::from_expected_app(
+                LivePresenceExpectedAppContext::from_app_attest_config(&context.expected_config),
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MobileAppAttestKeyRegistrationHttpSummary {
+    pub key_id: String,
+    pub device_ref: String,
+    pub team_id: String,
+    pub bundle_id: String,
+    pub app_id: String,
+    pub environment: String,
+    pub registered_at: String,
+    pub attestation_challenge_nonce: String,
+    pub attestation_format: String,
+}
+
+#[cfg(feature = "production-crypto")]
+impl MobileAppAttestKeyRegistrationHttpSummary {
+    fn from_registration(registration: AppAttestKeyRegistration) -> Self {
+        Self {
+            key_id: registration.key_id,
+            device_ref: registration.device_ref,
+            team_id: registration.team_id,
+            bundle_id: registration.bundle_id,
+            app_id: registration.app_id,
+            environment: match registration.environment {
+                AppAttestEnvironment::Development => "development".to_string(),
+                AppAttestEnvironment::Production => "production".to_string(),
+            },
+            registered_at: registration.registered_at.0,
+            attestation_challenge_nonce: registration.attestation_challenge_nonce,
+            attestation_format: registration.attestation_format,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1804,6 +2126,99 @@ fn live_presence_callback_error_response_with_code(
             },
         },
     )
+}
+
+#[cfg(feature = "production-crypto")]
+fn app_attest_key_registration_error_response(
+    error: AppAttestAssertionVerificationError,
+) -> MobileOnboardingHttpResponse {
+    match error {
+        AppAttestAssertionVerificationError::KeyStateUnavailable => {
+            app_attest_key_registration_error_response_with_code(
+                500,
+                "app_attest_registration_storage_unavailable",
+                "App Attest key registration could not be stored",
+            )
+        }
+        AppAttestAssertionVerificationError::KeyContextMismatch => {
+            app_attest_key_registration_error_response_with_code(
+                409,
+                "app_attest_registration_key_conflict",
+                "App Attest key registration conflicts with existing key state",
+            )
+        }
+        _ => app_attest_key_registration_error_response_with_code(
+            422,
+            "app_attest_registration_verification_failed",
+            "App Attest key registration evidence was rejected",
+        ),
+    }
+}
+
+fn app_attest_key_registration_challenge_error_response_with_code(
+    status_code: u16,
+    code: impl Into<String>,
+    message: impl Into<String>,
+) -> MobileOnboardingHttpResponse {
+    json_response(
+        status_code,
+        MobileAppAttestKeyRegistrationChallengeHttpResponseBody::Error {
+            error: MobileOnboardingHttpErrorBody {
+                code: code.into(),
+                message: message.into(),
+            },
+        },
+    )
+}
+
+#[cfg(feature = "production-crypto")]
+fn app_attest_key_registration_error_response_with_code(
+    status_code: u16,
+    code: impl Into<String>,
+    message: impl Into<String>,
+) -> MobileOnboardingHttpResponse {
+    json_response(
+        status_code,
+        MobileAppAttestKeyRegistrationHttpResponseBody::Error {
+            error: MobileOnboardingHttpErrorBody {
+                code: code.into(),
+                message: message.into(),
+            },
+        },
+    )
+}
+
+#[cfg(feature = "production-crypto")]
+fn required_registration_field(
+    value: Option<&str>,
+) -> Result<&str, AppAttestAssertionVerificationError> {
+    value.ok_or(AppAttestAssertionVerificationError::InvalidAssertionEncoding)
+}
+
+#[cfg(feature = "production-crypto")]
+fn mobile_hex_decode(value: &str) -> Result<Vec<u8>, AppAttestAssertionVerificationError> {
+    let value = value.trim();
+    if value.len() % 2 != 0 {
+        return Err(AppAttestAssertionVerificationError::InvalidAssertionEncoding);
+    }
+
+    let mut bytes = Vec::with_capacity(value.len() / 2);
+    for pair in value.as_bytes().chunks_exact(2) {
+        let high = mobile_hex_nibble(pair[0])?;
+        let low = mobile_hex_nibble(pair[1])?;
+        bytes.push((high << 4) | low);
+    }
+    Ok(bytes)
+}
+
+#[cfg(feature = "production-crypto")]
+fn mobile_hex_nibble(byte: u8) -> Result<u8, AppAttestAssertionVerificationError> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(AppAttestAssertionVerificationError::InvalidAssertionEncoding),
+    }
 }
 
 fn json_response<T: Serialize>(status_code: u16, body: T) -> MobileOnboardingHttpResponse {

@@ -93,13 +93,20 @@ export IDENTITY_MODEL_APP_ATTEST_BUNDLE_ID="com.fen.identity"
 export IDENTITY_MODEL_APP_ATTEST_ENVIRONMENT="development"
 ```
 
-Before sending assertions in this mode, the key ID in the assertion must already exist in `identity_app_attest_key_registrations`. The registration row stores the trusted P-256 public key bytes that the assertion verifier resolves from PostgreSQL.
+Before sending assertions in this mode, the key ID in the assertion must already exist in `identity_app_attest_key_registrations`. The runtime now exposes a proof-app registration path for that:
+
+```text
+POST /mobile/app-attest/key-registration-challenge
+POST /mobile/app-attest/key-registration
+```
+
+The first route returns a CSPRNG-generated registration nonce and the configured expected Apple app identity. The signed iOS app should call `DCAppAttestService.attestKey` with the SHA-256 hash of that nonce, then post the native attestation object as hex to the registration route. The registration route verifies the Apple attestation object and stores the trusted P-256 public key bytes in PostgreSQL.
 
 Because `apple_assertion` mode does not have a static App Attest template to borrow from, also set `IDENTITY_MODEL_LIVENESS_CHALLENGE_NONCE`, `IDENTITY_MODEL_LIVENESS_DEVICE_REF`, `IDENTITY_MODEL_LIVENESS_OBSERVED_AT`, and `IDENTITY_MODEL_LIVENESS_EXPIRES_AT` when using the current static liveness verifier.
 
-In this mode the submitted assertion can use either the compact decoded assertion envelope accepted by `AppleAppAttestAssertionVerifier` or the raw `DCAppAttestService` assertion-object envelope. The verifier checks the configured app identity, app-ID hash, challenge-bound client-data hash, and P-256 signature before the PostgreSQL key-state guard checks replay and sign-count monotonicity.
+In this mode the submitted onboarding assertion can use either the compact decoded assertion envelope accepted by `AppleAppAttestAssertionVerifier` or the raw `DCAppAttestService` assertion-object envelope. The verifier checks the configured app identity, app-ID hash, challenge-bound client-data hash, and P-256 signature before the PostgreSQL key-state guard checks replay and sign-count monotonicity.
 
-This is not the full native-device path yet. Registration can now parse native attestation-object envelopes, verify the certificate chain to Apple's App Attestation Root CA, verify the App Attest nonce extension, and bind the attested public key to the leaf certificate. The remaining App Attest work is exercising the registered-key assertion path from an iOS app and deciding how to store/use Apple attestation receipts for fraud-risk telemetry.
+See `IOS_APP_ATTEST_PROOF.md` for the signed proof-app sequence and Swift-side envelope shape. The remaining App Attest work after the proof app is deciding how to store/use Apple attestation receipts for fraud-risk telemetry and keeping development/production environment behavior explicit.
 
 ## Common Problems
 

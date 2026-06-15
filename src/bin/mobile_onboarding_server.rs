@@ -102,6 +102,18 @@ mod server {
                 }
             }
         }
+
+        fn expected_config(&self) -> AppAttestClientConfig {
+            match self {
+                Self::Static(verifier) => AppAttestClientConfig {
+                    team_id: verifier.verified_assertion.team_id.clone(),
+                    bundle_id: verifier.verified_assertion.bundle_id.clone(),
+                    app_id: verifier.verified_assertion.app_id.clone(),
+                    environment: verifier.verified_assertion.environment,
+                },
+                Self::AppleAssertion { expected_config } => expected_config.clone(),
+            }
+        }
     }
 
     impl AppAttestAssertionVerifier for RuntimeAppAttestAssertionVerifier {
@@ -130,6 +142,8 @@ mod server {
         let storage = tokio_runtime.block_on(connect_storage(&config))?;
         let readiness_pool = storage.pool().clone();
         let challenge_store = PostgresLivePresenceChallengeStore::from_pool(readiness_pool.clone());
+        let app_attest_registration_store =
+            PostgresAppAttestKeyStateStore::from_pool(readiness_pool.clone());
         let runtime = build_runtime(&config, storage);
         if config.run_migrations {
             tokio_runtime
@@ -137,7 +151,14 @@ mod server {
                 .map_err(|error| format!("could not run migrations: {error:?}"))?;
         }
 
-        serve(config, runtime, tokio_runtime, readiness_pool, challenge_store)
+        serve(
+            config,
+            runtime,
+            tokio_runtime,
+            readiness_pool,
+            challenge_store,
+            app_attest_registration_store,
+        )
     }
 
     /// State shared by every worker thread.
@@ -158,6 +179,7 @@ mod server {
         config: ServerConfig,
         readiness_pool: sqlx::PgPool,
         challenge_store: PostgresLivePresenceChallengeStore,
+        app_attest_registration_store: PostgresAppAttestKeyStateStore,
     }
 
     async fn connect_storage(
@@ -246,6 +268,7 @@ mod server {
         tokio_runtime: tokio::runtime::Runtime,
         readiness_pool: sqlx::PgPool,
         challenge_store: PostgresLivePresenceChallengeStore,
+        app_attest_registration_store: PostgresAppAttestKeyStateStore,
     ) -> Result<(), String> {
         let shutdown = Arc::new(AtomicBool::new(false));
         install_shutdown_signal_handler(Arc::clone(&shutdown))?;
@@ -266,6 +289,7 @@ mod server {
             config,
             readiness_pool,
             challenge_store,
+            app_attest_registration_store,
         });
 
         // Bounded hand-off: when every worker is busy and the queue is full,
@@ -461,6 +485,23 @@ mod server {
                     config,
                 )
             }
+            (method, MOBILE_APP_ATTEST_KEY_REGISTRATION_CHALLENGE_HTTP_PATH) => {
+                handle_app_attest_key_registration_challenge_http_request(
+                    method,
+                    route_path,
+                    request.body,
+                    config,
+                )
+            }
+            (method, MOBILE_APP_ATTEST_KEY_REGISTRATION_HTTP_PATH) => {
+                handle_app_attest_key_registration_http_request(
+                    &shared.app_attest_registration_store,
+                    method,
+                    route_path,
+                    request.body,
+                    config,
+                )
+            }
             (method, MOBILE_IDENTITY_ONBOARDING_LIVE_PRESENCE_CALLBACK_HTTP_PATH) => {
                 handle_live_presence_callback_http_request(method, route_path, request.body, config)
             }
@@ -575,6 +616,52 @@ mod server {
         wire_response_from_mobile_response(response)
     }
 
+    fn handle_app_attest_key_registration_challenge_http_request(
+        method: &str,
+        path: &str,
+        body: String,
+        config: &ServerConfig,
+    ) -> WireResponse {
+        let context = match config.app_attest_key_registration_challenge_issue_context() {
+            Ok(context) => context,
+            Err(error) => return runtime_context_error_response(error),
+        };
+        let response = handle_mobile_app_attest_key_registration_challenge_http_request(
+            MobileOnboardingHttpRequest {
+                method: method.to_string(),
+                path: path.to_string(),
+                body,
+            },
+            context,
+        );
+        wire_response_from_mobile_response(response)
+    }
+
+    fn handle_app_attest_key_registration_http_request(
+        store: &PostgresAppAttestKeyStateStore,
+        method: &str,
+        path: &str,
+        body: String,
+        config: &ServerConfig,
+    ) -> WireResponse {
+        let context = match config.app_attest_key_registration_context() {
+            Ok(context) => context,
+            Err(error) => return runtime_context_error_response(error),
+        };
+        let verifier = AppleAppAttestKeyRegistrationVerifier::new(context.expected_config.clone());
+        let response = handle_mobile_app_attest_key_registration_http_request(
+            MobileOnboardingHttpRequest {
+                method: method.to_string(),
+                path: path.to_string(),
+                body,
+            },
+            &verifier,
+            store,
+            context,
+        );
+        wire_response_from_mobile_response(response)
+    }
+
     fn handle_identity_runtime_http_request(
         runtime: &mut IdentityRuntime,
         method: &str,
@@ -641,6 +728,7 @@ mod server {
         app_attest_verifier_config: RuntimeAppAttestVerifierConfig,
         liveness_verifier: StaticLivenessCeremonyVerifier,
         continuity_provider: MockPhase1ContinuityProvider,
+        app_attest_key_registration_challenge_ttl_seconds: u64,
         live_presence_challenge_ttl_seconds: u64,
         live_presence_provider_name: String,
         live_presence_handoff_uri: Option<String>,
@@ -671,8 +759,10 @@ mod server {
             )?);
             let authored_by = Author {
                 author_type: AuthorType::System,
-                author_id: Some(AuthorId(optional_env("IDENTITY_MODEL_RUNTIME_AUTHOR_ID")
-                    .unwrap_or_else(|| "author-mobile-runtime".to_string()))),
+                author_id: Some(AuthorId(
+                    optional_env("IDENTITY_MODEL_RUNTIME_AUTHOR_ID")
+                        .unwrap_or_else(|| "author-mobile-runtime".to_string()),
+                )),
                 display_name: Some(
                     optional_env("IDENTITY_MODEL_RUNTIME_AUTHOR_DISPLAY")
                         .unwrap_or_else(|| "FEN mobile runtime".to_string()),
@@ -695,6 +785,10 @@ mod server {
             let app_attest_verifier_config = app_attest_verifier_config_from_env()?;
             let liveness_verifier = liveness_verifier_from_env(&app_attest_verifier_config)?;
             let continuity_provider = MockPhase1ContinuityProvider::successful();
+            let app_attest_key_registration_challenge_ttl_seconds = u64_env(
+                "IDENTITY_MODEL_APP_ATTEST_KEY_REGISTRATION_CHALLENGE_TTL_SECONDS",
+                300,
+            )?;
             let live_presence_challenge_ttl_seconds =
                 u64_env("IDENTITY_MODEL_LIVE_PRESENCE_CHALLENGE_TTL_SECONDS", 300)?;
             let live_presence_provider_name = liveness_verifier
@@ -742,6 +836,7 @@ mod server {
                 app_attest_verifier_config,
                 liveness_verifier,
                 continuity_provider,
+                app_attest_key_registration_challenge_ttl_seconds,
                 live_presence_challenge_ttl_seconds,
                 live_presence_provider_name,
                 live_presence_handoff_uri,
@@ -788,7 +883,7 @@ mod server {
             );
             Ok(MobileLivePresenceChallengeIssueContext {
                 challenge_id: LivePresenceChallengeId(format!("live-presence-{nanos}")),
-                challenge_nonce: generate_live_presence_challenge_nonce()?,
+                challenge_nonce: generate_challenge_nonce("live-presence")?,
                 issued_at,
                 expires_at,
                 provider_name: self.live_presence_provider_name.clone(),
@@ -797,6 +892,34 @@ mod server {
                 retry_policy_refs: self.live_presence_retry_policy_refs.clone(),
                 manual_review_policy_refs: self.live_presence_manual_review_policy_refs.clone(),
                 retention_policy_refs: self.live_presence_retention_policy_refs.clone(),
+            })
+        }
+
+        fn app_attest_key_registration_challenge_issue_context(
+            &self,
+        ) -> Result<MobileAppAttestKeyRegistrationChallengeIssueContext, String> {
+            let (issued_at, _) = now_timestamp_and_nanos()?;
+            let issued_at_seconds = timestamp_to_unix_seconds(&issued_at).map_err(|_| {
+                "could not parse generated App Attest registration challenge issued_at".to_string()
+            })?;
+            let expires_at = unix_seconds_to_timestamp(
+                issued_at_seconds + self.app_attest_key_registration_challenge_ttl_seconds as i64,
+            );
+            Ok(MobileAppAttestKeyRegistrationChallengeIssueContext {
+                challenge_nonce: generate_challenge_nonce("App Attest key-registration")?,
+                issued_at,
+                expires_at,
+                expected_config: self.app_attest_verifier_config.expected_config(),
+            })
+        }
+
+        fn app_attest_key_registration_context(
+            &self,
+        ) -> Result<MobileAppAttestKeyRegistrationContext, String> {
+            let (observed_at, _) = now_timestamp_and_nanos()?;
+            Ok(MobileAppAttestKeyRegistrationContext {
+                observed_at,
+                expected_config: self.app_attest_verifier_config.expected_config(),
             })
         }
 
@@ -1206,11 +1329,11 @@ mod server {
         Ok(bytes)
     }
 
-    fn generate_live_presence_challenge_nonce() -> Result<String, String> {
+    fn generate_challenge_nonce(label: &str) -> Result<String, String> {
         let rng = ring::rand::SystemRandom::new();
         let mut bytes = [0_u8; 32];
         rng.fill(&mut bytes)
-            .map_err(|_| "could not generate live-presence challenge nonce".to_string())?;
+            .map_err(|_| format!("could not generate {label} challenge nonce"))?;
         Ok(encode_hex(&bytes))
     }
 
