@@ -1,0 +1,356 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		64E8C0012C8F4B8100A10001 /* FenAppAttestProofApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64E8C0112C8F4B8100A10001 /* FenAppAttestProofApp.swift */; };
+		64E8C0022C8F4B8100A10001 /* ProofView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64E8C0122C8F4B8100A10001 /* ProofView.swift */; };
+		64E8C0032C8F4B8100A10001 /* ProofViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64E8C0132C8F4B8100A10001 /* ProofViewModel.swift */; };
+		64E8C0042C8F4B8100A10001 /* BackendClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64E8C0142C8F4B8100A10001 /* BackendClient.swift */; };
+		64E8C0052C8F4B8100A10001 /* AppAttestClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64E8C0152C8F4B8100A10001 /* AppAttestClient.swift */; };
+		64E8C0062C8F4B8100A10001 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64E8C0162C8F4B8100A10001 /* KeychainStore.swift */; };
+		64E8C0072C8F4B8100A10001 /* Hex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64E8C0172C8F4B8100A10001 /* Hex.swift */; };
+		64E8C0082C8F4B8100A10001 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64E8C0182C8F4B8100A10001 /* Models.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		64E8C0112C8F4B8100A10001 /* FenAppAttestProofApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FenAppAttestProofApp.swift; sourceTree = "<group>"; };
+		64E8C0122C8F4B8100A10001 /* ProofView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProofView.swift; sourceTree = "<group>"; };
+		64E8C0132C8F4B8100A10001 /* ProofViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProofViewModel.swift; sourceTree = "<group>"; };
+		64E8C0142C8F4B8100A10001 /* BackendClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendClient.swift; sourceTree = "<group>"; };
+		64E8C0152C8F4B8100A10001 /* AppAttestClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppAttestClient.swift; sourceTree = "<group>"; };
+		64E8C0162C8F4B8100A10001 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+		64E8C0172C8F4B8100A10001 /* Hex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Hex.swift; sourceTree = "<group>"; };
+		64E8C0182C8F4B8100A10001 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		64E8C0192C8F4B8100A10001 /* FenAppAttestProof.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = FenAppAttestProof.entitlements; sourceTree = "<group>"; };
+		64E8C01A2C8F4B8100A10001 /* FenAppAttestProof.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FenAppAttestProof.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		64E8C0212C8F4B8100A10001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		64E8C0312C8F4B8100A10001 = {
+			isa = PBXGroup;
+			children = (
+				64E8C0322C8F4B8100A10001 /* FenAppAttestProof */,
+				64E8C0332C8F4B8100A10001 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		64E8C0322C8F4B8100A10001 /* FenAppAttestProof */ = {
+			isa = PBXGroup;
+			children = (
+				64E8C0112C8F4B8100A10001 /* FenAppAttestProofApp.swift */,
+				64E8C0122C8F4B8100A10001 /* ProofView.swift */,
+				64E8C0132C8F4B8100A10001 /* ProofViewModel.swift */,
+				64E8C0142C8F4B8100A10001 /* BackendClient.swift */,
+				64E8C0152C8F4B8100A10001 /* AppAttestClient.swift */,
+				64E8C0162C8F4B8100A10001 /* KeychainStore.swift */,
+				64E8C0172C8F4B8100A10001 /* Hex.swift */,
+				64E8C0182C8F4B8100A10001 /* Models.swift */,
+				64E8C0192C8F4B8100A10001 /* FenAppAttestProof.entitlements */,
+			);
+			path = FenAppAttestProof;
+			sourceTree = "<group>";
+		};
+		64E8C0332C8F4B8100A10001 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				64E8C01A2C8F4B8100A10001 /* FenAppAttestProof.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		64E8C0412C8F4B8100A10001 /* FenAppAttestProof */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 64E8C0612C8F4B8100A10001 /* Build configuration list for PBXNativeTarget "FenAppAttestProof" */;
+			buildPhases = (
+				64E8C0512C8F4B8100A10001 /* Sources */,
+				64E8C0212C8F4B8100A10001 /* Frameworks */,
+				64E8C0522C8F4B8100A10001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FenAppAttestProof;
+			productName = FenAppAttestProof;
+			productReference = 64E8C01A2C8F4B8100A10001 /* FenAppAttestProof.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		64E8C0712C8F4B8100A10001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2650;
+				LastUpgradeCheck = 2650;
+				TargetAttributes = {
+					64E8C0412C8F4B8100A10001 = {
+						CreatedOnToolsVersion = 26.5;
+					};
+				};
+			};
+			buildConfigurationList = 64E8C0722C8F4B8100A10001 /* Build configuration list for PBXProject "FenAppAttestProof" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 64E8C0312C8F4B8100A10001;
+			productRefGroup = 64E8C0332C8F4B8100A10001 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				64E8C0412C8F4B8100A10001 /* FenAppAttestProof */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		64E8C0522C8F4B8100A10001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		64E8C0512C8F4B8100A10001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				64E8C0012C8F4B8100A10001 /* FenAppAttestProofApp.swift in Sources */,
+				64E8C0022C8F4B8100A10001 /* ProofView.swift in Sources */,
+				64E8C0032C8F4B8100A10001 /* ProofViewModel.swift in Sources */,
+				64E8C0042C8F4B8100A10001 /* BackendClient.swift in Sources */,
+				64E8C0052C8F4B8100A10001 /* AppAttestClient.swift in Sources */,
+				64E8C0062C8F4B8100A10001 /* KeychainStore.swift in Sources */,
+				64E8C0072C8F4B8100A10001 /* Hex.swift in Sources */,
+				64E8C0082C8F4B8100A10001 /* Models.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		64E8C0812C8F4B8100A10001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		64E8C0822C8F4B8100A10001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		64E8C0832C8F4B8100A10001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APP_ATTEST_ENVIRONMENT = development;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = FenAppAttestProof/FenAppAttestProof.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "FEN App Attest";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.fen.identity;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		64E8C0842C8F4B8100A10001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APP_ATTEST_ENVIRONMENT = production;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = FenAppAttestProof/FenAppAttestProof.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "FEN App Attest";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.fen.identity;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		64E8C0612C8F4B8100A10001 /* Build configuration list for PBXNativeTarget "FenAppAttestProof" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				64E8C0832C8F4B8100A10001 /* Debug */,
+				64E8C0842C8F4B8100A10001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		64E8C0722C8F4B8100A10001 /* Build configuration list for PBXProject "FenAppAttestProof" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				64E8C0812C8F4B8100A10001 /* Debug */,
+				64E8C0822C8F4B8100A10001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 64E8C0712C8F4B8100A10001 /* Project object */;
+}
