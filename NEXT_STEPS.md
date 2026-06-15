@@ -2,7 +2,7 @@
 
 ## Handoff Snapshot
 
-Start here. The repo now has nineteen relevant implementation slices:
+Start here. The repo now has twenty relevant implementation slices:
 
 - encrypted Fact persistence and policy-gated materialization are implemented and tested in memory
 - PostgreSQL migrations, row mapping, SQLx repository methods, env-gated live adapter harnesses, rollback coverage, and replay-equivalence coverage are implemented
@@ -21,6 +21,7 @@ Start here. The repo now has nineteen relevant implementation slices:
 - a product-facing live-presence challenge issuance HTTP route now exists at `POST /mobile/identity-onboarding/live-presence-challenge`; it binds subject, device, and expected App Attest app context, writes a durable PostgreSQL challenge through the runtime server, and returns a CSPRNG-generated nonce plus expiry/policy refs for the composed onboarding request
 - a provider-neutral live-presence handoff/callback HTTP shape now exists; challenge issuance returns provider handoff metadata, `POST /mobile/identity-onboarding/live-presence-callback` accepts provider-normalized liveness/PAD result evidence, verifies provider/assertion/timestamp shape, and maps the callback into the existing onboarding `liveness` input without storing raw capture media or consuming the challenge before App Attest-bound onboarding
 - a signed-iOS proof-app App Attest registration path now exists in the runtime server: `POST /mobile/app-attest/key-registration-challenge` issues a server nonce and expected Apple app identity, and `POST /mobile/app-attest/key-registration` verifies a native `DCAppAttestService.attestKey` attestation object before storing the trusted P-256 public key in the App Attest registration store for later registered-key assertions
+- a minimal signed-iPhone/Xcode proof target now lives at `ios/FenAppAttestProof`; it builds for a generic iOS device, stores `device_ref` and `keyId` in Keychain, calls the App Attest key-registration routes, issues a live-presence challenge, generates a registered-key App Attest assertion, wraps it in the `apple-app-attest-assertion-object-v1` envelope, and exposes the envelope for the composed onboarding request
 - a provider-neutral identity-proofing boundary now exists with Persona as the default Phase 1 adapter shape; composed mobile identity onboarding verifies Persona-normalized proofing evidence, records the legal identity witness, asserted attributes, provider refs, retention refs, and optional policy-affecting risk signals, and routes failed/inconclusive/expired proofing into manual review without treating Persona as identity truth
 - an env-gated backend E2E harness now starts the mounted runtime server on a temporary local port, issues a durable live-presence challenge through the HTTP route, submits `POST /mobile/identity-onboarding` with live Keycloak/JWKS token evidence plus static App Attest, Persona, and liveness evidence, and verifies the safe summary, encrypted fact rows, audit rows, App Attest key state, and used challenge state
 
@@ -36,7 +37,7 @@ The backend runtime E2E harness has now passed against disposable local PostgreS
 
 Persona is the default Phase 1 legal identity-proofing provider. Treat Persona as the first concrete identity-proofing adapter, not as identity truth. The initial adapter verifies normalized Persona workflow results and translates them into FEN identity witness, asserted attribute, risk, provenance, and external-ref facts. Keep the `IdentityProofingProvider` boundary provider-neutral so ID.me, Socure, Jumio, Entrust/Onfido, Veriff, LexisNexis, government assertions, or provider-mediated assertions can replace Persona later.
 
-The next useful handoff move is exercising the registered-key App Attest assertion path from a signed iOS proof app, now that the local backend E2E path has run against live PostgreSQL and Keycloak.
+The next useful handoff move is the physical-device App Attest proof run: open `ios/FenAppAttestProof/FenAppAttestProof.xcodeproj`, set the signing team and bundle ID to match the runtime env, enable App Attest for the App ID, run it on a supported iPhone over HTTPS, register a real key, issue a live-presence challenge, and generate an assertion envelope from that registered key.
 
 Do not treat Keycloak, PostgreSQL, a KMS, Apple App Attest, a liveness provider, or any provider SDK as the identity source of truth. They provide evidence and durable infrastructure. FEN owns the typed fact graph, policy gates, replay semantics, and materialized projections.
 
@@ -89,9 +90,9 @@ Do not expand into broad product surface area before this path is real. The MVP 
 
 6. **Real Apple App Attest**
 
-   The first real registration/assertion verification boundary now exists behind `production-crypto`. Registration verification accepts decoded App Attest registration evidence or a native attestation-object envelope, validates server allow-listed team/bundle/environment, app-ID hash, registration challenge hash, App Attest AAGUID, credential ID, COSE P-256 public key shape, `x5c` presence, certificate validity, issuer/subject chaining, ECDSA certificate signatures up to Apple's App Attestation Root CA, App Attest nonce extension, leaf-certificate public-key binding, timestamp, and format, then records trusted public-key metadata in the registration store. The runtime server now exposes the registration challenge and registration HTTP routes a signed iOS proof app needs before it submits assertions. Assertion verification resolves that registered key, binds the assertion to the server challenge through `clientDataHash`, verifies the P-256 signature over `authenticatorData || clientDataHash`, extracts the sign count, and then lets the durable key-state guard enforce challenge replay protection, sign-count monotonicity, app/device context stability, and revocation state.
+   The first real registration/assertion verification boundary now exists behind `production-crypto`. Registration verification accepts decoded App Attest registration evidence or a native attestation-object envelope, validates server allow-listed team/bundle/environment, app-ID hash, registration challenge hash, App Attest AAGUID, credential ID, COSE P-256 public key shape, `x5c` presence, certificate validity, issuer/subject chaining, ECDSA certificate signatures up to Apple's App Attestation Root CA, App Attest nonce extension, leaf-certificate public-key binding, timestamp, and format, then records trusted public-key metadata in the registration store. The runtime server now exposes the registration challenge and registration HTTP routes a signed iOS proof app needs before it submits assertions. The `ios/FenAppAttestProof` target now drives `DCAppAttestService.generateKey`, `attestKey`, and `generateAssertion` and can produce the registered-key assertion envelope. Assertion verification resolves that registered key, binds the assertion to the server challenge through `clientDataHash`, verifies the P-256 signature over `authenticatorData || clientDataHash`, extracts the sign count, and then lets the durable key-state guard enforce challenge replay protection, sign-count monotonicity, app/device context stability, and revocation state.
 
-   Remaining App Attest work: exercise registration and assertion from a signed iOS app, decide how to store/use Apple attestation receipts for fraud-risk telemetry, and keep development/production App Attest environment handling explicit.
+   Remaining App Attest work: run the proof target on a physically signed supported iPhone against the runtime, submit the generated registered-key assertion through the composed onboarding request, decide how to store/use Apple attestation receipts for fraud-risk telemetry, and keep development/production App Attest environment handling explicit.
 
    MVP outcome: the iPhone path proves app-bound device possession with real Apple evidence before FEN appends the device-binding workflow facts.
 
@@ -115,9 +116,9 @@ Do not expand into broad product surface area before this path is real. The MVP 
 
 10. **Product Mobile Path**
 
-   After the server contract is real, build the smallest iOS proof path that obtains a Keycloak/OIDC token, obtains App Attest evidence for a server-issued challenge, guides the user through a video-selfie/live-presence ceremony, submits the mobile onboarding request, and displays the safe onboarding summary. Keep this as a proof app or thin product slice until the backend evidence contract stabilizes.
+   The first Xcode proof target now exists at `ios/FenAppAttestProof`. Its current scope is deliberately narrow: real App Attest key registration, live-presence challenge issuance, registered-key assertion generation, and envelope copying for the composed onboarding request. Keep it as a proof app or thin product slice until the backend evidence contract stabilizes.
 
-   Treat this as a staged test boundary. Backend MVP tests can keep using fixtures, synthetic App Attest-shaped evidence, Persona sandbox/static identity-proofing evidence, and static liveness verifier results. The real-device MVP needs a minimal native iPhone app because Apple App Attest evidence is produced by `DCAppAttestService` inside a signed app on a supported device, and the video-selfie ceremony needs a real camera/capture UX or provider SDK. An investor demo on the investor's own phone likely needs a TestFlight or demo build, HTTPS access to the runtime, a prepared Keycloak login path, a configured Persona workflow, a configured liveness provider path, and deliberate handling of App Attest development versus production environment behavior.
+   Treat this as a staged test boundary. Backend MVP tests can keep using fixtures, synthetic App Attest-shaped evidence, Persona sandbox/static identity-proofing evidence, and static liveness verifier results. The next product-mobile increments are direct composed-onboarding submission from the app, then real Keycloak login, Persona workflow handoff, and live-presence/video-selfie provider integration. An investor demo on the investor's own phone likely needs a TestFlight or demo build, HTTPS access to the runtime, a prepared Keycloak login path, a configured Persona workflow, a configured liveness provider path, and deliberate handling of App Attest development versus production environment behavior.
 
    MVP outcome: a real phone can exercise the full onboarding path without relying on CLI-only or synthetic HTTP fixtures.
 
@@ -191,7 +192,7 @@ The composed identity-onboarding HTTP contract now exists in `src/mobile_http.rs
 
 The Persona identity-proofing boundary now exists. The product-facing onboarding path carries OIDC, App Attest, Persona-normalized legal identity proofing, and liveness ceremony evidence. The composed contract accepts provider-normalized `identity_proofing` input instead of treating a raw government-ID witness input as the final provider adapter. The older account/device HTTP path can remain as a smaller smoke surface.
 
-The backend E2E harness has now run against local PostgreSQL and Keycloak. The runtime server also has the App Attest key-registration challenge and registration routes needed by a signed iOS proof app. Next, drive `DCAppAttestService.generateKey`, `attestKey`, and `generateAssertion` from a physical signed iPhone build against those routes, then submit the composed onboarding request with the registered-key assertion. `IOS_APP_ATTEST_PROOF.md` is the shortest handoff for that device-side flow.
+The backend E2E harness has now run against local PostgreSQL and Keycloak. The runtime server also has the App Attest key-registration challenge and registration routes needed by a signed iOS proof app, and `ios/FenAppAttestProof` now contains the minimal SwiftUI proof target for those routes. Next, sign that target with the matching Apple team/bundle/App Attest entitlement, run it on a supported physical iPhone over HTTPS, register a real App Attest key, issue a live-presence challenge, generate the registered-key assertion envelope, then submit the composed onboarding request with that assertion. `IOS_APP_ATTEST_PROOF.md` and `ios/FenAppAttestProof/README.md` are the shortest handoffs for that device-side flow.
 
 The intended entry-point shape is:
 
@@ -206,7 +207,7 @@ identity onboarding command
 
 Keep HTTP and CLI thin. They should parse input, select verifier/config, call the shared command, and shape errors or output. They should not own identity semantics, fact construction rules, replay behavior, or policy meaning.
 
-The server-side product path is now testable outside unit tests through the backend E2E harness. The next proof app should exercise real Keycloak, App Attest registration/assertion, Persona, and video-selfie/liveness evidence from iOS. The CLI remains useful after the app exists because it can smoke-test local command wiring without driving the full app.
+The server-side product path is now testable outside unit tests through the backend E2E harness. The iOS proof app now exercises the App Attest registration/assertion portion of the real-device path; after the physical App Attest run passes, extend it to submit composed onboarding directly, then replace copied/static proof inputs with real Keycloak, Persona, and video-selfie/liveness evidence. The CLI remains useful after the app exists because it can smoke-test local command wiring without driving the full app.
 
 The proven Rust shape is:
 
@@ -390,9 +391,10 @@ Important PostgreSQL design choices to preserve:
 
 Immediate next implementation order:
 
-1. Exercise Apple App Attest registration and assertion from a signed iOS proof app against the runtime.
-2. Move fact key material from env-loaded bytes into DEK/KEK or KMS-backed wrapping and rotation.
-3. Move the local runtime shell toward production-grade transport and make App Attest and live-presence state checks async-native when the server framework is selected.
+1. Run `ios/FenAppAttestProof` on a physically signed iPhone against the runtime and confirm real App Attest registration plus registered-key assertion generation.
+2. Extend the proof app to submit `POST /mobile/identity-onboarding` directly with the generated registered-key assertion and existing static/sandbox OIDC, Persona, and liveness proof inputs.
+3. Move fact key material from env-loaded bytes into DEK/KEK or KMS-backed wrapping and rotation.
+4. Move the local runtime shell toward production-grade transport and make App Attest and live-presence state checks async-native when the server framework is selected.
 
 The live PostgreSQL tests are skipped unless `IDENTITY_MODEL_POSTGRES_URL` is present; they have passed against a disposable PostgreSQL database in this workspace. The live Keycloak test is skipped unless the Keycloak env vars are present; it has passed against the local dev setup documented in `LOCAL_KEYCLOAK_DEV.md`.
 
