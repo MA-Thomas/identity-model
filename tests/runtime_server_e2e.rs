@@ -215,6 +215,112 @@ async fn run_live_runtime_server_identity_onboarding_e2e(env: RuntimeServerE2eEn
     .await;
 }
 
+// Regression: the App Attest registration and live-presence-challenge endpoints
+// write to PostgreSQL through a store bridge. An earlier version ran that write
+// on a freshly-spawned Tokio runtime while the connection pool was owned by the
+// server's main runtime, so the acquire hung until the pool timeout (~seconds)
+// and returned HTTP 500 with no SQL ever sent. The live-presence-challenge write
+// needs no attestation crypto, so it isolates the runtime wiring: assert it
+// returns a fresh nonce promptly instead of stalling.
+#[test]
+fn live_runtime_server_store_write_runs_on_pool_runtime_when_env_is_set() {
+    let Some(env) = RuntimeServerE2eEnv::from_env() else {
+        eprintln!(
+            "skipping live runtime-server store-runtime regression; set \
+             IDENTITY_MODEL_POSTGRES_URL, IDENTITY_MODEL_KEYCLOAK_ISSUER, \
+             IDENTITY_MODEL_KEYCLOAK_CLIENT_ID, and IDENTITY_MODEL_KEYCLOAK_TOKEN to run it"
+        );
+        return;
+    };
+
+    sqlx::test_block_on(async {
+        run_live_runtime_server_store_runtime_regression(env).await;
+    });
+}
+
+async fn run_live_runtime_server_store_runtime_regression(env: RuntimeServerE2eEnv) {
+    let suffix = runtime_e2e_suffix();
+    let id_namespace = format!("runtime-server-store-regression-{suffix}");
+    let subject_id = SubjectId(format!("subject-{id_namespace}"));
+    let device_ref = format!("iphone-{id_namespace}");
+    let challenge_nonce = format!("app-attest-nonce-{id_namespace}");
+    let app_attest_key_id = format!("app-attest-key-{id_namespace}");
+    let app_attest_assertion = format!("valid-app-attest-{id_namespace}");
+    let liveness_assertion = format!("valid-live-presence-{id_namespace}");
+    let transaction_id_prefix = format!("tx-{id_namespace}");
+    let app_config = AppAttestClientConfig::ios_app(
+        "TEAMID1234",
+        "com.fen.identity",
+        AppAttestEnvironment::Development,
+    );
+    let now = unix_now_seconds();
+    let observed_at = unix_seconds_to_timestamp(now);
+    let expires_at = unix_seconds_to_timestamp(now + 300);
+
+    let storage = SqlxPostgresEncryptedFactRepository::connect(&env.database_url)
+        .await
+        .expect("store regression PostgreSQL repository should connect");
+    storage
+        .run_migration()
+        .await
+        .expect("store regression migrations should run");
+    cleanup_runtime_e2e_rows(
+        storage.pool(),
+        &subject_id,
+        &transaction_id_prefix,
+        &challenge_nonce,
+        &app_attest_key_id,
+    )
+    .await;
+
+    let bind_addr = free_local_addr();
+    let mut server = RuntimeServerChild::spawn(RuntimeServerSpawnConfig {
+        binary_path: env!("CARGO_BIN_EXE_mobile_onboarding_server").to_string(),
+        bind_addr,
+        database_url: env.database_url.clone(),
+        oidc_issuer: env.oidc_issuer.clone(),
+        oidc_client_id: env.oidc_client_id.clone(),
+        app_attest_assertion,
+        app_attest_challenge_nonce: challenge_nonce.clone(),
+        app_attest_device_ref: device_ref.clone(),
+        app_attest_key_id: app_attest_key_id.clone(),
+        app_attest_asserted_at: observed_at.0.clone(),
+        app_attest_expires_at: expires_at.0.clone(),
+        liveness_assertion,
+        liveness_provider_event_id: format!("liveness-event-{id_namespace}"),
+        transaction_id_prefix: transaction_id_prefix.clone(),
+    });
+    wait_for_ready(bind_addr, &mut server);
+
+    let started = std::time::Instant::now();
+    let issued_challenge_nonce = issue_runtime_e2e_live_presence_challenge_over_http(
+        bind_addr,
+        &id_namespace,
+        &subject_id,
+        &device_ref,
+        &app_config,
+    );
+    let elapsed = started.elapsed();
+    assert!(
+        !issued_challenge_nonce.is_empty(),
+        "live-presence store write must succeed instead of timing out on a foreign runtime; {}",
+        runtime_server_child_state(&mut server)
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "store write must run on the pool's runtime and return promptly, took {elapsed:?}"
+    );
+
+    cleanup_runtime_e2e_rows(
+        storage.pool(),
+        &subject_id,
+        &transaction_id_prefix,
+        &issued_challenge_nonce,
+        &app_attest_key_id,
+    )
+    .await;
+}
+
 #[derive(Debug, Clone)]
 struct RuntimeServerE2eEnv {
     database_url: String,

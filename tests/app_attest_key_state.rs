@@ -1004,3 +1004,212 @@ fn test_hex_encode(bytes: &[u8]) -> String {
     }
     encoded
 }
+
+// --- P-384 intermediate chain regression (real Apple App Attest cert shape) ---
+
+#[cfg(feature = "production-crypto")]
+fn test_p384_signing_key(fill: u8) -> p384::ecdsa::SigningKey {
+    // A fixed, small, non-zero scalar is a valid P-384 private key and keeps the
+    // test deterministic without an RNG.
+    p384::ecdsa::SigningKey::from_slice(&[fill.max(1); 48])
+        .expect("test P-384 scalar should be a valid signing key")
+}
+
+#[cfg(feature = "production-crypto")]
+fn test_p384_public_key_bytes(key: &p384::ecdsa::SigningKey) -> Vec<u8> {
+    key.verifying_key()
+        .to_encoded_point(false)
+        .as_bytes()
+        .to_vec()
+}
+
+#[cfg(feature = "production-crypto")]
+fn test_p384_sign_prehash(key: &p384::ecdsa::SigningKey, prehash: &[u8]) -> Vec<u8> {
+    use p384::ecdsa::signature::hazmat::PrehashSigner;
+    let signature: p384::ecdsa::Signature = key
+        .sign_prehash(prehash)
+        .expect("test P-384 prehash signing should succeed");
+    // Encode the fixed r||s signature as an ASN.1 ECDSA-Sig-Value SEQUENCE, which
+    // is what the verifier's ring ECDSA_*_ASN1 algorithms expect. Done by hand so
+    // the test does not depend on an optional ecdsa `der` feature.
+    let fixed = signature.to_bytes();
+    test_der_ecdsa_signature(fixed.as_slice())
+}
+
+#[cfg(feature = "production-crypto")]
+fn test_der_ecdsa_signature(fixed: &[u8]) -> Vec<u8> {
+    let half = fixed.len() / 2;
+    test_der_sequence(&[
+        test_der_unsigned_integer(&fixed[..half]),
+        test_der_unsigned_integer(&fixed[half..]),
+    ])
+}
+
+#[cfg(feature = "production-crypto")]
+fn test_der_unsigned_integer(bytes: &[u8]) -> Vec<u8> {
+    // DER INTEGER: strip leading zero bytes (keeping at least one), then prepend
+    // 0x00 when the high bit is set so the value stays non-negative.
+    let mut start = 0;
+    while start + 1 < bytes.len() && bytes[start] == 0 {
+        start += 1;
+    }
+    let trimmed = &bytes[start..];
+    let mut contents = Vec::with_capacity(trimmed.len() + 1);
+    if trimmed[0] & 0x80 != 0 {
+        contents.push(0x00);
+    }
+    contents.extend_from_slice(trimmed);
+    test_der_tag(0x02, &contents)
+}
+
+#[cfg(feature = "production-crypto")]
+fn test_sha256(bytes: &[u8]) -> Vec<u8> {
+    <sha2::Sha256 as sha2::Digest>::digest(bytes)
+        .as_slice()
+        .to_vec()
+}
+
+#[cfg(feature = "production-crypto")]
+fn test_sha384(bytes: &[u8]) -> Vec<u8> {
+    <sha2::Sha384 as sha2::Digest>::digest(bytes)
+        .as_slice()
+        .to_vec()
+}
+
+#[cfg(feature = "production-crypto")]
+fn test_ecdsa_sha384_algorithm_identifier() -> Vec<u8> {
+    test_der_sequence(&[test_der_oid(&[
+        0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x03,
+    ])])
+}
+
+#[cfg(feature = "production-crypto")]
+fn test_subject_public_key_info_p384(public_key_bytes: &[u8]) -> Vec<u8> {
+    test_der_sequence(&[
+        test_der_sequence(&[
+            test_der_oid(&[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01]),
+            test_der_oid(&[0x2b, 0x81, 0x04, 0x00, 0x22]),
+        ]),
+        test_der_bit_string(public_key_bytes),
+    ])
+}
+
+#[cfg(feature = "production-crypto")]
+fn test_certificate_der_with_signature(
+    subject_der: &[u8],
+    issuer_der: &[u8],
+    subject_public_key_info: &[u8],
+    signature_algorithm: &[u8],
+    app_attest_nonce: Option<&[u8]>,
+    signature_der: impl FnOnce(&[u8]) -> Vec<u8>,
+) -> Vec<u8> {
+    let validity = test_der_sequence(&[
+        test_der_generalized_time("20200101000000Z"),
+        test_der_generalized_time("20450101000000Z"),
+    ]);
+    let mut tbs_elements = vec![
+        test_der_tag(0xa0, &test_der_integer(&[2])),
+        test_der_integer(&[1]),
+        signature_algorithm.to_vec(),
+        issuer_der.to_vec(),
+        validity,
+        subject_der.to_vec(),
+        subject_public_key_info.to_vec(),
+    ];
+    if let Some(app_attest_nonce) = app_attest_nonce {
+        tbs_elements.push(test_x509_extensions(app_attest_nonce));
+    }
+    let tbs_certificate = test_der_sequence(&tbs_elements);
+    let signature = signature_der(&tbs_certificate);
+    test_der_sequence(&[
+        tbs_certificate,
+        signature_algorithm.to_vec(),
+        test_der_bit_string(&signature),
+    ])
+}
+
+#[cfg(feature = "production-crypto")]
+#[test]
+fn apple_app_attest_key_registration_verifier_accepts_p384_intermediate_chain() {
+    // Regression for the real Apple App Attest certificate shape: a P-256 leaf
+    // signed by the P-384 "Apple App Attestation CA 1" intermediate using
+    // ecdsa-with-SHA256. The signatureAlgorithm OID only names the digest, so the
+    // verifying curve must be taken from the issuer key. An earlier version
+    // selected the curve from the child certificate's OID, handed the P-384
+    // issuer key to a P-256 verifier, and rejected every real-device attestation
+    // with InvalidSignature. The all-P-256 fixtures could not catch this because
+    // ring can only sign the two matched curve/digest combinations.
+    let config = app_attest_config();
+    let key_id = "apple-key-p384-chain";
+    let device_ref = "iphone-real-device";
+    let challenge_nonce = "server-registration-challenge";
+
+    let (_leaf_pkcs8, leaf_public_key_bytes) = test_app_attest_key_pair();
+    let authenticator_data =
+        apple_app_attest_registration_authenticator_data(&config, key_id, &leaf_public_key_bytes);
+    let client_data_hash = apple_app_attest_client_data_hash(challenge_nonce);
+    let expected_nonce = test_app_attest_attestation_nonce(&authenticator_data, &client_data_hash);
+
+    let root_key = test_p384_signing_key(2);
+    let intermediate_key = test_p384_signing_key(3);
+    let root_public = test_p384_public_key_bytes(&root_key);
+    let intermediate_public = test_p384_public_key_bytes(&intermediate_key);
+    let root_subject = test_x509_name("Test App Attest P384 Root");
+    let intermediate_subject = test_x509_name("Test App Attest P384 Intermediate");
+    let leaf_subject = test_x509_name("Test App Attest Leaf");
+    let sha256_algorithm = test_ecdsa_sha256_algorithm_identifier();
+    let sha384_algorithm = test_ecdsa_sha384_algorithm_identifier();
+
+    // Root: P-384, self-signed with ecdsa-with-SHA384.
+    let root_certificate = test_certificate_der_with_signature(
+        &root_subject,
+        &root_subject,
+        &test_subject_public_key_info_p384(&root_public),
+        &sha384_algorithm,
+        None,
+        |tbs| test_p384_sign_prehash(&root_key, &test_sha384(tbs)),
+    );
+    // Intermediate: P-384, signed by the root with ecdsa-with-SHA384.
+    let intermediate_certificate = test_certificate_der_with_signature(
+        &intermediate_subject,
+        &root_subject,
+        &test_subject_public_key_info_p384(&intermediate_public),
+        &sha384_algorithm,
+        None,
+        |tbs| test_p384_sign_prehash(&root_key, &test_sha384(tbs)),
+    );
+    // Leaf: P-256, signed by the P-384 intermediate with ecdsa-with-SHA256.
+    let leaf_certificate = test_certificate_der_with_signature(
+        &leaf_subject,
+        &intermediate_subject,
+        &test_subject_public_key_info(&leaf_public_key_bytes),
+        &sha256_algorithm,
+        Some(&expected_nonce),
+        |tbs| test_p384_sign_prehash(&intermediate_key, &test_sha256(tbs)),
+    );
+
+    let request = AppleAppAttestKeyRegistrationVerificationRequest {
+        key_id: key_id.to_string(),
+        device_ref: device_ref.to_string(),
+        public_key_bytes: leaf_public_key_bytes.clone(),
+        certificate_chain_der: vec![leaf_certificate, intermediate_certificate],
+        credential_id: key_id.as_bytes().to_vec(),
+        authenticator_data,
+        client_data_hash,
+        challenge_nonce: challenge_nonce.to_string(),
+        registered_at: ts("2026-05-29T00:05:00Z"),
+        attestation_format: "apple-app-attest".to_string(),
+        config: config.clone(),
+    };
+    let verifier = AppleAppAttestKeyRegistrationVerifier::with_trusted_root_certificates(
+        config.clone(),
+        vec![root_certificate],
+    );
+
+    let registration = verifier
+        .verify_app_attest_key_registration(&request, &ts("2026-05-29T00:05:30Z"))
+        .expect("Apple-shaped P-384 intermediate chain must verify");
+
+    assert_eq!(registration.key_id, key_id);
+    assert_eq!(registration.device_ref, device_ref);
+}

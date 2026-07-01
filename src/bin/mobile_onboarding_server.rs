@@ -483,6 +483,7 @@ mod server {
                     route_path,
                     request.body,
                     config,
+                    &shared.tokio,
                 )
             }
             (method, MOBILE_APP_ATTEST_KEY_REGISTRATION_CHALLENGE_HTTP_PATH) => {
@@ -500,6 +501,7 @@ mod server {
                     route_path,
                     request.body,
                     config,
+                    &shared.tokio,
                 )
             }
             (method, MOBILE_IDENTITY_ONBOARDING_LIVE_PRESENCE_CALLBACK_HTTP_PATH) => {
@@ -577,21 +579,31 @@ mod server {
         path: &str,
         body: String,
         config: &ServerConfig,
+        tokio_runtime: &tokio::runtime::Runtime,
     ) -> WireResponse {
         let issue_context = match config.live_presence_challenge_issue_context() {
             Ok(context) => context,
             Err(error) => return runtime_context_error_response(error),
         };
-        let response = handle_mobile_identity_onboarding_live_presence_challenge_http_request(
-            MobileOnboardingHttpRequest {
-                method: method.to_string(),
-                path: path.to_string(),
-                body,
-            },
-            store,
-            issue_context,
-        );
-        wire_response_from_mobile_response(response)
+        let (challenge, request_id) =
+            match prepare_mobile_identity_onboarding_live_presence_challenge(
+                MobileOnboardingHttpRequest {
+                    method: method.to_string(),
+                    path: path.to_string(),
+                    body,
+                },
+                &issue_context,
+            ) {
+                Ok(prepared) => prepared,
+                Err(response) => return wire_response_from_mobile_response(response),
+            };
+        // Run the store write on the runtime that owns the PostgreSQL pool.
+        let stored = tokio_runtime.block_on(store.issue_live_presence_challenge_async(&challenge));
+        wire_response_from_mobile_response(live_presence_challenge_issue_response(
+            stored,
+            &issue_context,
+            request_id,
+        ))
     }
 
     fn handle_live_presence_callback_http_request(
@@ -643,23 +655,32 @@ mod server {
         path: &str,
         body: String,
         config: &ServerConfig,
+        tokio_runtime: &tokio::runtime::Runtime,
     ) -> WireResponse {
         let context = match config.app_attest_key_registration_context() {
             Ok(context) => context,
             Err(error) => return runtime_context_error_response(error),
         };
         let verifier = AppleAppAttestKeyRegistrationVerifier::new(context.expected_config.clone());
-        let response = handle_mobile_app_attest_key_registration_http_request(
-            MobileOnboardingHttpRequest {
-                method: method.to_string(),
-                path: path.to_string(),
-                body,
-            },
-            &verifier,
-            store,
-            context,
-        );
-        wire_response_from_mobile_response(response)
+        let (registration, request_id) =
+            match verify_mobile_app_attest_key_registration_http_request(
+                MobileOnboardingHttpRequest {
+                    method: method.to_string(),
+                    path: path.to_string(),
+                    body,
+                },
+                &verifier,
+                &context,
+            ) {
+                Ok(verified) => verified,
+                Err(response) => return wire_response_from_mobile_response(response),
+            };
+        // Run the store write on the runtime that owns the PostgreSQL pool,
+        // matching the onboarding endpoints. Using a foreign runtime here made
+        // the shared pool's connection acquire hang until timeout.
+        let stored =
+            tokio_runtime.block_on(store.record_app_attest_key_registration_async(&registration));
+        wire_response_from_mobile_response(app_attest_key_registration_response(stored, request_id))
     }
 
     fn handle_identity_runtime_http_request(

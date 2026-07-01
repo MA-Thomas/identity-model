@@ -209,15 +209,13 @@ pub fn handle_mobile_identity_onboarding_http_request(
     }
 }
 
-pub fn handle_mobile_identity_onboarding_live_presence_challenge_http_request(
+// Pure (no I/O) parse + challenge construction, split out so the runtime server
+// can run the store write on the runtime that owns the PostgreSQL pool.
+pub fn prepare_mobile_identity_onboarding_live_presence_challenge(
     request: MobileOnboardingHttpRequest,
-    live_presence_challenge_store: &impl LivePresenceChallengeStore,
-    issue_context: MobileLivePresenceChallengeIssueContext,
-) -> MobileOnboardingHttpResponse {
-    let (parsed, request_id) = match live_presence_challenge_issue_from_http_request(request) {
-        Ok(parsed) => parsed,
-        Err(response) => return response,
-    };
+    issue_context: &MobileLivePresenceChallengeIssueContext,
+) -> Result<(LivePresenceChallenge, Option<String>), MobileOnboardingHttpResponse> {
+    let (parsed, request_id) = live_presence_challenge_issue_from_http_request(request)?;
 
     let mut challenge = LivePresenceChallenge::onboarding(
         issue_context.challenge_id.clone(),
@@ -232,19 +230,46 @@ pub fn handle_mobile_identity_onboarding_live_presence_challenge_http_request(
     challenge.manual_review_policy_refs = issue_context.manual_review_policy_refs.clone();
     challenge.retention_policy_refs = issue_context.retention_policy_refs.clone();
 
-    match live_presence_challenge_store.issue_live_presence_challenge(challenge) {
+    Ok((challenge, request_id))
+}
+
+// Builds the HTTP response from the outcome of the (async or sync) store write.
+pub fn live_presence_challenge_issue_response(
+    stored: Result<LivePresenceChallenge, LivePresenceChallengeError>,
+    issue_context: &MobileLivePresenceChallengeIssueContext,
+    request_id: Option<String>,
+) -> MobileOnboardingHttpResponse {
+    match stored {
         Ok(challenge) => json_response(
             200,
             MobileLivePresenceChallengeIssueHttpResponseBody::Issued {
                 challenge: MobileLivePresenceChallengeHttpSummary::from_challenge(
                     challenge,
-                    &issue_context,
+                    issue_context,
                 ),
                 request_id,
             },
         ),
         Err(error) => live_presence_challenge_issue_error_response(error),
     }
+}
+
+pub fn handle_mobile_identity_onboarding_live_presence_challenge_http_request(
+    request: MobileOnboardingHttpRequest,
+    live_presence_challenge_store: &impl LivePresenceChallengeStore,
+    issue_context: MobileLivePresenceChallengeIssueContext,
+) -> MobileOnboardingHttpResponse {
+    let (challenge, request_id) =
+        match prepare_mobile_identity_onboarding_live_presence_challenge(request, &issue_context) {
+            Ok(prepared) => prepared,
+            Err(response) => return response,
+        };
+
+    live_presence_challenge_issue_response(
+        live_presence_challenge_store.issue_live_presence_challenge(challenge),
+        &issue_context,
+        request_id,
+    )
 }
 
 pub fn handle_mobile_identity_onboarding_live_presence_callback_http_request(
@@ -297,35 +322,44 @@ pub fn handle_mobile_app_attest_key_registration_challenge_http_request(
     )
 }
 
+// Pure (no I/O) parse + App Attest attestation verification. The DB write is
+// intentionally kept out of here so callers that own an async runtime (the
+// runtime server) can execute the store step on the same runtime that owns the
+// PostgreSQL pool, instead of a foreign runtime.
 #[cfg(feature = "production-crypto")]
-pub fn handle_mobile_app_attest_key_registration_http_request(
+pub fn verify_mobile_app_attest_key_registration_http_request(
     request: MobileOnboardingHttpRequest,
     registration_verifier: &impl AppAttestKeyRegistrationVerifier,
-    registration_store: &impl AppAttestKeyRegistrationStore,
-    registration_context: MobileAppAttestKeyRegistrationContext,
+    registration_context: &MobileAppAttestKeyRegistrationContext,
+) -> Result<(AppAttestKeyRegistration, Option<String>), MobileOnboardingHttpResponse> {
+    let (parsed, request_id) = app_attest_key_registration_from_http_request(request)?;
+
+    let registration_request = parsed
+        .into_registration_request(
+            registration_context.expected_config.clone(),
+            registration_context.observed_at.clone(),
+        )
+        .map_err(app_attest_key_registration_error_response)?;
+
+    let registration = registration_verifier
+        .verify_app_attest_key_registration(&registration_request, &registration_context.observed_at)
+        .map_err(|error| {
+            eprintln!(
+                "App Attest key registration diagnostic: registration verification failed: {error:?}"
+            );
+            app_attest_key_registration_error_response(error)
+        })?;
+
+    Ok((registration, request_id))
+}
+
+// Builds the HTTP response from the outcome of the (async or sync) store write.
+#[cfg(feature = "production-crypto")]
+pub fn app_attest_key_registration_response(
+    stored: Result<AppAttestKeyRegistration, AppAttestAssertionVerificationError>,
+    request_id: Option<String>,
 ) -> MobileOnboardingHttpResponse {
-    let (parsed, request_id) = match app_attest_key_registration_from_http_request(request) {
-        Ok(parsed) => parsed,
-        Err(response) => return response,
-    };
-
-    let registration_request = match parsed.into_registration_request(
-        registration_context.expected_config.clone(),
-        registration_context.observed_at.clone(),
-    ) {
-        Ok(request) => request,
-        Err(error) => return app_attest_key_registration_error_response(error),
-    };
-
-    let registration = match registration_verifier.verify_app_attest_key_registration(
-        &registration_request,
-        &registration_context.observed_at,
-    ) {
-        Ok(registration) => registration,
-        Err(error) => return app_attest_key_registration_error_response(error),
-    };
-
-    match registration_store.record_app_attest_key_registration(&registration) {
+    match stored {
         Ok(registration) => json_response(
             200,
             MobileAppAttestKeyRegistrationHttpResponseBody::Registered {
@@ -337,6 +371,28 @@ pub fn handle_mobile_app_attest_key_registration_http_request(
         ),
         Err(error) => app_attest_key_registration_error_response(error),
     }
+}
+
+#[cfg(feature = "production-crypto")]
+pub fn handle_mobile_app_attest_key_registration_http_request(
+    request: MobileOnboardingHttpRequest,
+    registration_verifier: &impl AppAttestKeyRegistrationVerifier,
+    registration_store: &impl AppAttestKeyRegistrationStore,
+    registration_context: MobileAppAttestKeyRegistrationContext,
+) -> MobileOnboardingHttpResponse {
+    let (registration, request_id) = match verify_mobile_app_attest_key_registration_http_request(
+        request,
+        registration_verifier,
+        &registration_context,
+    ) {
+        Ok(verified) => verified,
+        Err(response) => return response,
+    };
+
+    app_attest_key_registration_response(
+        registration_store.record_app_attest_key_registration(&registration),
+        request_id,
+    )
 }
 
 pub fn handle_encrypted_mobile_identity_onboarding_http_request<R, M, E>(
@@ -878,9 +934,22 @@ impl MobileAppAttestKeyRegistrationHttpRequestBody {
     ) -> Result<AppleAppAttestKeyRegistrationVerificationRequest, AppAttestAssertionVerificationError>
     {
         if let Some(attestation_object_hex) = self.attestation_object_hex {
-            let attestation_object = parse_apple_app_attest_attestation_object(
-                &mobile_hex_decode(&attestation_object_hex)?,
-            )?;
+            let attestation_object_bytes =
+                mobile_hex_decode(&attestation_object_hex).map_err(|error| {
+                    eprintln!(
+                        "App Attest key registration diagnostic: attestation_object_hex decode failed: {error:?}"
+                    );
+                    error
+                })?;
+            let attestation_object =
+                parse_apple_app_attest_attestation_object(&attestation_object_bytes).map_err(
+                    |error| {
+                        eprintln!(
+                            "App Attest key registration diagnostic: attestation object CBOR parse failed: {error:?}"
+                        );
+                        error
+                    },
+                )?;
             return AppleAppAttestKeyRegistrationVerificationRequest::from_attestation_object(
                 self.key_id,
                 self.device_ref,
@@ -888,7 +957,13 @@ impl MobileAppAttestKeyRegistrationHttpRequestBody {
                 observed_at,
                 expected_config,
                 attestation_object,
-            );
+            )
+            .map_err(|error| {
+                eprintln!(
+                    "App Attest key registration diagnostic: attestation object normalization failed: {error:?}"
+                );
+                error
+            });
         }
 
         Ok(AppleAppAttestKeyRegistrationVerificationRequest {
@@ -2150,7 +2225,7 @@ fn app_attest_key_registration_error_response(
         _ => app_attest_key_registration_error_response_with_code(
             422,
             "app_attest_registration_verification_failed",
-            "App Attest key registration evidence was rejected",
+            format!("App Attest key registration evidence was rejected: {error:?}"),
         ),
     }
 }

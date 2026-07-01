@@ -1044,7 +1044,7 @@ fn validate_apple_app_attest_key_registration_request(
     if request.attestation_format != APPLE_APP_ATTEST_REGISTRATION_FORMAT {
         return Err(AppAttestAssertionVerificationError::UnsupportedAttestationFormat);
     }
-    if request.credential_id != request.key_id.as_bytes() {
+    if !apple_app_attest_credential_id_matches_key_id(&request.credential_id, &request.key_id) {
         return Err(AppAttestAssertionVerificationError::CredentialIdMismatch);
     }
     if request.authenticator_data.len() < 37 {
@@ -1252,6 +1252,13 @@ fn validate_apple_app_attest_aaguid(
 }
 
 #[cfg(feature = "production-crypto")]
+fn apple_app_attest_credential_id_matches_key_id(credential_id: &[u8], key_id: &str) -> bool {
+    credential_id == key_id.as_bytes()
+        || base64_decode(key_id.as_bytes()).is_ok_and(|decoded| decoded == credential_id)
+        || base64_url_decode(key_id.as_bytes()).is_ok_and(|decoded| decoded == credential_id)
+}
+
+#[cfg(feature = "production-crypto")]
 fn validate_apple_app_attest_certificate_chain(
     certificate_chain_der: &[Vec<u8>],
     public_key_bytes: &[u8],
@@ -1277,20 +1284,42 @@ fn validate_apple_app_attest_certificate_chain(
         .first()
         .ok_or(AppAttestAssertionVerificationError::InvalidAssertionEncoding)?;
     if leaf.subject_public_key_bytes != public_key_bytes {
+        eprintln!(
+            "App Attest certificate diagnostic: leaf public key did not match credential public key (leaf {} bytes, credential {} bytes)",
+            leaf.subject_public_key_bytes.len(),
+            public_key_bytes.len()
+        );
         Err(AppAttestAssertionVerificationError::InvalidSignature)
     } else if leaf.apple_app_attest_nonce.as_deref() != Some(expected_nonce) {
+        eprintln!(
+            "App Attest certificate diagnostic: leaf nonce extension did not match expected nonce"
+        );
         Err(AppAttestAssertionVerificationError::CertificateNonceMismatch)
     } else {
         for certificate in &certificates {
             validate_x509_certificate_valid_at(certificate, observed_at)?;
         }
-        for chain_pair in certificates.windows(2) {
+        for (index, chain_pair) in certificates.windows(2).enumerate() {
             let child = &chain_pair[0];
             let issuer = &chain_pair[1];
             if child.issuer_der != issuer.subject_der {
+                eprintln!(
+                    "App Attest certificate diagnostic: chain pair {index} issuer/subject mismatch"
+                );
                 return Err(AppAttestAssertionVerificationError::CertificateChainMismatch);
             }
-            verify_x509_certificate_signature(child, &issuer.subject_public_key_bytes)?;
+            verify_x509_certificate_signature(child, &issuer.subject_public_key_bytes).map_err(
+                |error| {
+                    eprintln!(
+                        "App Attest certificate diagnostic: chain pair {index} signature verification failed with {:?} (algorithm {:?}, issuer key {} bytes, signature {} bytes)",
+                        error,
+                        child.signature_algorithm,
+                        issuer.subject_public_key_bytes.len(),
+                        child.signature_der.len()
+                    );
+                    error
+                },
+            )?;
         }
 
         let terminal = certificates
@@ -1309,6 +1338,13 @@ fn validate_apple_app_attest_certificate_chain(
                     .is_ok()
                 {
                     return Ok(());
+                } else {
+                    eprintln!(
+                        "App Attest certificate diagnostic: terminal signature did not verify against trusted root (algorithm {:?}, root key {} bytes, signature {} bytes)",
+                        terminal.signature_algorithm,
+                        root.subject_public_key_bytes.len(),
+                        terminal.signature_der.len()
+                    );
                 }
             }
         }
@@ -1411,9 +1447,11 @@ fn parse_der_subject_public_key_info(
     let subject_public_key = reader.read_element_with_tag(0x03)?;
     if !reader.is_finished()
         || subject_public_key.contents.first() != Some(&0)
-        || subject_public_key.contents.len() != 66
         || subject_public_key.contents[1] != 0x04
     {
+        return Err(AppAttestAssertionVerificationError::InvalidAssertionEncoding);
+    }
+    if !matches!(subject_public_key.contents.len(), 66 | 98) {
         return Err(AppAttestAssertionVerificationError::InvalidAssertionEncoding);
     }
     Ok(subject_public_key.contents[1..].to_vec())
@@ -1445,39 +1483,113 @@ fn parse_x509_certificate(
     certificate_der: &[u8],
 ) -> Result<ParsedX509Certificate, AppAttestAssertionVerificationError> {
     let mut certificate = DerReader::new(certificate_der);
-    let certificate_sequence = certificate.read_element_with_tag(0x30)?;
+    let certificate_sequence = certificate.read_element_with_tag(0x30).map_err(|error| {
+        eprintln!(
+            "App Attest X.509 diagnostic: top-level certificate sequence parse failed for {} bytes: {error:?}",
+            certificate_der.len()
+        );
+        error
+    })?;
     if !certificate.is_finished() {
+        eprintln!(
+            "App Attest X.509 diagnostic: trailing bytes after top-level certificate sequence"
+        );
         return Err(AppAttestAssertionVerificationError::InvalidAssertionEncoding);
     }
 
     let mut certificate_sequence = DerReader::new(certificate_sequence.contents);
-    let tbs_certificate = certificate_sequence.read_element_with_tag(0x30)?;
+    let tbs_certificate = certificate_sequence
+        .read_element_with_tag(0x30)
+        .map_err(|error| {
+            eprintln!("App Attest X.509 diagnostic: tbsCertificate parse failed: {error:?}");
+            error
+        })?;
+    let signature_algorithm_element = certificate_sequence
+        .read_element_with_tag(0x30)
+        .map_err(|error| {
+            eprintln!(
+                "App Attest X.509 diagnostic: outer signatureAlgorithm parse failed: {error:?}"
+            );
+            error
+        })?;
     let signature_algorithm =
-        parse_x509_signature_algorithm(certificate_sequence.read_element_with_tag(0x30)?.contents)?;
-    let signature = certificate_sequence.read_element_with_tag(0x03)?;
+        parse_x509_signature_algorithm(signature_algorithm_element.contents).map_err(|error| {
+            eprintln!(
+                "App Attest X.509 diagnostic: outer signatureAlgorithm unsupported/unparseable: {error:?}"
+            );
+            error
+        })?;
+    let signature = certificate_sequence
+        .read_element_with_tag(0x03)
+        .map_err(|error| {
+            eprintln!("App Attest X.509 diagnostic: certificate signature parse failed: {error:?}");
+            error
+        })?;
     if !certificate_sequence.is_finished() {
+        eprintln!("App Attest X.509 diagnostic: trailing bytes after certificate sequence");
         return Err(AppAttestAssertionVerificationError::InvalidAssertionEncoding);
     }
-    let signature_der = parse_der_bit_string(signature.contents)?;
+    let signature_der = parse_der_bit_string(signature.contents).map_err(|error| {
+        eprintln!("App Attest X.509 diagnostic: signature bit string parse failed: {error:?}");
+        error
+    })?;
 
     let mut tbs_reader = DerReader::new(tbs_certificate.contents);
     if tbs_reader.peek_tag() == Some(0xa0) {
-        tbs_reader.skip_element()?;
+        tbs_reader.skip_element().map_err(|error| {
+            eprintln!("App Attest X.509 diagnostic: explicit version parse failed: {error:?}");
+            error
+        })?;
     }
-    tbs_reader.skip_element()?;
-    tbs_reader.skip_element()?;
-    let issuer = tbs_reader.read_element_with_tag(0x30)?;
-    let validity = tbs_reader.read_element_with_tag(0x30)?;
-    let (not_before, not_after) = parse_x509_validity(validity.contents)?;
-    let subject = tbs_reader.read_element_with_tag(0x30)?;
-    let subject_public_key_info = tbs_reader.read_element_with_tag(0x30)?;
+    tbs_reader.skip_element().map_err(|error| {
+        eprintln!("App Attest X.509 diagnostic: serialNumber parse failed: {error:?}");
+        error
+    })?;
+    tbs_reader.skip_element().map_err(|error| {
+        eprintln!("App Attest X.509 diagnostic: inner signature parse failed: {error:?}");
+        error
+    })?;
+    let issuer = tbs_reader.read_element_with_tag(0x30).map_err(|error| {
+        eprintln!("App Attest X.509 diagnostic: issuer parse failed: {error:?}");
+        error
+    })?;
+    let validity = tbs_reader.read_element_with_tag(0x30).map_err(|error| {
+        eprintln!("App Attest X.509 diagnostic: validity parse failed: {error:?}");
+        error
+    })?;
+    let (not_before, not_after) = parse_x509_validity(validity.contents).map_err(|error| {
+        eprintln!("App Attest X.509 diagnostic: validity time parse failed: {error:?}");
+        error
+    })?;
+    let subject = tbs_reader.read_element_with_tag(0x30).map_err(|error| {
+        eprintln!("App Attest X.509 diagnostic: subject parse failed: {error:?}");
+        error
+    })?;
+    let subject_public_key_info = tbs_reader.read_element_with_tag(0x30).map_err(|error| {
+        eprintln!("App Attest X.509 diagnostic: subjectPublicKeyInfo parse failed: {error:?}");
+        error
+    })?;
     let subject_public_key_bytes =
-        parse_der_subject_public_key_info(subject_public_key_info.contents)?;
+        parse_der_subject_public_key_info(subject_public_key_info.contents).map_err(|error| {
+            eprintln!(
+                "App Attest X.509 diagnostic: subject public key parse failed: {error:?}"
+            );
+            error
+        })?;
     let mut apple_app_attest_nonce = None;
     while !tbs_reader.is_finished() {
-        let element = tbs_reader.read_element()?;
+        let element = tbs_reader.read_element().map_err(|error| {
+            eprintln!("App Attest X.509 diagnostic: optional TBS element parse failed: {error:?}");
+            error
+        })?;
         if element.tag == 0xa3 {
-            apple_app_attest_nonce = parse_x509_extensions_for_app_attest_nonce(element.contents)?;
+            apple_app_attest_nonce =
+                parse_x509_extensions_for_app_attest_nonce(element.contents).map_err(|error| {
+                    eprintln!(
+                        "App Attest X.509 diagnostic: extensions/App Attest nonce parse failed: {error:?}"
+                    );
+                    error
+                })?;
         }
     }
 
@@ -1593,17 +1705,36 @@ fn parse_apple_app_attest_nonce_extension(
             return Err(AppAttestAssertionVerificationError::InvalidAssertionEncoding);
         }
         let mut sequence_reader = DerReader::new(sequence.contents);
-        let nonce = sequence_reader.read_element_with_tag(0x04)?;
+        let nonce = read_apple_app_attest_nonce_extension_element(&mut sequence_reader)?;
         if !sequence_reader.is_finished() {
             return Err(AppAttestAssertionVerificationError::InvalidAssertionEncoding);
         }
-        Ok(nonce.contents.to_vec())
+        Ok(nonce)
     } else {
-        let nonce = reader.read_element_with_tag(0x04)?;
+        let nonce = read_apple_app_attest_nonce_extension_element(&mut reader)?;
         if !reader.is_finished() {
             return Err(AppAttestAssertionVerificationError::InvalidAssertionEncoding);
         }
-        Ok(nonce.contents.to_vec())
+        Ok(nonce)
+    }
+}
+
+#[cfg(feature = "production-crypto")]
+fn read_apple_app_attest_nonce_extension_element(
+    reader: &mut DerReader<'_>,
+) -> Result<Vec<u8>, AppAttestAssertionVerificationError> {
+    let element = reader.read_element()?;
+    match element.tag {
+        0x04 => Ok(element.contents.to_vec()),
+        0xa0 | 0xa1 => {
+            let mut explicit_reader = DerReader::new(element.contents);
+            let nonce = explicit_reader.read_element_with_tag(0x04)?;
+            if !explicit_reader.is_finished() {
+                return Err(AppAttestAssertionVerificationError::InvalidAssertionEncoding);
+            }
+            Ok(nonce.contents.to_vec())
+        }
+        _ => Err(AppAttestAssertionVerificationError::InvalidAssertionEncoding),
     }
 }
 
@@ -1677,19 +1808,31 @@ fn verify_x509_certificate_signature(
     certificate: &ParsedX509Certificate,
     issuer_public_key_bytes: &[u8],
 ) -> Result<(), AppAttestAssertionVerificationError> {
-    match certificate.signature_algorithm {
-        X509SignatureAlgorithm::EcdsaP256Sha256 => signature::UnparsedPublicKey::new(
-            &signature::ECDSA_P256_SHA256_ASN1,
-            issuer_public_key_bytes,
-        )
-        .verify(&certificate.tbs_certificate_der, &certificate.signature_der),
-        X509SignatureAlgorithm::EcdsaP384Sha384 => signature::UnparsedPublicKey::new(
-            &signature::ECDSA_P384_SHA384_ASN1,
-            issuer_public_key_bytes,
-        )
-        .verify(&certificate.tbs_certificate_der, &certificate.signature_der),
-    }
-    .map_err(|_| AppAttestAssertionVerificationError::InvalidSignature)
+    // A certificate's signatureAlgorithm OID only encodes the message digest
+    // (SHA-256 vs SHA-384). The elliptic curve used to verify the signature is
+    // determined by the *issuer's* public key, not by the child certificate's
+    // signature OID. Apple's real App Attest chain signs a P-256 leaf with the
+    // P-384 "Apple App Attestation CA 1" intermediate using ecdsa-with-SHA256,
+    // so the verifying curve (P-384, from the issuer key) and the digest
+    // (SHA-256, from the leaf's signature OID) come from different certificates
+    // and must be paired independently. Selecting the curve from the child's OID
+    // (as an earlier version did) fed a P-384 issuer key to a P-256 verifier and
+    // always failed real-device attestations with InvalidSignature.
+    let digest_is_sha384 = matches!(
+        certificate.signature_algorithm,
+        X509SignatureAlgorithm::EcdsaP384Sha384
+    );
+    let algorithm: &'static signature::EcdsaVerificationAlgorithm =
+        match (issuer_public_key_bytes.len(), digest_is_sha384) {
+            (65, false) => &signature::ECDSA_P256_SHA256_ASN1,
+            (65, true) => &signature::ECDSA_P256_SHA384_ASN1,
+            (97, false) => &signature::ECDSA_P384_SHA256_ASN1,
+            (97, true) => &signature::ECDSA_P384_SHA384_ASN1,
+            _ => return Err(AppAttestAssertionVerificationError::InvalidSignature),
+        };
+    signature::UnparsedPublicKey::new(algorithm, issuer_public_key_bytes)
+        .verify(&certificate.tbs_certificate_der, &certificate.signature_der)
+        .map_err(|_| AppAttestAssertionVerificationError::InvalidSignature)
 }
 
 #[cfg(feature = "production-crypto")]
@@ -2098,6 +2241,20 @@ fn base64_decode(value: &[u8]) -> Result<Vec<u8>, AppAttestAssertionVerification
         }
     }
     Ok(decoded)
+}
+
+#[cfg(feature = "production-crypto")]
+fn base64_url_decode(value: &[u8]) -> Result<Vec<u8>, AppAttestAssertionVerificationError> {
+    let mut normalized = Vec::with_capacity(value.len() + ((4 - value.len() % 4) % 4));
+    for byte in value {
+        normalized.push(match byte {
+            b'-' => b'+',
+            b'_' => b'/',
+            other => *other,
+        });
+    }
+    normalized.extend(std::iter::repeat_n(b'=', (4 - normalized.len() % 4) % 4));
+    base64_decode(&normalized)
 }
 
 #[cfg(feature = "production-crypto")]
