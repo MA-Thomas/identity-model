@@ -452,6 +452,7 @@ pub struct StaticLivenessCeremonyVerifier {
     pub expected_assertion: String,
     pub verified_ceremony: VerifiedLivenessCeremony,
     pub bind_request_challenge_nonce: bool,
+    pub bind_request_device_ref: bool,
 }
 
 impl StaticLivenessCeremonyVerifier {
@@ -463,11 +464,21 @@ impl StaticLivenessCeremonyVerifier {
             expected_assertion: expected_assertion.into(),
             verified_ceremony,
             bind_request_challenge_nonce: false,
+            bind_request_device_ref: false,
         }
     }
 
     pub fn with_request_challenge_nonce(mut self) -> Self {
         self.bind_request_challenge_nonce = true;
+        self
+    }
+
+    // Rebinds the verified ceremony's device ref to the request's expected device
+    // ref, mirroring `with_request_challenge_nonce`. In apple_assertion mode the
+    // device ref is dynamic (a real per-install phone value), so pinning it in the
+    // static template would fail the downstream ceremony/App-Attest device binding.
+    pub fn with_request_device_ref(mut self) -> Self {
+        self.bind_request_device_ref = true;
         self
     }
 }
@@ -485,6 +496,11 @@ impl LivenessCeremonyVerifier for StaticLivenessCeremonyVerifier {
         let mut verified_ceremony = self.verified_ceremony.clone();
         if self.bind_request_challenge_nonce {
             verified_ceremony.challenge_nonce = request.challenge_nonce.clone();
+        }
+        if self.bind_request_device_ref {
+            if let Some(device_ref) = request.expected_device_ref.clone() {
+                verified_ceremony.device_ref = device_ref;
+            }
         }
 
         validate_liveness_ceremony_context(&verified_ceremony, request, observed_at)?;

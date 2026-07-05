@@ -80,6 +80,13 @@ struct ProofView: View {
                         Label("Copy Envelope", systemImage: "doc.on.doc")
                     }
                     .disabled(model.assertionEnvelope == nil)
+
+                    Button {
+                        model.copyOnboardingInputs()
+                    } label: {
+                        Label("Copy Onboarding Inputs", systemImage: "square.and.arrow.up.on.square")
+                    }
+                    .disabled(model.assertionEnvelope == nil)
                 }
 
                 if let envelope = model.assertionEnvelope {

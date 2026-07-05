@@ -1080,7 +1080,8 @@ mod server {
                 retention_policy_refs,
             },
         )
-        .with_request_challenge_nonce())
+        .with_request_challenge_nonce()
+        .with_request_device_ref())
     }
 
     #[derive(Debug, Clone)]

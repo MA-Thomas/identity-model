@@ -17,6 +17,7 @@ final class ProofViewModel: ObservableObject {
     @Published private(set) var registrationChallenge: RegistrationChallenge?
     @Published private(set) var livePresenceChallenge: LivePresenceChallenge?
     @Published private(set) var assertionEnvelope: String?
+    @Published private(set) var assertionAssertedAt: String?
     @Published private(set) var isBusy = false
     @Published private(set) var events: [String] = []
 
@@ -126,6 +127,7 @@ final class ProofViewModel: ObservableObject {
                 "high"
             ].joined(separator: "|")
             assertionEnvelope = envelope
+            assertionAssertedAt = assertedAt
             appendEvent("Generated assertion envelope: \(assertionObject.count) assertion bytes")
         }
     }
@@ -139,6 +141,37 @@ final class ProofViewModel: ObservableObject {
         appendEvent("Copied assertion envelope")
     }
 
+    // Exports everything the Mac-side submit_onboarding.py script needs to submit
+    // a composed identity-onboarding request bound to this live assertion. The
+    // challenge nonce is single-use and expires, so submit promptly after copying.
+    func copyOnboardingInputs() {
+        guard let assertionEnvelope,
+              let challenge = livePresenceChallenge,
+              let assertedAt = assertionAssertedAt else {
+            appendEvent("Generate an assertion envelope before copying onboarding inputs.")
+            return
+        }
+        let inputs: [String: String] = [
+            "base_url": baseURLString,
+            "subject_id": subjectId,
+            "device_ref": deviceRef,
+            "challenge_nonce": challenge.challengeNonce,
+            "observed_at": assertedAt,
+            "expires_at": challenge.expiresAt,
+            "team_id": challenge.expectedApp.teamId,
+            "bundle_id": challenge.expectedApp.bundleId,
+            "environment": challenge.expectedApp.environment,
+            "assertion": assertionEnvelope,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: inputs, options: [.prettyPrinted, .sortedKeys]),
+              let json = String(data: data, encoding: .utf8) else {
+            appendEvent("Could not encode onboarding inputs.")
+            return
+        }
+        UIPasteboard.general.string = json
+        appendEvent("Copied onboarding inputs (submit promptly; challenge nonce expires \(challenge.expiresAt))")
+    }
+
     func resetLocalKey() {
         try? keychain.delete(Self.keyIdKey)
         keyId = nil
@@ -146,6 +179,7 @@ final class ProofViewModel: ObservableObject {
         registrationChallenge = nil
         livePresenceChallenge = nil
         assertionEnvelope = nil
+        assertionAssertedAt = nil
         appendEvent("Cleared local App Attest key ID")
     }
 

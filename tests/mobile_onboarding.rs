@@ -858,6 +858,54 @@ fn mobile_liveness_must_bind_to_app_attest_challenge() {
     assert!(repository.all_memberships().is_empty());
 }
 
+#[test]
+fn static_liveness_verifier_rebinds_device_ref_from_request() {
+    // Regression: in apple_assertion mode the device ref is a real per-install
+    // phone value carried on each request, not something known when the static
+    // liveness verifier is configured from env. Without request-device-ref
+    // binding the verifier kept its template device ref and later failed the
+    // ceremony/App-Attest device match (DeviceMismatch); the opt-in rebind makes
+    // the verified ceremony follow the request's device ref, mirroring the
+    // existing challenge-nonce rebinding.
+    let template = VerifiedLivenessCeremony {
+        provider_metadata: ContinuityProviderMetadata {
+            provider_name: "StaticLivePresenceProvider".to_string(),
+            provider_event_id: Some("liveness-event-rebind".to_string()),
+            provider_subject_ref: Some("liveness-subject-rebind".to_string()),
+            sdk_or_api_version: Some("static/1.0".to_string()),
+        },
+        challenge_nonce: "live-presence-nonce".to_string(),
+        device_ref: "env-template-device".to_string(),
+        observed_at: ts("2026-05-29T00:05:20Z"),
+        expires_at: ts("2026-05-29T00:06:00Z"),
+        result: IdentityWitnessResult::Passed,
+        assurance_level: AssuranceLevel::High,
+        pad_result: PresentationAttackDetectionResult::Passed,
+        retention_policy_refs: vec![id("live-presence-retention@v1")],
+    };
+    let request = LivenessCeremonyVerificationRequest {
+        assertion: "valid-live-presence".to_string(),
+        challenge_nonce: "live-presence-nonce".to_string(),
+        expected_device_ref: Some("real-phone-device".to_string()),
+    };
+    let observed_at = ts("2026-05-29T00:05:30Z");
+
+    // Without rebinding, the template device ref does not match the request's.
+    let strict = StaticLivenessCeremonyVerifier::new("valid-live-presence", template.clone());
+    assert!(matches!(
+        strict.verify_liveness_ceremony(&request, &observed_at),
+        Err(LivenessCeremonyVerificationError::DeviceRefMismatch)
+    ));
+
+    // With rebinding, the verified ceremony follows the request's device ref.
+    let rebinding = StaticLivenessCeremonyVerifier::new("valid-live-presence", template)
+        .with_request_device_ref();
+    let verified = rebinding
+        .verify_liveness_ceremony(&request, &observed_at)
+        .expect("request-device-ref binding should accept the dynamic device ref");
+    assert_eq!(verified.device_ref, "real-phone-device");
+}
+
 fn mobile_identity_onboarding_request(
     authored_by: Author,
     subject_id: &str,
