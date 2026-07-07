@@ -1,0 +1,18 @@
+[package]
+name = "fen-clinical"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+# FHIR EOB/Coverage JSON parsing for the ingestion edge. Optional so the
+# default crate stays dependency-light, mirroring the identity-model rule.
+fhir-ingest = ["dep:serde", "dep:serde_json"]
+# Live Blue Button sandbox adapter (OAuth2 + fetch). Env-gated harnesses only.
+claims-ingest = ["fhir-ingest", "dep:reqwest"]
+
+[dependencies]
+identity-model = { path = "../identity-model" }
+serde = { version = "1.0.228", features = ["derive"], optional = true }
+serde_json = { version = "1.0.149", optional = true }
+reqwest = { version = "0.12.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }

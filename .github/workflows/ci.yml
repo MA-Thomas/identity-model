@@ -1,0 +1,84 @@
+# CI for the FEN workspace.
+#
+# This is the CI half of FABLE_UPDATES.md section 5, pulled forward by
+# CLAIMS_SPINE_PLAN.md milestone M0: the feature matrix from
+# FEATURE_MATRIX.md must hold by machine, not by convention, before two
+# crates multiply the combinations.
+
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The default build must stay dependency-light. This job proves the domain
+  # model, deterministic fixtures, policy, translation, and in-memory
+  # persistence build and pass without PostgreSQL, Keycloak, Apple services,
+  # or a production crypto provider.
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  # The eight feature combinations from FEATURE_MATRIX.md, plus the
+  # fen-clinical feature gates. Features are additive and unify across the
+  # graph, so passing with `runtime-server` proves nothing about a build of
+  # a single feature; each combination is exercised on its own.
+  matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - crate: identity-model
+            features: "mobile-http"
+          - crate: identity-model
+            features: "postgres-adapter"
+          - crate: identity-model
+            features: "oidc-jwks-verifier"
+          - crate: identity-model
+            features: "ed25519-dalek-verifier"
+          - crate: identity-model
+            features: "production-crypto"
+          - crate: identity-model
+            features: "mobile-http postgres-adapter"
+          - crate: identity-model
+            features: "runtime-server"
+          - crate: fen-clinical
+            features: "fhir-ingest"
+          - crate: fen-clinical
+            features: "claims-ingest"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p ${{ matrix.crate }} --features "${{ matrix.features }}"
+
+  runtime-server-binary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p identity-model --features runtime-server --bin mobile_onboarding_server
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  # Live harnesses (PostgreSQL service container + Keycloak) are env-gated
+  # and compile under the feature jobs above; wiring the containers is
+  # follow-on work per LOCAL_BACKEND_E2E.md / LOCAL_KEYCLOAK_DEV.md.
