@@ -16,6 +16,9 @@ cargo test --features ed25519-dalek-verifier
 cargo test --features production-crypto
 cargo test --features "mobile-http postgres-adapter"
 cargo test --features runtime-server
+cargo test -p fen-health-econ --features fhir-ingest
+cargo test -p fen-health-econ --features claims-ingest
+cargo test -p fen-health-econ --features postgres-adapter
 ```
 
 ## Live Harnesses
@@ -28,6 +31,16 @@ PostgreSQL:
 ```sh
 IDENTITY_MODEL_POSTGRES_URL="postgres://USER:PASSWORD@127.0.0.1:5432/DATABASE" \
 cargo test --features postgres-adapter live_postgres -- --nocapture
+```
+
+PostgreSQL health-economic label wiring (mixed-family subject replay through the
+shared envelope table):
+
+```sh
+IDENTITY_MODEL_POSTGRES_URL="postgres://USER:PASSWORD@127.0.0.1:5432/DATABASE" \
+cargo test -p fen-health-econ --features postgres-adapter \
+  live_postgres_scopes_mixed_family_subject_replay_when_env_is_set \
+  -- --nocapture
 ```
 
 PostgreSQL App Attest key state:

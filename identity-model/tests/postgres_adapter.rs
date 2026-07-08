@@ -30,6 +30,71 @@ fn postgres_migration_pins_encrypted_fact_and_audit_table_shape() {
     assert!(!sql.contains("fact_payload"));
 }
 
+/// Pins the identity family's closed label set: `FactPayloadType::ALL` covers
+/// every variant exactly once and every label round-trips. Sibling families
+/// scope shared-envelope-table queries by exactly this list, so a variant
+/// missing from `ALL` would silently drop out of identity replay.
+#[test]
+fn payload_type_labels_are_closed_and_stable() {
+    assert_eq!(FactPayloadType::ALL.len(), 30);
+
+    let mut labels: Vec<&str> = Vec::new();
+    for payload_type in FactPayloadType::ALL {
+        let label = payload_type.as_str();
+        assert_eq!(
+            FactPayloadType::from_str_label(label),
+            Some(*payload_type),
+            "every label must parse back to its variant"
+        );
+        assert!(
+            !label.contains('.'),
+            "identity labels are unnamespaced; dotted namespaces belong to sibling families"
+        );
+        labels.push(label);
+    }
+    labels.sort_unstable();
+    labels.dedup();
+    assert_eq!(labels.len(), FactPayloadType::ALL.len(), "labels must be unique");
+}
+
+/// The envelope table is shared across payload families, so a row carrying a
+/// sibling family's label (e.g. `health_econ.*`) must be a hard error for
+/// identity-typed row parsing — family scoping belongs in the query, and rows
+/// outside every family's label set must never be silently skipped.
+#[test]
+fn identity_row_parsing_rejects_sibling_family_labels() {
+    let envelope = StoredEncryptedFact {
+        append_sequence: 0,
+        transaction_id: PersistenceTransactionId("tx-cross-family".to_string()),
+        committed_at: Timestamp("2026-07-08T00:00:00Z".to_string()),
+        fact_id: FactId::new("fact-cross-family"),
+        subject_id: SubjectId::new("subject-cross-family"),
+        occurred_at: TemporalAnchor::Point(Timestamp("2026-07-08T00:00:00Z".to_string())),
+        payload_type: FactPayloadType::SubjectCreated,
+        status: FactStatus::Active,
+        materialization_policy_refs: vec![PolicyRef::new("identity-materialization-policy@v1")],
+        encryption: FactEncryptionMetadata::deterministic_test(KEY_ID, b"nonce-1".to_vec()),
+        ciphertext: vec![1, 2, 3],
+    };
+
+    let mut row = PostgresEncryptedFactRow::try_from_envelope(&envelope)
+        .expect("identity envelope should map onto the shared row shape");
+    assert_eq!(row.payload_type, "subject_created");
+    assert_eq!(
+        row.clone().try_into_envelope(),
+        Ok(envelope),
+        "identity labels stay parseable through the shared row"
+    );
+
+    row.payload_type = "health_econ.claim".to_string();
+    assert_eq!(
+        row.try_into_envelope(),
+        Err(PostgresAdapterError::UnknownPayloadType(
+            "health_econ.claim".to_string()
+        ))
+    );
+}
+
 #[test]
 fn postgres_migration_pins_workflow_transaction_table_shape() {
     let sql = IDENTITY_WORKFLOW_TRANSACTIONS_MIGRATION_SQL;

@@ -56,6 +56,8 @@ jobs:
             features: "fhir-ingest"
           - crate: fen-health-econ
             features: "claims-ingest"
+          - crate: fen-health-econ
+            features: "postgres-adapter"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

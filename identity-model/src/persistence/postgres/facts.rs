@@ -42,7 +42,26 @@ impl SqlxPostgresEncryptedFactRepository {
         &self,
         envelope: &StoredEncryptedFact,
     ) -> Result<(), PostgresAdapterError> {
-        let row = PostgresEncryptedFactRow::try_from_envelope(envelope)?;
+        self.append_encrypted_fact_in_family::<IdentityPayloadFamily>(envelope)
+            .await
+    }
+
+    /// Family-generic append onto the shared payload-agnostic envelope table.
+    /// Sibling families (e.g. `fen-health-econ`) reuse the same table, row
+    /// shape, and append-sequence domain; only the payload-type label
+    /// namespace is family-owned.
+    pub async fn append_encrypted_fact_in_family<F: PayloadFamily>(
+        &self,
+        envelope: &StoredEncryptedFactEnvelope<F::PayloadType>,
+    ) -> Result<(), PostgresAdapterError> {
+        let row = PostgresEncryptedFactRow::try_from_envelope_in_family::<F>(envelope)?;
+        self.append_encrypted_fact_row(row).await
+    }
+
+    async fn append_encrypted_fact_row(
+        &self,
+        row: PostgresEncryptedFactRow,
+    ) -> Result<(), PostgresAdapterError> {
         let status_payload = row.status_payload_json()?;
 
         sqlx::query(
@@ -101,27 +120,56 @@ impl SqlxPostgresEncryptedFactRepository {
     pub async fn all_encrypted_facts(
         &self,
     ) -> Result<Vec<StoredEncryptedFact>, PostgresAdapterError> {
+        self.all_encrypted_facts_in_family::<IdentityPayloadFamily>()
+            .await
+    }
+
+    /// Family-generic replay query, scoped in SQL to the family's closed
+    /// label set. Sibling families share the envelope table, so an unscoped
+    /// scan would surface labels the requested family cannot parse; scoping
+    /// by exact labels keeps any label outside *every* family's set a hard
+    /// error instead of a silently skipped row.
+    pub async fn all_encrypted_facts_in_family<F: PayloadFamily>(
+        &self,
+    ) -> Result<Vec<StoredEncryptedFactEnvelope<F::PayloadType>>, PostgresAdapterError> {
         let rows = sqlx::query(&format!(
-            "{SELECT_ENCRYPTED_FACT_COLUMNS_SQL} ORDER BY append_sequence"
+            "{SELECT_ENCRYPTED_FACT_COLUMNS_SQL} WHERE payload_type = ANY($1) ORDER BY append_sequence"
         ))
+        .bind(family_payload_type_labels::<F>())
         .fetch_all(&self.pool)
         .await
         .map_err(sqlx_error)?;
-        rows.into_iter().map(envelope_from_pg_row).collect()
+        rows.into_iter()
+            .map(envelope_from_pg_row_in_family::<F>)
+            .collect()
     }
 
     pub async fn encrypted_facts_for_subject(
         &self,
         subject_id: &SubjectId,
     ) -> Result<Vec<StoredEncryptedFact>, PostgresAdapterError> {
+        self.encrypted_facts_for_subject_in_family::<IdentityPayloadFamily>(subject_id)
+            .await
+    }
+
+    /// Family-generic subject-scoped replay query; see
+    /// [`Self::all_encrypted_facts_in_family`] for the label-scoping
+    /// rationale (one subject can hold facts from several families).
+    pub async fn encrypted_facts_for_subject_in_family<F: PayloadFamily>(
+        &self,
+        subject_id: &SubjectId,
+    ) -> Result<Vec<StoredEncryptedFactEnvelope<F::PayloadType>>, PostgresAdapterError> {
         let rows = sqlx::query(&format!(
-            "{SELECT_ENCRYPTED_FACT_COLUMNS_SQL} WHERE subject_id = $1 ORDER BY append_sequence"
+            "{SELECT_ENCRYPTED_FACT_COLUMNS_SQL} WHERE subject_id = $1 AND payload_type = ANY($2) ORDER BY append_sequence"
         ))
         .bind(&subject_id.0)
+        .bind(family_payload_type_labels::<F>())
         .fetch_all(&self.pool)
         .await
         .map_err(sqlx_error)?;
-        rows.into_iter().map(envelope_from_pg_row).collect()
+        rows.into_iter()
+            .map(envelope_from_pg_row_in_family::<F>)
+            .collect()
     }
 
     pub async fn record_materialization_audit_event(
@@ -319,12 +367,29 @@ SELECT
 FROM identity_facts
 "#;
 
+/// The family's closed label set as owned strings, in the shape `sqlx`
+/// binds as a `text[]` parameter for `payload_type = ANY($n)` scoping.
 #[cfg(feature = "postgres-adapter")]
-pub(super) fn envelope_from_pg_row(
+pub(super) fn family_payload_type_labels<F: PayloadFamily>() -> Vec<String> {
+    F::payload_type_variants()
+        .iter()
+        .map(|payload_type| F::payload_type_label(*payload_type).to_string())
+        .collect()
+}
+
+#[cfg(feature = "postgres-adapter")]
+pub(super) fn envelope_from_pg_row_in_family<F: PayloadFamily>(
     row: PgRow,
-) -> Result<StoredEncryptedFact, PostgresAdapterError> {
+) -> Result<StoredEncryptedFactEnvelope<F::PayloadType>, PostgresAdapterError> {
+    fact_row_from_pg_row(row)?.try_into_envelope_in_family::<F>()
+}
+
+#[cfg(feature = "postgres-adapter")]
+pub(super) fn fact_row_from_pg_row(
+    row: PgRow,
+) -> Result<PostgresEncryptedFactRow, PostgresAdapterError> {
     let status_payload_json: String = row.try_get("status_payload").map_err(sqlx_error)?;
-    PostgresEncryptedFactRow {
+    Ok(PostgresEncryptedFactRow {
         append_sequence: row.try_get("append_sequence").map_err(sqlx_error)?,
         transaction_id: row.try_get("transaction_id").map_err(sqlx_error)?,
         committed_at: row.try_get("committed_at").map_err(sqlx_error)?,
@@ -345,8 +410,7 @@ pub(super) fn envelope_from_pg_row(
         nonce: row.try_get("nonce").map_err(sqlx_error)?,
         aad_version: row.try_get("aad_version").map_err(sqlx_error)?,
         ciphertext: row.try_get("ciphertext").map_err(sqlx_error)?,
-    }
-    .try_into_envelope()
+    })
 }
 
 #[cfg(feature = "postgres-adapter")]

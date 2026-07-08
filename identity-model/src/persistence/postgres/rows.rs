@@ -340,6 +340,15 @@ pub enum PostgresAdapterError {
 
 impl PostgresEncryptedFactRow {
     pub fn try_from_envelope(envelope: &StoredEncryptedFact) -> Result<Self, PostgresAdapterError> {
+        Self::try_from_envelope_in_family::<IdentityPayloadFamily>(envelope)
+    }
+
+    /// Family-generic row mapping onto the payload-agnostic envelope table:
+    /// identical columns, with the payload-type label owned by the
+    /// [`PayloadFamily`] (e.g. `health_econ.*` for `fen-health-econ`).
+    pub fn try_from_envelope_in_family<F: PayloadFamily>(
+        envelope: &StoredEncryptedFactEnvelope<F::PayloadType>,
+    ) -> Result<Self, PostgresAdapterError> {
         let append_sequence = i64::try_from(envelope.append_sequence)
             .map_err(|_| PostgresAdapterError::AppendSequenceOutOfRange)?;
         let occurred_at = PostgresTemporalAnchorRecord::from_temporal_anchor(&envelope.occurred_at);
@@ -354,7 +363,7 @@ impl PostgresEncryptedFactRow {
             occurred_kind: occurred_at.kind,
             occurred_start: occurred_at.start,
             occurred_end: occurred_at.end,
-            payload_type: envelope.payload_type.as_str().to_string(),
+            payload_type: F::payload_type_label(envelope.payload_type).to_string(),
             status_kind: status_kind.to_string(),
             status_payload,
             materialization_policy_refs: envelope
@@ -372,11 +381,22 @@ impl PostgresEncryptedFactRow {
     }
 
     pub fn try_into_envelope(self) -> Result<StoredEncryptedFact, PostgresAdapterError> {
+        self.try_into_envelope_in_family::<IdentityPayloadFamily>()
+    }
+
+    /// Family-generic inverse of [`Self::try_from_envelope_in_family`]. A
+    /// label outside the family's closed set is a hard
+    /// [`PostgresAdapterError::UnknownPayloadType`] error: family scoping
+    /// belongs in the query (`payload_type = ANY(family labels)`), not in
+    /// silently skipping rows here.
+    pub fn try_into_envelope_in_family<F: PayloadFamily>(
+        self,
+    ) -> Result<StoredEncryptedFactEnvelope<F::PayloadType>, PostgresAdapterError> {
         if self.append_sequence < 0 {
             return Err(PostgresAdapterError::NegativeAppendSequence);
         }
 
-        Ok(StoredEncryptedFact {
+        Ok(StoredEncryptedFactEnvelope {
             append_sequence: self.append_sequence as AppendSequence,
             transaction_id: PersistenceTransactionId(self.transaction_id),
             committed_at: Timestamp(self.committed_at),
@@ -388,7 +408,7 @@ impl PostgresEncryptedFactRow {
                 end: self.occurred_end,
             }
             .try_into_temporal_anchor()?,
-            payload_type: FactPayloadType::from_str_label(&self.payload_type).ok_or_else(|| {
+            payload_type: F::payload_type_from_label(&self.payload_type).ok_or_else(|| {
                 PostgresAdapterError::UnknownPayloadType(self.payload_type.clone())
             })?,
             status: fact_status_from_postgres(&self.status_kind, self.status_payload)?,

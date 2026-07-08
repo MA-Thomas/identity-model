@@ -10,9 +10,14 @@ default = []
 fhir-ingest = ["dep:serde", "dep:serde_json"]
 # Live Blue Button sandbox adapter (OAuth2 + fetch). Env-gated harnesses only.
 claims-ingest = ["fhir-ingest", "dep:reqwest"]
+# Durable PostgreSQL persistence through the identity crate's shared,
+# payload-agnostic envelope table. `sqlx` is only exercised by the env-gated
+# live harness in `tests/postgres_label_wiring.rs`.
+postgres-adapter = ["identity-model/postgres-adapter", "dep:sqlx"]
 
 [dependencies]
 identity-model = { path = "../identity-model" }
 serde = { version = "1.0.228", features = ["derive"], optional = true }
 serde_json = { version = "1.0.149", optional = true }
 reqwest = { version = "0.12.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
+sqlx = { version = "0.8.6", default-features = false, features = ["postgres", "runtime-tokio-rustls"], optional = true }

@@ -38,6 +38,27 @@ pub enum HealthEconFactPayloadType {
 }
 
 impl HealthEconFactPayloadType {
+    /// Every variant of this closed label enum, in declaration order.
+    ///
+    /// Keep in sync with the enum; the label-freeze test in
+    /// `tests/postgres_label_wiring.rs` pins the length and label round-trip
+    /// so an added variant cannot silently miss this list.
+    pub const ALL: &'static [Self] = &[
+        Self::Claim,
+        Self::Adjudication,
+        Self::Payment,
+        Self::Coverage,
+        Self::PreAuthRequest,
+        Self::PreAuthDecision,
+        Self::Appeal,
+        Self::ProviderBill,
+        Self::AccumulatorSnapshot,
+        Self::BenefitMatch,
+        Self::BillingDiscrepancy,
+        Self::RecordRequest,
+        Self::RecordReceived,
+    ];
+
     pub fn from_payload(payload: &HealthEconFactPayload) -> Self {
         match payload {
             HealthEconFactPayload::Claim(_) => Self::Claim,
@@ -117,6 +138,10 @@ impl PayloadFamily for HealthEconPayloadFamily {
 
     fn payload_type_of_payload(payload: &Self::Payload) -> Self::PayloadType {
         HealthEconFactPayloadType::from_payload(payload)
+    }
+
+    fn payload_type_variants() -> &'static [Self::PayloadType] {
+        HealthEconFactPayloadType::ALL
     }
 
     fn fact_id(fact: &Self::Fact) -> &FactId {

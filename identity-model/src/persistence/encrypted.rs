@@ -34,12 +34,21 @@ pub trait PayloadFamily {
     type Fact: Clone;
     /// Payload carried inside the ciphertext.
     type Payload: Clone + PartialEq + std::fmt::Debug;
-    /// Closed payload-type label enum with stable string labels.
-    type PayloadType: Copy + Eq + std::fmt::Debug;
+    /// Closed payload-type label enum with stable string labels. `'static`
+    /// because durable adapters hold the family's variant list as a
+    /// `&'static` slice ([`Self::payload_type_variants`]).
+    type PayloadType: Copy + Eq + std::fmt::Debug + 'static;
 
     fn payload_type_label(payload_type: Self::PayloadType) -> &'static str;
     fn payload_type_from_label(label: &str) -> Option<Self::PayloadType>;
     fn payload_type_of_payload(payload: &Self::Payload) -> Self::PayloadType;
+    /// Every payload-type variant of this family's closed label enum.
+    ///
+    /// Sibling families share the payload-agnostic envelope tables, so
+    /// durable adapters scope family-typed queries to exactly this label set
+    /// instead of guessing at label prefixes. A row whose label is outside
+    /// every family's set remains a hard error, not a silently skipped row.
+    fn payload_type_variants() -> &'static [Self::PayloadType];
 
     fn fact_id(fact: &Self::Fact) -> &FactId;
     fn subject_id(fact: &Self::Fact) -> &SubjectId;
@@ -74,6 +83,10 @@ impl PayloadFamily for IdentityPayloadFamily {
 
     fn payload_type_of_payload(payload: &Self::Payload) -> Self::PayloadType {
         FactPayloadType::from_payload(payload)
+    }
+
+    fn payload_type_variants() -> &'static [Self::PayloadType] {
+        FactPayloadType::ALL
     }
 
     fn fact_id(fact: &Self::Fact) -> &FactId {
@@ -258,6 +271,44 @@ impl FactPayloadType {
             FactPayload::AccessDecision { .. } => Self::AccessDecision,
         }
     }
+
+    /// Every variant of this closed label enum, in declaration order.
+    ///
+    /// Keep in sync with the enum; `payload_type_labels_are_closed_and_stable`
+    /// in `tests/postgres_adapter.rs` pins the length and label round-trip so
+    /// an added variant cannot silently miss this list.
+    pub const ALL: &'static [Self] = &[
+        Self::Measurement,
+        Self::Prescription,
+        Self::Procedure,
+        Self::Diagnosis,
+        Self::Document,
+        Self::Coverage,
+        Self::Claim,
+        Self::SubjectCreated,
+        Self::IdentityAttributeAsserted,
+        Self::IdentityWitnessRecorded,
+        Self::BiometricEnrollmentReferenceAdded,
+        Self::BiometricContinuityCheck,
+        Self::ContinuityVerificationRejected,
+        Self::DeviceBindingEstablished,
+        Self::DeviceBindingRevoked,
+        Self::CredentialAssertion,
+        Self::ClinicalIdentityLinkEstablished,
+        Self::ClinicalIdentityLinkContested,
+        Self::ClinicalIdentityLinkDisputeResolved,
+        Self::PayerIdentityLinkEstablished,
+        Self::PayerIdentityLinkContested,
+        Self::PayerIdentityLinkDisputeResolved,
+        Self::DuplicateSubjectMergeRecorded,
+        Self::IncorrectMergeSplitRecorded,
+        Self::IdentityWitnessSuperseded,
+        Self::AuthorityRelationshipEstablished,
+        Self::AuthorityRelationshipRevoked,
+        Self::AccountRecoveryEvent,
+        Self::RiskEvaluationEvent,
+        Self::AccessDecision,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
