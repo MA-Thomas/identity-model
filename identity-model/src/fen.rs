@@ -61,6 +61,7 @@ typed_id!(DecisionPointId);
 typed_id!(AuthorId);
 typed_id!(DocumentId);
 typed_id!(PolicyRef);
+typed_id!(ContentHash);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Timestamp(pub String);
@@ -253,12 +254,56 @@ pub struct TimeInterval {
     pub end: Timestamp,
 }
 
+/// Where a fact came from and under what authority it was ingested.
+///
+/// Every ingestion event preserves the raw artifact (in an artifact store
+/// outside the fact graph, keyed by `content_hash` — facts reference, never
+/// embed), receipt time, source system, and the authorization basis for the
+/// pull. Every fact carries a [`ProvenanceTier`]; `Inference`-tier facts must
+/// additionally carry a `DerivedFrom` in their payload pointing at the facts
+/// and rule versions that produced them (FEN_HEALTH_ECON_EXTENSIONS.md A/C).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Provenance {
     pub source_system: Option<String>,
     pub source_document: Option<DocumentId>,
     pub imported_at: Timestamp,
     pub author: Author,
+    pub tier: ProvenanceTier,
+    /// Hash of the raw source artifact this fact was normalized from.
+    pub content_hash: Option<ContentHash>,
+    pub authorization_basis: Option<AuthorizationBasis>,
+}
+
+/// How the underlying material entered the system. Ordered roughly by
+/// evidentiary strength; `Inference` is the only tier that carries no
+/// external artifact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProvenanceTier {
+    /// Payer/provider API pull, individual-directed.
+    ApiSourced,
+    /// HIPAA right-of-access records delivery.
+    RecordsRequest,
+    /// Member-portal download.
+    PortalExport,
+    /// Material the individual already holds (bills, EOBs, denial letters).
+    EmployeeUpload,
+    /// Derived by the system; the payload must cite its inputs and rule
+    /// version.
+    Inference,
+}
+
+/// The authority under which the source material was obtained.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthorizationBasis {
+    /// The individual's HIPAA right of access to a covered entity's records.
+    HipaaRightOfAccess,
+    /// Explicit patient-directed sharing.
+    PatientDirection,
+    /// Plan context supplied by the sponsoring employer (e.g. the benefit
+    /// catalog handed over at signing).
+    EmployerPlanContext,
+    /// Material already in the individual's possession.
+    SelfHeld,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -290,6 +335,13 @@ pub enum CodingSystem {
     Loinc,
     RxNorm,
     Cpt,
+    /// Healthcare Common Procedure Coding System (billing: supplies,
+    /// services, procedures).
+    Hcpcs,
+    /// National Drug Codes (drug products).
+    Ndc,
+    /// X12 Claim Adjustment Reason Codes (adjudication/denial reasons).
+    Carc,
     Local,
 }
 
@@ -308,5 +360,10 @@ pub enum ExternalSystem {
     Ccda,
     IdentityProvider,
     ContinuityProvider,
+    /// A payer/provider member portal (provenance-accurate refs for portal
+    /// exports).
+    PayerPortal,
+    /// X12 EDI transactions (835/837-derived data).
+    Edi,
     Other(String),
 }

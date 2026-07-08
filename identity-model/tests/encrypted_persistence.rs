@@ -121,8 +121,19 @@ fn aes_256_gcm_metadata_planner_derives_unique_nonces_from_append_sequence() {
     let mut planner = Aes256GcmFactEncryptionMetadataPlanner::new("aes-key", *b"FEN1", None);
     let fact = sensitive_fact("fact-aes-gcm-nonce", id("subject-aes-gcm-nonce"));
 
-    let first = planner.metadata_for_fact(&fact, 1);
-    let second = planner.metadata_for_fact(&fact, 2);
+    // `FactEncryptionMetadataPlanner` is generic over the payload family since
+    // the D3 seam; a concrete planner implements it for every family, so the
+    // family must be named at the call site (the identity one here).
+    let first = FactEncryptionMetadataPlanner::<IdentityPayloadFamily>::metadata_for_fact(
+        &mut planner,
+        &fact,
+        1,
+    );
+    let second = FactEncryptionMetadataPlanner::<IdentityPayloadFamily>::metadata_for_fact(
+        &mut planner,
+        &fact,
+        2,
+    );
 
     assert_eq!(first.algorithm, FactEncryptionAlgorithm::Aes256Gcm);
     assert_eq!(first.nonce.len(), 12);

@@ -572,6 +572,11 @@ impl FenTranslator {
                 source_document: None,
                 imported_at: occurred_at,
                 author: self.system_author.clone(),
+                // Provider adapters translate evidence delivered over the
+                // provider's API on the subject's behalf.
+                tier: ProvenanceTier::ApiSourced,
+                content_hash: None,
+                authorization_basis: None,
             },
             external_refs,
         }

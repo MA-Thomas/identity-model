@@ -29,7 +29,7 @@ jobs:
       - run: cargo test --workspace
 
   # The eight feature combinations from FEATURE_MATRIX.md, plus the
-  # fen-clinical feature gates. Features are additive and unify across the
+  # fen-health-econ feature gates. Features are additive and unify across the
   # graph, so passing with `runtime-server` proves nothing about a build of
   # a single feature; each combination is exercised on its own.
   matrix:
@@ -52,9 +52,9 @@ jobs:
             features: "mobile-http postgres-adapter"
           - crate: identity-model
             features: "runtime-server"
-          - crate: fen-clinical
+          - crate: fen-health-econ
             features: "fhir-ingest"
-          - crate: fen-clinical
+          - crate: fen-health-econ
             features: "claims-ingest"
     steps:
       - uses: actions/checkout@v4

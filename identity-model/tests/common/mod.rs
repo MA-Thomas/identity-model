@@ -24,6 +24,9 @@ pub fn provenance() -> Provenance {
         source_document: None,
         imported_at: ts("2026-05-29T00:00:00Z"),
         author: system_author(),
+        tier: ProvenanceTier::ApiSourced,
+        content_hash: None,
+        authorization_basis: None,
     }
 }
 

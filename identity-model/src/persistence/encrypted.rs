@@ -19,20 +19,110 @@ pub const ENCRYPTED_FACT_AAD_PROFILE_NAME: &str = "fen-encrypted-fact";
 pub const ENCRYPTED_FACT_AAD_PROFILE_VERSION_V1: &str = "v1";
 const ENCRYPTED_FACT_SCHEMA_VERSION_V1: &str = "fact-v1";
 
+/// A payload family that can live in the encrypted envelope store.
+///
+/// The envelope tables are payload-agnostic (`payload_type` label, policy
+/// refs, append sequence, ciphertext). What is family-specific is the label
+/// namespace and the codec-facing fact/payload types. The identity crate
+/// implements this with its existing `Fact`/`FactPayload`/`FactPayloadType`;
+/// sibling families (e.g. `fen-health-econ` with `health_econ.*` labels)
+/// implement it with their own fact shape, reusing the same envelope
+/// machinery, episodes, memberships, and policy-gated materialization
+/// (FEN_HEALTH_ECON_EXTENSIONS.md).
+pub trait PayloadFamily {
+    /// Semantic fact type of this family.
+    type Fact: Clone;
+    /// Payload carried inside the ciphertext.
+    type Payload: Clone + PartialEq + std::fmt::Debug;
+    /// Closed payload-type label enum with stable string labels.
+    type PayloadType: Copy + Eq + std::fmt::Debug;
+
+    fn payload_type_label(payload_type: Self::PayloadType) -> &'static str;
+    fn payload_type_from_label(label: &str) -> Option<Self::PayloadType>;
+    fn payload_type_of_payload(payload: &Self::Payload) -> Self::PayloadType;
+
+    fn fact_id(fact: &Self::Fact) -> &FactId;
+    fn subject_id(fact: &Self::Fact) -> &SubjectId;
+    fn occurred_at(fact: &Self::Fact) -> &TemporalAnchor;
+    fn status(fact: &Self::Fact) -> &FactStatus;
+
+    fn plaintext_from_fact(fact: &Self::Fact) -> EncryptedFactPlaintextOf<Self::Payload>;
+    fn fact_from_plaintext(
+        plaintext: EncryptedFactPlaintextOf<Self::Payload>,
+        envelope: &StoredEncryptedFactEnvelope<Self::PayloadType>,
+    ) -> Self::Fact;
+}
+
+/// The identity crate's own payload family: the existing `Fact`,
+/// `FactPayload`, and `FactPayloadType` label enum, with labels unchanged so
+/// stored rows, associated-data bytes, and golden fixtures stay identical.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IdentityPayloadFamily;
+
+impl PayloadFamily for IdentityPayloadFamily {
+    type Fact = Fact;
+    type Payload = FactPayload;
+    type PayloadType = FactPayloadType;
+
+    fn payload_type_label(payload_type: Self::PayloadType) -> &'static str {
+        payload_type.as_str()
+    }
+
+    fn payload_type_from_label(label: &str) -> Option<Self::PayloadType> {
+        FactPayloadType::from_str_label(label)
+    }
+
+    fn payload_type_of_payload(payload: &Self::Payload) -> Self::PayloadType {
+        FactPayloadType::from_payload(payload)
+    }
+
+    fn fact_id(fact: &Self::Fact) -> &FactId {
+        &fact.id
+    }
+
+    fn subject_id(fact: &Self::Fact) -> &SubjectId {
+        &fact.subject_id
+    }
+
+    fn occurred_at(fact: &Self::Fact) -> &TemporalAnchor {
+        &fact.occurred_at
+    }
+
+    fn status(fact: &Self::Fact) -> &FactStatus {
+        &fact.status
+    }
+
+    fn plaintext_from_fact(fact: &Self::Fact) -> EncryptedFactPlaintextOf<Self::Payload> {
+        EncryptedFactPlaintext::from_fact(fact)
+    }
+
+    fn fact_from_plaintext(
+        plaintext: EncryptedFactPlaintextOf<Self::Payload>,
+        envelope: &StoredEncryptedFactEnvelope<Self::PayloadType>,
+    ) -> Self::Fact {
+        plaintext.into_fact(envelope)
+    }
+}
+
+/// Stored encrypted fact envelope, generic over the payload-type label enum
+/// of a [`PayloadFamily`]. The identity-specialized alias keeps the crate's
+/// existing public API (`StoredEncryptedFact`) unchanged.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StoredEncryptedFact {
+pub struct StoredEncryptedFactEnvelope<T> {
     pub append_sequence: AppendSequence,
     pub transaction_id: PersistenceTransactionId,
     pub committed_at: Timestamp,
     pub fact_id: FactId,
     pub subject_id: SubjectId,
     pub occurred_at: TemporalAnchor,
-    pub payload_type: FactPayloadType,
+    pub payload_type: T,
     pub status: FactStatus,
     pub materialization_policy_refs: Vec<PolicyRef>,
     pub encryption: FactEncryptionMetadata,
     pub ciphertext: Vec<u8>,
 }
+
+pub type StoredEncryptedFact = StoredEncryptedFactEnvelope<FactPayloadType>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FactEncryptionMetadata {
@@ -274,15 +364,20 @@ impl EncryptedFactAssociatedDataVersion {
     }
 }
 
+/// Fact plaintext carried inside the ciphertext, generic over the payload
+/// type of a [`PayloadFamily`]. The identity-specialized alias keeps the
+/// existing public API (`EncryptedFactPlaintext`) unchanged.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EncryptedFactPlaintext {
+pub struct EncryptedFactPlaintextOf<P> {
     pub code: Option<CodedValue>,
-    pub payload: FactPayload,
+    pub payload: P,
     pub provenance: Provenance,
     pub external_refs: Vec<ExternalRef>,
 }
 
-impl EncryptedFactPlaintext {
+pub type EncryptedFactPlaintext = EncryptedFactPlaintextOf<FactPayload>;
+
+impl EncryptedFactPlaintextOf<FactPayload> {
     pub fn from_fact(fact: &Fact) -> Self {
         Self {
             code: fact.code.clone(),
@@ -306,28 +401,38 @@ impl EncryptedFactPlaintext {
     }
 }
 
-pub trait EncryptedFactPlaintextCodec {
-    fn encode_fact_plaintext(&self, plaintext: &EncryptedFactPlaintext) -> Vec<u8>;
+pub trait EncryptedFactPlaintextCodec<P = FactPayload> {
+    fn encode_fact_plaintext(&self, plaintext: &EncryptedFactPlaintextOf<P>) -> Vec<u8>;
 
     fn decode_fact_plaintext(
         &self,
         encoded: &[u8],
-    ) -> Result<EncryptedFactPlaintext, FactMaterializationError>;
+    ) -> Result<EncryptedFactPlaintextOf<P>, FactMaterializationError>;
 }
 
-#[derive(Debug, Default)]
-pub struct InMemoryEncryptedFactPlaintextCodec {
-    plaintexts_by_encoded_bytes: RefCell<BTreeMap<Vec<u8>, EncryptedFactPlaintext>>,
+#[derive(Debug)]
+pub struct InMemoryEncryptedFactPlaintextCodec<P = FactPayload> {
+    plaintexts_by_encoded_bytes: RefCell<BTreeMap<Vec<u8>, EncryptedFactPlaintextOf<P>>>,
 }
 
-impl InMemoryEncryptedFactPlaintextCodec {
+impl<P> Default for InMemoryEncryptedFactPlaintextCodec<P> {
+    fn default() -> Self {
+        Self {
+            plaintexts_by_encoded_bytes: RefCell::new(BTreeMap::new()),
+        }
+    }
+}
+
+impl<P> InMemoryEncryptedFactPlaintextCodec<P> {
     pub fn new() -> Self {
         Self::default()
     }
 }
 
-impl EncryptedFactPlaintextCodec for InMemoryEncryptedFactPlaintextCodec {
-    fn encode_fact_plaintext(&self, plaintext: &EncryptedFactPlaintext) -> Vec<u8> {
+impl<P: Clone + std::fmt::Debug> EncryptedFactPlaintextCodec<P>
+    for InMemoryEncryptedFactPlaintextCodec<P>
+{
+    fn encode_fact_plaintext(&self, plaintext: &EncryptedFactPlaintextOf<P>) -> Vec<u8> {
         let encoded = format!("{plaintext:?}").into_bytes();
         self.plaintexts_by_encoded_bytes
             .borrow_mut()
@@ -338,7 +443,7 @@ impl EncryptedFactPlaintextCodec for InMemoryEncryptedFactPlaintextCodec {
     fn decode_fact_plaintext(
         &self,
         encoded: &[u8],
-    ) -> Result<EncryptedFactPlaintext, FactMaterializationError> {
+    ) -> Result<EncryptedFactPlaintextOf<P>, FactMaterializationError> {
         self.plaintexts_by_encoded_bytes
             .borrow()
             .get(encoded)
@@ -431,13 +536,13 @@ impl FactKeyResolver for StaticFactKeyResolver {
     }
 }
 
-pub trait FactPayloadEncryptor {
+pub trait FactPayloadEncryptor<P = FactPayload> {
     fn encrypt_fact_plaintext(
         &self,
         key: &FactDataEncryptionKey,
         encryption: &FactEncryptionMetadata,
         associated_data: &[u8],
-        plaintext: &EncryptedFactPlaintext,
+        plaintext: &EncryptedFactPlaintextOf<P>,
     ) -> Result<Vec<u8>, FactEncryptionError>;
 
     fn decrypt_fact_plaintext(
@@ -446,7 +551,7 @@ pub trait FactPayloadEncryptor {
         encryption: &FactEncryptionMetadata,
         associated_data: &[u8],
         ciphertext: &[u8],
-    ) -> Result<EncryptedFactPlaintext, FactMaterializationError>;
+    ) -> Result<EncryptedFactPlaintextOf<P>, FactMaterializationError>;
 }
 
 #[derive(Debug)]
@@ -487,13 +592,15 @@ impl<C> DeterministicTestFactEncryptor<C> {
     }
 }
 
-impl<C: EncryptedFactPlaintextCodec> FactPayloadEncryptor for DeterministicTestFactEncryptor<C> {
+impl<P, C: EncryptedFactPlaintextCodec<P>> FactPayloadEncryptor<P>
+    for DeterministicTestFactEncryptor<C>
+{
     fn encrypt_fact_plaintext(
         &self,
         key: &FactDataEncryptionKey,
         encryption: &FactEncryptionMetadata,
         associated_data: &[u8],
-        plaintext: &EncryptedFactPlaintext,
+        plaintext: &EncryptedFactPlaintextOf<P>,
     ) -> Result<Vec<u8>, FactEncryptionError> {
         if encryption.algorithm != FactEncryptionAlgorithm::DeterministicTest {
             return Err(FactEncryptionError::UnsupportedAlgorithm);
@@ -515,7 +622,7 @@ impl<C: EncryptedFactPlaintextCodec> FactPayloadEncryptor for DeterministicTestF
         encryption: &FactEncryptionMetadata,
         associated_data: &[u8],
         ciphertext: &[u8],
-    ) -> Result<EncryptedFactPlaintext, FactMaterializationError> {
+    ) -> Result<EncryptedFactPlaintextOf<P>, FactMaterializationError> {
         if encryption.algorithm != FactEncryptionAlgorithm::DeterministicTest {
             return Err(FactMaterializationError::UnsupportedAlgorithm);
         }
@@ -573,13 +680,15 @@ impl<C> RingAes256GcmFactEncryptor<C> {
 }
 
 #[cfg(feature = "production-crypto")]
-impl<C: EncryptedFactPlaintextCodec> FactPayloadEncryptor for RingAes256GcmFactEncryptor<C> {
+impl<P, C: EncryptedFactPlaintextCodec<P>> FactPayloadEncryptor<P>
+    for RingAes256GcmFactEncryptor<C>
+{
     fn encrypt_fact_plaintext(
         &self,
         key: &FactDataEncryptionKey,
         encryption: &FactEncryptionMetadata,
         associated_data: &[u8],
-        plaintext: &EncryptedFactPlaintext,
+        plaintext: &EncryptedFactPlaintextOf<P>,
     ) -> Result<Vec<u8>, FactEncryptionError> {
         if encryption.algorithm != FactEncryptionAlgorithm::Aes256Gcm {
             return Err(FactEncryptionError::UnsupportedAlgorithm);
@@ -610,7 +719,7 @@ impl<C: EncryptedFactPlaintextCodec> FactPayloadEncryptor for RingAes256GcmFactE
         encryption: &FactEncryptionMetadata,
         associated_data: &[u8],
         ciphertext: &[u8],
-    ) -> Result<EncryptedFactPlaintext, FactMaterializationError> {
+    ) -> Result<EncryptedFactPlaintextOf<P>, FactMaterializationError> {
         if encryption.algorithm != FactEncryptionAlgorithm::Aes256Gcm {
             return Err(FactMaterializationError::UnsupportedAlgorithm);
         }
@@ -1071,10 +1180,10 @@ impl From<FactEncryptionError> for EncryptionAwareWorkflowRepositoryError {
     }
 }
 
-pub trait FactEncryptionMetadataPlanner {
+pub trait FactEncryptionMetadataPlanner<F: PayloadFamily = IdentityPayloadFamily> {
     fn metadata_for_fact(
         &mut self,
-        fact: &Fact,
+        fact: &F::Fact,
         append_sequence: AppendSequence,
     ) -> FactEncryptionMetadata;
 }
@@ -1094,15 +1203,23 @@ impl DeterministicTestFactEncryptionMetadataPlanner {
     }
 }
 
-impl FactEncryptionMetadataPlanner for DeterministicTestFactEncryptionMetadataPlanner {
+impl<F: PayloadFamily> FactEncryptionMetadataPlanner<F>
+    for DeterministicTestFactEncryptionMetadataPlanner
+{
     fn metadata_for_fact(
         &mut self,
-        fact: &Fact,
+        fact: &F::Fact,
         append_sequence: AppendSequence,
     ) -> FactEncryptionMetadata {
         FactEncryptionMetadata::deterministic_test(
             self.key_id.clone(),
-            format!("{}:{}:{}", self.nonce_prefix, append_sequence, fact.id.0).into_bytes(),
+            format!(
+                "{}:{}:{}",
+                self.nonce_prefix,
+                append_sequence,
+                F::fact_id(fact).0
+            )
+            .into_bytes(),
         )
     }
 }
@@ -1128,10 +1245,10 @@ impl Aes256GcmFactEncryptionMetadataPlanner {
     }
 }
 
-impl FactEncryptionMetadataPlanner for Aes256GcmFactEncryptionMetadataPlanner {
+impl<F: PayloadFamily> FactEncryptionMetadataPlanner<F> for Aes256GcmFactEncryptionMetadataPlanner {
     fn metadata_for_fact(
         &mut self,
-        _fact: &Fact,
+        _fact: &F::Fact,
         append_sequence: AppendSequence,
     ) -> FactEncryptionMetadata {
         let mut nonce = Vec::with_capacity(12);
@@ -1428,6 +1545,28 @@ pub fn encrypt_fact_envelope(
     key: &FactDataEncryptionKey,
     encryptor: &impl FactPayloadEncryptor,
 ) -> Result<StoredEncryptedFact, FactEncryptionError> {
+    encrypt_fact_envelope_in_family::<IdentityPayloadFamily>(
+        fact,
+        append_sequence,
+        transaction_id,
+        committed_at,
+        materialization_policy_refs,
+        encryption,
+        key,
+        encryptor,
+    )
+}
+
+pub fn encrypt_fact_envelope_in_family<F: PayloadFamily>(
+    fact: &F::Fact,
+    append_sequence: AppendSequence,
+    transaction_id: PersistenceTransactionId,
+    committed_at: Timestamp,
+    materialization_policy_refs: Vec<PolicyRef>,
+    encryption: FactEncryptionMetadata,
+    key: &FactDataEncryptionKey,
+    encryptor: &impl FactPayloadEncryptor<F::Payload>,
+) -> Result<StoredEncryptedFactEnvelope<F::PayloadType>, FactEncryptionError> {
     if encryption.key_id != key.key_id {
         return Err(FactEncryptionError::KeyIdMismatch);
     }
@@ -1435,21 +1574,21 @@ pub fn encrypt_fact_envelope(
         return Err(FactEncryptionError::KeyNotActive);
     }
 
-    let mut envelope = StoredEncryptedFact {
+    let plaintext = F::plaintext_from_fact(fact);
+    let mut envelope = StoredEncryptedFactEnvelope {
         append_sequence,
         transaction_id,
         committed_at,
-        fact_id: fact.id.clone(),
-        subject_id: fact.subject_id.clone(),
-        occurred_at: fact.occurred_at.clone(),
-        payload_type: FactPayloadType::from_payload(&fact.payload),
-        status: fact.status.clone(),
+        fact_id: F::fact_id(fact).clone(),
+        subject_id: F::subject_id(fact).clone(),
+        occurred_at: F::occurred_at(fact).clone(),
+        payload_type: F::payload_type_of_payload(&plaintext.payload),
+        status: F::status(fact).clone(),
         materialization_policy_refs,
         encryption,
         ciphertext: Vec::new(),
     };
-    let associated_data = canonical_encrypted_fact_associated_data(&envelope);
-    let plaintext = EncryptedFactPlaintext::from_fact(fact);
+    let associated_data = canonical_encrypted_fact_associated_data_in_family::<F>(&envelope);
     envelope.ciphertext = encryptor.encrypt_fact_plaintext(
         key,
         &envelope.encryption,
@@ -1576,8 +1715,28 @@ pub fn materialize_encrypted_fact(
     key_resolver: &impl FactKeyResolver,
     encryptor: &impl FactPayloadEncryptor,
 ) -> Result<Fact, FactMaterializationError> {
+    materialize_encrypted_fact_in_family::<IdentityPayloadFamily>(
+        envelope,
+        policy_evaluation,
+        key_resolver,
+        encryptor,
+    )
+}
+
+/// Policy-gated, audited decryption of an encrypted fact envelope of an
+/// arbitrary [`PayloadFamily`]. Mirrors [`encrypt_fact_envelope_in_family`]:
+/// the policy, key-access, and audit machinery is family-agnostic, while the
+/// AAD, the payload-type cross-check, and the fact reconstruction go through
+/// `F`. The identity-specialized [`materialize_encrypted_fact`] delegates
+/// here with [`IdentityPayloadFamily`].
+pub fn materialize_encrypted_fact_in_family<F: PayloadFamily>(
+    envelope: &StoredEncryptedFactEnvelope<F::PayloadType>,
+    policy_evaluation: &PolicyEvaluation,
+    key_resolver: &impl FactKeyResolver,
+    encryptor: &impl FactPayloadEncryptor<F::Payload>,
+) -> Result<F::Fact, FactMaterializationError> {
     let mut audit_sink = NoopFactMaterializationAuditSink;
-    materialize_encrypted_fact_with_audit(
+    materialize_encrypted_fact_with_audit_in_family::<F>(
         envelope,
         policy_evaluation,
         key_resolver,
@@ -1595,6 +1754,24 @@ pub fn materialize_encrypted_fact_with_audit(
     audit_context: &FactMaterializationAuditContext,
     audit_sink: &mut impl FactMaterializationAuditSink,
 ) -> Result<Fact, FactMaterializationError> {
+    materialize_encrypted_fact_with_audit_in_family::<IdentityPayloadFamily>(
+        envelope,
+        policy_evaluation,
+        key_resolver,
+        encryptor,
+        audit_context,
+        audit_sink,
+    )
+}
+
+pub fn materialize_encrypted_fact_with_audit_in_family<F: PayloadFamily>(
+    envelope: &StoredEncryptedFactEnvelope<F::PayloadType>,
+    policy_evaluation: &PolicyEvaluation,
+    key_resolver: &impl FactKeyResolver,
+    encryptor: &impl FactPayloadEncryptor<F::Payload>,
+    audit_context: &FactMaterializationAuditContext,
+    audit_sink: &mut impl FactMaterializationAuditSink,
+) -> Result<F::Fact, FactMaterializationError> {
     record_audit_event(
         envelope,
         policy_evaluation,
@@ -1677,7 +1854,7 @@ pub fn materialize_encrypted_fact_with_audit(
         FactMaterializationAuditOutcome::DecryptionAttempted,
         None,
     );
-    let associated_data = canonical_encrypted_fact_associated_data(envelope);
+    let associated_data = canonical_encrypted_fact_associated_data_in_family::<F>(envelope);
     let plaintext = match encryptor.decrypt_fact_plaintext(
         &key,
         &envelope.encryption,
@@ -1696,7 +1873,7 @@ pub fn materialize_encrypted_fact_with_audit(
             );
         }
     };
-    if FactPayloadType::from_payload(&plaintext.payload) != envelope.payload_type {
+    if F::payload_type_of_payload(&plaintext.payload) != envelope.payload_type {
         return fail_materialization(
             envelope,
             policy_evaluation,
@@ -1715,7 +1892,7 @@ pub fn materialize_encrypted_fact_with_audit(
         FactMaterializationAuditOutcome::Succeeded,
         None,
     );
-    Ok(plaintext.into_fact(envelope))
+    Ok(F::fact_from_plaintext(plaintext, envelope))
 }
 
 pub fn materialize_encrypted_facts(
@@ -1724,15 +1901,46 @@ pub fn materialize_encrypted_facts(
     key_resolver: &impl FactKeyResolver,
     encryptor: &impl FactPayloadEncryptor,
 ) -> Result<Vec<Fact>, FactMaterializationError> {
+    materialize_encrypted_facts_in_family::<IdentityPayloadFamily>(
+        envelopes,
+        policy_evaluation,
+        key_resolver,
+        encryptor,
+    )
+}
+
+pub fn materialize_encrypted_facts_in_family<F: PayloadFamily>(
+    envelopes: &[StoredEncryptedFactEnvelope<F::PayloadType>],
+    policy_evaluation: &PolicyEvaluation,
+    key_resolver: &impl FactKeyResolver,
+    encryptor: &impl FactPayloadEncryptor<F::Payload>,
+) -> Result<Vec<F::Fact>, FactMaterializationError> {
     envelopes
         .iter()
         .map(|envelope| {
-            materialize_encrypted_fact(envelope, policy_evaluation, key_resolver, encryptor)
+            materialize_encrypted_fact_in_family::<F>(
+                envelope,
+                policy_evaluation,
+                key_resolver,
+                encryptor,
+            )
         })
         .collect()
 }
 
 pub fn canonical_encrypted_fact_associated_data(envelope: &StoredEncryptedFact) -> Vec<u8> {
+    canonical_encrypted_fact_associated_data_in_family::<IdentityPayloadFamily>(envelope)
+}
+
+/// Canonical associated-data bytes for an encrypted fact envelope of an
+/// arbitrary [`PayloadFamily`]. The only family-specific field is the payload
+/// type label, resolved through `F::payload_type_label`. For
+/// [`IdentityPayloadFamily`] that label is exactly `FactPayloadType::as_str`,
+/// so identity AAD bytes — and every stored row, tag, and golden fixture that
+/// depends on them — stay byte-for-byte identical.
+pub fn canonical_encrypted_fact_associated_data_in_family<F: PayloadFamily>(
+    envelope: &StoredEncryptedFactEnvelope<F::PayloadType>,
+) -> Vec<u8> {
     let mut canonical = String::new();
     push_field(&mut canonical, "profile", ENCRYPTED_FACT_AAD_PROFILE_NAME);
     push_field(
@@ -1767,7 +1975,7 @@ pub fn canonical_encrypted_fact_associated_data(envelope: &StoredEncryptedFact) 
     push_field(
         &mut canonical,
         "payload_type",
-        envelope.payload_type.as_str(),
+        F::payload_type_label(envelope.payload_type),
     );
     push_field(
         &mut canonical,
@@ -1799,8 +2007,8 @@ pub fn canonical_encrypted_fact_associated_data(envelope: &StoredEncryptedFact) 
     canonical.into_bytes()
 }
 
-fn record_audit_event(
-    envelope: &StoredEncryptedFact,
+fn record_audit_event<PT>(
+    envelope: &StoredEncryptedFactEnvelope<PT>,
     policy_evaluation: &PolicyEvaluation,
     audit_context: &FactMaterializationAuditContext,
     audit_sink: &mut impl FactMaterializationAuditSink,
@@ -1820,8 +2028,8 @@ fn record_audit_event(
     });
 }
 
-fn fail_materialization<T>(
-    envelope: &StoredEncryptedFact,
+fn fail_materialization<PT, T>(
+    envelope: &StoredEncryptedFactEnvelope<PT>,
     policy_evaluation: &PolicyEvaluation,
     audit_context: &FactMaterializationAuditContext,
     audit_sink: &mut impl FactMaterializationAuditSink,

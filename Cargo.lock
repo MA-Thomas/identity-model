@@ -361,6 +361,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fen-health-econ"
+version = "0.1.0"
+dependencies = [
+ "identity-model",
+ "reqwest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ff"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -534,6 +534,9 @@ pub(super) fn postgres_coding_system(system: &CodingSystem) -> &'static str {
         CodingSystem::Loinc => "loinc",
         CodingSystem::RxNorm => "rxnorm",
         CodingSystem::Cpt => "cpt",
+        CodingSystem::Hcpcs => "hcpcs",
+        CodingSystem::Ndc => "ndc",
+        CodingSystem::Carc => "carc",
         CodingSystem::Local => "local",
     }
 }
@@ -547,6 +550,9 @@ pub(super) fn coding_system_from_postgres(
         "loinc" => Ok(CodingSystem::Loinc),
         "rxnorm" => Ok(CodingSystem::RxNorm),
         "cpt" => Ok(CodingSystem::Cpt),
+        "hcpcs" => Ok(CodingSystem::Hcpcs),
+        "ndc" => Ok(CodingSystem::Ndc),
+        "carc" => Ok(CodingSystem::Carc),
         "local" => Ok(CodingSystem::Local),
         _ => Err(PostgresAdapterError::UnknownCodingSystem(value.to_string())),
     }
