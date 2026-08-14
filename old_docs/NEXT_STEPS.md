@@ -2,7 +2,7 @@
 
 ## Handoff Snapshot
 
-Start here. The repo now has twenty relevant implementation slices:
+Start here. The repo now has twenty-one relevant implementation slices:
 
 - encrypted Fact persistence and policy-gated materialization are implemented and tested in memory
 - PostgreSQL migrations, row mapping, SQLx repository methods, env-gated live adapter harnesses, rollback coverage, and replay-equivalence coverage are implemented
@@ -24,6 +24,7 @@ Start here. The repo now has twenty relevant implementation slices:
 - a minimal signed-iPhone/Xcode proof target now lives at `ios/FenAppAttestProof`; it builds for a generic iOS device, stores `device_ref` and `keyId` in Keychain, calls the App Attest key-registration routes, issues a live-presence challenge, generates a registered-key App Attest assertion, wraps it in the `apple-app-attest-assertion-object-v1` envelope, and exposes the envelope for the composed onboarding request
 - a provider-neutral identity-proofing boundary now exists with Persona as the default Phase 1 adapter shape; composed mobile identity onboarding verifies Persona-normalized proofing evidence, records the legal identity witness, asserted attributes, provider refs, retention refs, and optional policy-affecting risk signals, and routes failed/inconclusive/expired proofing into manual review without treating Persona as identity truth
 - an env-gated backend E2E harness now starts the mounted runtime server on a temporary local port, issues a durable live-presence challenge through the HTTP route, submits `POST /mobile/identity-onboarding` with live Keycloak/JWKS token evidence plus static App Attest, Persona, and liveness evidence, and verifies the safe summary, encrypted fact rows, audit rows, App Attest key state, and used challenge state
+- the FEN reconciliation rule engine (`FEN_RECONCILIATION_RULE_ENGINE.md`, sequencing steps 1–5) now lives in `fen-health-econ`: reviewed/versioned `ReconciliationRuleArtifact`s with an in-memory store and a PostgreSQL store (migration `0006_health_econ_reconciliation_rule_artifacts`, env-gated live harness); a pure, deterministic rule engine over materialized facts with `SharedClaimRef`-only matching and four typed rule variants pinned by golden fixtures; deterministic SHA-256 finding identity (`finding-<hex>` over a domain-tagged, length-prefixed preimage, golden-pinned) so re-evaluation dedupes through the envelope store's existing duplicate-fact-id rejection; the shared `SupersessionReason::RuleReEvaluation` variant with its frozen `rule_re_evaluation` label in both the AAD canonicalization and the PostgreSQL mapping; and findings appended as `Inference`-tier encrypted `BillingDiscrepancy` facts through the now family-generic in-memory envelope repository — post-ingest subject-scoped triggering stays deferred with the ingestion work
 
 The latest hardening pass also moved security-sensitive timestamp comparisons onto parsed UTC helpers, centralized encrypted persistence labels on typed enums, indexed materialized projection checks to avoid repeated scans, deduped replayed view rows, and split workflow outcome helpers out of the service facade.
 

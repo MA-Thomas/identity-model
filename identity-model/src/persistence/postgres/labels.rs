@@ -651,6 +651,7 @@ pub(super) fn postgres_supersession_reason(reason: &SupersessionReason) -> &'sta
         SupersessionReason::ClinicalRefinement => "clinical_refinement",
         SupersessionReason::StrongerIdentityEvidence => "stronger_identity_evidence",
         SupersessionReason::AdministrativeCorrection => "administrative_correction",
+        SupersessionReason::RuleReEvaluation => "rule_re_evaluation",
     }
 }
 
@@ -662,6 +663,7 @@ pub(super) fn supersession_reason_from_postgres(
         "clinical_refinement" => Ok(SupersessionReason::ClinicalRefinement),
         "stronger_identity_evidence" => Ok(SupersessionReason::StrongerIdentityEvidence),
         "administrative_correction" => Ok(SupersessionReason::AdministrativeCorrection),
+        "rule_re_evaluation" => Ok(SupersessionReason::RuleReEvaluation),
         _ => Err(PostgresAdapterError::UnknownSupersessionReason(
             value.to_string(),
         )),

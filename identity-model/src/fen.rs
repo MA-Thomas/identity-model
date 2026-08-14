@@ -240,6 +240,11 @@ pub enum SupersessionReason {
     ClinicalRefinement,
     StrongerIdentityEvidence,
     AdministrativeCorrection,
+    /// A newer evaluation of the same versioned rule over changed inputs
+    /// replaced this conclusion (FEN_RECONCILIATION_RULE_ENGINE.md §D).
+    /// Persisted label: `rule_re_evaluation` (frozen once a production
+    /// fact carries it).
+    RuleReEvaluation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -191,7 +191,8 @@ fn postgres_migration_registry_pins_ordered_versions() {
             "0002_identity_workflow_transactions",
             "0003_identity_app_attest_key_state",
             "0004_identity_live_presence_challenges",
-            "0005_identity_app_attest_key_registration"
+            "0005_identity_app_attest_key_registration",
+            "0006_health_econ_reconciliation_rule_artifacts"
         ]
     );
     assert_eq!(
@@ -202,6 +203,7 @@ fn postgres_migration_registry_pins_ordered_versions() {
             IDENTITY_APP_ATTEST_KEY_STATE_MIGRATION_SQL,
             IDENTITY_LIVE_PRESENCE_CHALLENGES_MIGRATION_SQL,
             IDENTITY_APP_ATTEST_KEY_REGISTRATION_MIGRATION_SQL,
+            HEALTH_ECON_RECONCILIATION_RULE_ARTIFACTS_MIGRATION_SQL,
         ]
     );
 }

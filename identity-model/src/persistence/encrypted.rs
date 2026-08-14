@@ -905,21 +905,36 @@ pub trait EncryptedFactRepository {
     fn encrypted_facts_for_subject(&self, subject_id: &SubjectId) -> Vec<StoredEncryptedFact>;
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct InMemoryEncryptedFactRepository {
-    encrypted_facts: Vec<StoredEncryptedFact>,
+/// In-memory envelope store, generalized over payload families exactly like
+/// the envelope itself ([`StoredEncryptedFactEnvelope`]): sibling families
+/// share the duplicate-fact-id and duplicate-append-sequence discipline
+/// instead of reimplementing it. The identity-family alias
+/// ([`InMemoryEncryptedFactRepository`]) keeps the existing public API
+/// unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InMemoryEncryptedFactEnvelopeRepository<T> {
+    encrypted_facts: Vec<StoredEncryptedFactEnvelope<T>>,
 }
 
-impl InMemoryEncryptedFactRepository {
-    pub fn new() -> Self {
-        Self::default()
+pub type InMemoryEncryptedFactRepository =
+    InMemoryEncryptedFactEnvelopeRepository<FactPayloadType>;
+
+impl<T> Default for InMemoryEncryptedFactEnvelopeRepository<T> {
+    fn default() -> Self {
+        Self {
+            encrypted_facts: Vec::new(),
+        }
     }
 }
 
-impl EncryptedFactRepository for InMemoryEncryptedFactRepository {
-    fn append_encrypted_fact(
+impl<T> InMemoryEncryptedFactEnvelopeRepository<T> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn append_encrypted_fact_envelope(
         &mut self,
-        envelope: StoredEncryptedFact,
+        envelope: StoredEncryptedFactEnvelope<T>,
     ) -> Result<(), RepositoryError> {
         if self
             .encrypted_facts
@@ -941,17 +956,39 @@ impl EncryptedFactRepository for InMemoryEncryptedFactRepository {
             .sort_by_key(|envelope| envelope.append_sequence);
         Ok(())
     }
+}
 
-    fn all_encrypted_facts(&self) -> Vec<StoredEncryptedFact> {
+impl<T: Clone> InMemoryEncryptedFactEnvelopeRepository<T> {
+    pub fn all_encrypted_fact_envelopes(&self) -> Vec<StoredEncryptedFactEnvelope<T>> {
         self.encrypted_facts.clone()
     }
 
-    fn encrypted_facts_for_subject(&self, subject_id: &SubjectId) -> Vec<StoredEncryptedFact> {
+    pub fn encrypted_fact_envelopes_for_subject(
+        &self,
+        subject_id: &SubjectId,
+    ) -> Vec<StoredEncryptedFactEnvelope<T>> {
         self.encrypted_facts
             .iter()
             .filter(|envelope| &envelope.subject_id == subject_id)
             .cloned()
             .collect()
+    }
+}
+
+impl EncryptedFactRepository for InMemoryEncryptedFactRepository {
+    fn append_encrypted_fact(
+        &mut self,
+        envelope: StoredEncryptedFact,
+    ) -> Result<(), RepositoryError> {
+        self.append_encrypted_fact_envelope(envelope)
+    }
+
+    fn all_encrypted_facts(&self) -> Vec<StoredEncryptedFact> {
+        self.all_encrypted_fact_envelopes()
+    }
+
+    fn encrypted_facts_for_subject(&self, subject_id: &SubjectId) -> Vec<StoredEncryptedFact> {
+        self.encrypted_fact_envelopes_for_subject(subject_id)
     }
 }
 
@@ -2241,6 +2278,7 @@ fn supersession_reason_label(reason: &SupersessionReason) -> &'static str {
         SupersessionReason::ClinicalRefinement => "clinical_refinement",
         SupersessionReason::StrongerIdentityEvidence => "stronger_identity_evidence",
         SupersessionReason::AdministrativeCorrection => "administrative_correction",
+        SupersessionReason::RuleReEvaluation => "rule_re_evaluation",
     }
 }
 

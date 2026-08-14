@@ -17,6 +17,10 @@ postgres-adapter = ["identity-model/postgres-adapter", "dep:sqlx"]
 
 [dependencies]
 identity-model = { path = "../identity-model" }
+# Deliberately non-optional: deterministic finding identity (`finding_identity`)
+# is a durable fact-id contract and must not vary by feature. Pure Rust, no
+# I/O, and already in the workspace tree as an identity-model dev-dependency.
+sha2 = "0.10"
 serde = { version = "1.0.228", features = ["derive"], optional = true }
 serde_json = { version = "1.0.149", optional = true }
 reqwest = { version = "0.12.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
