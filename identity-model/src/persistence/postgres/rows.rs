@@ -442,26 +442,6 @@ impl PostgresEncryptedFactRow {
 }
 
 #[cfg(feature = "postgres-adapter")]
-impl PostgresFactStatusPayload {
-    pub(super) fn status_payload_json(&self) -> Result<String, PostgresAdapterError> {
-        serde_json::to_string(self)
-            .map_err(|error| PostgresAdapterError::StatusPayloadJson(error.to_string()))
-    }
-
-    pub(super) fn from_json(json: &str) -> Result<Self, PostgresAdapterError> {
-        serde_json::from_str(json)
-            .map_err(|error| PostgresAdapterError::StatusPayloadJson(error.to_string()))
-    }
-}
-
-#[cfg(feature = "postgres-adapter")]
-impl PostgresEncryptedFactRow {
-    pub(super) fn status_payload_json(&self) -> Result<String, PostgresAdapterError> {
-        self.status_payload.status_payload_json()
-    }
-}
-
-#[cfg(feature = "postgres-adapter")]
 impl PostgresCodedValueRecord {
     pub(super) fn to_json(&self) -> Result<String, PostgresAdapterError> {
         serde_json::to_string(self)

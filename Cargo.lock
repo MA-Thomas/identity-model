@@ -361,14 +361,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "fen-core"
+version = "0.1.0"
+
+[[package]]
 name = "fen-health-econ"
 version = "0.1.0"
 dependencies = [
+ "fen-core",
+ "fen-store",
+ "fen-store-postgres",
  "identity-model",
  "reqwest",
  "serde",
  "serde_json",
  "sha2",
+ "sqlx",
+]
+
+[[package]]
+name = "fen-store"
+version = "0.1.0"
+dependencies = [
+ "fen-core",
+ "ring",
+]
+
+[[package]]
+name = "fen-store-postgres"
+version = "0.1.0"
+dependencies = [
+ "fen-core",
+ "fen-store",
+ "serde",
+ "serde_json",
  "sqlx",
 ]
 
@@ -768,6 +794,9 @@ name = "identity-model"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
+ "fen-core",
+ "fen-store",
+ "fen-store-postgres",
  "jsonwebtoken",
  "p384",
  "reqwest",

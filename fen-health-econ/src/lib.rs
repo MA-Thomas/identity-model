@@ -1,15 +1,15 @@
 //! Health-economic fact family for the FEN graph.
 //!
-//! The identity crate owns subjects, accounts, devices, and the encrypted
-//! envelope machinery. This crate owns the health-economic fact family — the
+//! `fen-core` owns shared subject and fact primitives, while `fen-store` owns
+//! the encrypted envelope contract. This crate owns the health-economic fact family — the
 //! durable record of care, cost, payment, denial, benefit use, and financial
 //! exposure that the Phoros MVP is built on: employee billing defense
 //! (reconciliation, error detection, denial triage, deductible tracking,
 //! benefit matching) with employer-sponsored benefits intelligence served
 //! only as governed aggregates (FEN_HEALTH_ECON_EXTENSIONS.md).
 //!
-//! Health-economic facts reference the same `SubjectId` the identity crate
-//! owns: the account layer and the state layer are one graph. The `clinical.*`
+//! Health-economic facts reference the same `SubjectId` used by identity: the
+//! account layer and the state layer are one graph. The `clinical.*`
 //! label namespace remains reserved for the future clinical family.
 
 pub mod append;
@@ -28,6 +28,7 @@ pub use finding_identity::{discrepancy_kind_identity_label, finding_fact_id};
 pub use postgres::{
     postgres_rule_definition_type_label, postgres_rule_status_label,
     PostgresReconciliationRuleStore, PostgresRuleStoreError,
+    HEALTH_ECON_RECONCILIATION_RULES_MIGRATION_SQL,
 };
 pub use reconcile::{evaluate_reconciliation_rules, FactMatchBasis, ReconciliationFinding};
 pub use rules::{

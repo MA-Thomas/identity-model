@@ -41,7 +41,7 @@
 //! versions and corrected inputs; it requires a new domain-tag version and
 //! the same review weight as a persisted-label change.
 
-use identity_model::{FactId, SubjectId};
+use fen_core::{FactId, SubjectId};
 use sha2::{Digest, Sha256};
 
 use crate::reconcile::ReconciliationFinding;

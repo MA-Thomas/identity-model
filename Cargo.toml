@@ -1,6 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
+  "fen-core",
+  "fen-store",
+  "fen-store-postgres",
   "identity-model",
   "fen-health-econ",
 ]

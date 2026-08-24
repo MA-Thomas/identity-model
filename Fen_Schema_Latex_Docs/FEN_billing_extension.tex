@@ -1,0 +1,1253 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage{array}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{black}\bfseries,
+  commentstyle=\color{gray},
+  breaklines=true,
+  frame=single,
+  framerule=0.4pt,
+  xleftmargin=1em,
+  framexleftmargin=0.5em,
+  columns=fullflexible,
+  keepspaces=true,
+  aboveskip=1em,
+  belowskip=1em,
+}
+
+\definecolor{accentblue}{RGB}{30, 64, 175}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    escapeinside={(*@}{@*)},
+    frame=single,
+    breaklines=true,
+}
+
+\newcommand{\added}[1]{\textcolor{accentblue}{#1}}
+
+\title{Billing and Insurance Extensions to the FEN Schema:\\
+Patient-Facing Improvements for Bills, Denials, and Coverage}
+\author{Phoros Engineering}
+\date{July 2026}
+
+\begin{document}
+\maketitle
+
+\section{Overview}
+
+This document specifies extensions to the billing and insurance facts of the
+FEN schema. The current schema captures a workable claims spine: coverage
+enrollment, claim submission, adjudication, payment, pre-authorization
+requests and decisions, and appeals. These extensions address gaps that
+prevent the schema from supporting patient-facing features such as bill
+reconciliation, denial triage, deductible tracking, and structured appeals.
+
+The changes are motivated by patient value rather than by any particular
+go-to-market strategy. A patient who wants to detect a duplicate charge on a
+provider bill, understand why a prior authorization was denied, see how
+close they are to their deductible, or track an appeal through its
+lifecycle cannot do so with the current schema. The extensions here close
+those gaps.
+
+Section~\ref{sec:institution} introduces an \texttt{Institution} entity
+to replace bare strings for payers, providers, pharmacies, and other
+organizations. Section~\ref{sec:provider-statement} introduces a
+\texttt{ProviderStatement} payload distinct from \texttt{Claim} and
+\texttt{Adjudication}. Section~\ref{sec:claim-lines} makes claim service
+lines first-class. Section~\ref{sec:accumulator} adds
+\texttt{PlanAccumulator} as an event-driven observation series.
+Section~\ref{sec:coverage-timeline} converts \texttt{Coverage} from a
+snapshot to a timeline and introduces a \texttt{PlanStructure} type
+distinct from \texttt{CoverageType}. Section~\ref{sec:denial-codes}
+replaces the free-text denial reason with structured CARC/RARC codes.
+Section~\ref{sec:appeal-lifecycle} adds an \texttt{AppealEvent} pattern
+and discusses the event-driven vs.\ state-machine design tradeoff.
+Section~\ref{sec:pharmacy} adds a \texttt{PharmacyClaim} payload and a
+structured \texttt{PharmacyCoverageResult}. It also represents a
+point-of-prescribing formulary check as its own Fact.
+Section~\ref{sec:payment-sources} expands \texttt{PayerType} and revises
+\texttt{PaymentPlan} to distinguish provider-managed plans from
+third-party medical financing, collections agencies, and charity
+programs. Section~\ref{sec:fact-relation} adds a \texttt{FactRelation}
+entity for typed connections between billing facts.
+
+All extensions preserve the graph-oriented representation of the FEN
+schema. Entities remain nodes, and cross-fact relations are represented
+through typed relations and \texttt{FactId} references. The extensions use
+the core \texttt{Fact} distinction between assertion provenance and evidence:
+\texttt{Fact.assertion} records who asserted a billing Fact, when, and how;
+\texttt{Fact.evidence} records the source citations and prior Facts that
+support it.
+
+\subsection{From a billing document to FEN Facts}
+
+Consider a payer Explanation of Benefits (EOB) received as a PDF. The PDF is
+not itself a Fact. It is preserved outside FEN as an immutable
+\texttt{SourceArtifact}, whose bytes are held by a \texttt{StoredObject}.
+A citation to the relevant page or region becomes a
+\texttt{SourceCitationRef}. Normalization may then produce Claim and
+Adjudication Facts that cite that location as evidence. The payer's claim
+number is an \texttt{ExternalRef}: it identifies the source record, but does
+not by itself support the normalized assertion. A typed \texttt{FactRelation}
+may connect the Claim to the Adjudication. Processing state and patient-facing
+reconciliation views remain \texttt{FactOperational} data or projections.
+
+The same boundary applies to provider statements, remittance files, payer API
+responses, pharmacy transactions, and Epic EHI table rows:
+
+\begin{center}
+\small
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{>{\raggedright\arraybackslash}p{5.4cm} >{\raggedright\arraybackslash}p{7.6cm}}
+\textbf{Concern} & \textbf{Representation} \\
+\hline
+Original bytes or archive & \texttt{SourceArtifact} $\rightarrow$ \texttt{StoredObject} \\
+Exact supporting passage or row & \texttt{SourceCitationRef} \\
+Who asserted the normalized claim & \texttt{AssertionProvenance} \\
+Supporting source material or prior Facts & \texttt{EvidenceRef} \\
+Source-system claim or statement identity & \texttt{ExternalRef} \\
+Relationship between billing Facts & typed \texttt{FactRelation} \\
+Transient processing or display state & \texttt{FactOperational} or projection \\
+\end{tabular}
+\end{center}
+
+\section{Institution as a first-class entity}
+\label{sec:institution}
+
+The current schema represents payers, providers, pharmacies, and other
+organizations as bare \texttt{String} fields:
+
+\begin{lstlisting}
+Coverage    { payer: String, plan: String, ... }
+Claim       { payer: String, ... }
+PreAuthRequest { payer: String, ... }
+Encounter   { facility: Option<String>, ... }
+\end{lstlisting}
+
+Bare strings have three problems. They admit no identity resolution:
+``AHN,'' ``Allegheny Health Network,'' and ``Allegheny Health Network,
+Inc.''\ are three distinct string values but one institution. They
+carry no canonical identifier such as an NPI (National Provider
+Identifier), a Payer ID, or an NCPDP (pharmacy) number, so external
+correlation is impossible. They prevent cross-fact reasoning: forty-seven
+claims from the same payer appear as forty-seven distinct string values
+rather than forty-seven references to one entity.
+
+An \texttt{Institution} entity resolves this:
+
+\begin{lstlisting}
+(*@\added{Institution \{}@*)
+    (*@\added{id:              InstitutionId,}@*)
+    (*@\added{display\_name:    String,}@*)
+    (*@\added{aliases:         Vec<String>,}@*)
+    (*@\added{canonical\_ids:   Vec<CanonicalId>,}@*)
+    (*@\added{institution\_type: InstitutionType,}@*)
+(*@\added{\}}@*)
+
+(*@\added{CanonicalId \{}@*)
+    (*@\added{Npi(String),                   // National Provider Identifier}@*)
+    (*@\added{PayerId(String),               // CMS payer identifier}@*)
+    (*@\added{Ncpdp(String),                 // pharmacy}@*)
+    (*@\added{TaxId(String),                 // EIN}@*)
+    (*@\added{ClearinghouseId \{ system: String, value: String \},}@*)
+    (*@\added{Other \{ system: String, value: String \},}@*)
+(*@\added{\}}@*)
+
+(*@\added{InstitutionType \{}@*)
+    (*@\added{Payer,}@*)
+    (*@\added{Provider,}@*)
+    (*@\added{Pharmacy,}@*)
+    (*@\added{Laboratory,}@*)
+    (*@\added{ImagingCenter,}@*)
+    (*@\added{Employer,}@*)
+    (*@\added{ThirdPartyAdministrator,}@*)
+    (*@\added{Other,}@*)
+(*@\added{\}}@*)
+\end{lstlisting}
+
+\texttt{Institution} is contextual identity data, not a fourth FEN
+epistemic layer. It is neither a Fact, a ProblemEpisode, nor a Narrative.
+Billing Facts refer to a stable \texttt{InstitutionId}; the registry provides
+canonical identity and display information. A registry merge or alias decision
+must be authored and auditable, but it must not rewrite the payer or provider
+name preserved in the original source artifact.
+
+Facts reference institutions by \texttt{InstitutionId}, and the
+institution registry holds display names, aliases, and canonical
+identifiers. This is analogous to \texttt{SubjectId}: a stable internal
+identifier that resolves to external identity systems.
+
+The identity resolution problem is real but bounded: identity
+resolution runs at ingestion, not at query time, and produces an
+authored decision. When two ingestion sources refer to the same
+institution differently, the resolver produces a mapping and records
+the decision as an \texttt{InstitutionAliasRelation}. Ambiguous cases
+surface for review rather than silently merging or duplicating.
+
+Fields that previously carried bare institution strings are migrated to
+\texttt{InstitutionId} references:
+
+\begin{lstlisting}
+Coverage {
+    (*@\added{payer:      InstitutionId,}@*)
+    plan:       String,
+    // ...
+}
+
+Claim {
+    (*@\added{payer:      InstitutionId,}@*)
+    // ...
+}
+
+PreAuthRequest {
+    (*@\added{payer:      InstitutionId,}@*)
+    // ...
+}
+\end{lstlisting}
+
+Clinical facts such as \texttt{Encounter.facility} may continue to use
+bare strings in the near term, since the reasoning value of institution
+identity is highest for insurance-related facts. Migration of clinical
+facts to \texttt{InstitutionId} is a follow-up, not a prerequisite.
+
+\section{ProviderStatement}
+\label{sec:provider-statement}
+
+A \texttt{ProviderStatement} represents the bill a provider sends to the
+patient. It is distinct from a \texttt{Claim} (what the provider billed the
+payer) and from an \texttt{Adjudication} (what the payer decided). The
+provider bill and the payer's Explanation of Benefits arrive on different
+timelines, use different formats, and routinely disagree. A patient
+detects billing errors by comparing the two. The schema must represent
+both.
+
+\begin{lstlisting}
+FactPayload {
+    // ... existing variants ...
+
+    (*@\added{ProviderStatement \{}@*)
+        (*@\added{statement\_id:      String,}@*)
+        (*@\added{provider:          InstitutionId,}@*)
+        (*@\added{statement\_date:    Date,}@*)
+        (*@\added{due\_date:          Option<Date>,}@*)
+        (*@\added{service\_period:    TemporalAnchor,}@*)
+        (*@\added{lines:             Vec<StatementLine>,}@*)
+        (*@\added{total\_charges:     Money,}@*)
+        (*@\added{insurance\_paid:    Money,}@*)
+        (*@\added{adjustments:       Money,}@*)
+        (*@\added{prior\_balance:     Money,}@*)
+        (*@\added{amount\_due:        Money,}@*)
+        (*@\added{related\_claim:     Option<FactId>,}@*)
+    (*@\added{\},}@*)
+}
+\end{lstlisting}
+
+The \texttt{related\_claim} field links to the \texttt{Claim} fact this
+statement corresponds to, when the correspondence can be established. A
+missing link is itself informative: it means the patient has received a
+bill for a service that has no matching claim in their record, which
+often indicates the provider has not yet billed insurance.
+
+\begin{lstlisting}
+(*@\added{StatementLine \{}@*)
+    (*@\added{service\_date:         Date,}@*)
+    (*@\added{description:          String,}@*)
+    (*@\added{procedure\_code:       Option<CodedValue>, // CPT or HCPCS}@*)
+    (*@\added{units:                u32,}@*)
+    (*@\added{charge:               Money,}@*)
+    (*@\added{insurance\_payment:    Money,}@*)
+    (*@\added{adjustment:           Money,}@*)
+    (*@\added{patient\_responsibility: Money,}@*)
+(*@\added{\}}@*)
+\end{lstlisting}
+
+An EOB received as a PDF or 835 transaction is preserved as a
+\texttt{SourceArtifact}; it is not recoverable merely by re-rendering the
+normalized Adjudication Facts. A later \texttt{ExplanationOfBenefits} Fact
+payload would be justified only if it captured an EOB-level domain assertion,
+not simply because the original file needs a container. Either way, the
+original artifact and the citations used during normalization remain intact.
+
+\section{Claim service lines as first-class structure}
+\label{sec:claim-lines}
+
+The current \texttt{Claim} payload treats billed codes and billed amounts
+as aggregate:
+
+\begin{lstlisting}
+Claim {
+    claim_id:       String,
+    billed_codes:   Vec<CodedValue>,
+    billed_amount:  Money,
+    payer:          String,
+}
+\end{lstlisting}
+
+Real claims have multiple service lines, each with its own procedure
+code, unit count, billed amount, and adjudication outcome. To detect
+duplicate charges (the same code billed twice), unbundling violations
+(services billed separately that should have been billed together), or
+upcoding (a higher-severity code than the encounter warranted), a claim
+must expose its lines. Similarly, denials frequently occur at the line
+level: a claim as a whole may be marked \texttt{PartiallyPaid} while one
+line is denied and the others are paid.
+
+\begin{lstlisting}
+Claim {
+    claim_id:          String,
+    (*@\added{lines:             Vec<ClaimLine>,}@*)
+    (*@\added{total\_billed:      Money, // sum of line.billed\_amount}@*)
+    (*@\added{payer:             InstitutionId,}@*)
+    (*@\added{claim\_type:        ClaimType, // Professional | Institutional}@*)
+    (*@\added{service\_period:    TemporalAnchor,}@*)
+}
+\end{lstlisting}
+
+The aggregate \texttt{billed\_codes} field is removed; consumers derive
+the code list from \texttt{lines}. The aggregate \texttt{billed\_amount}
+is renamed \texttt{total\_billed} and constrained to equal the sum of
+line-level billed amounts. Ingestion validates this invariant.
+
+\begin{lstlisting}
+(*@\added{ClaimLine \{}@*)
+    (*@\added{line\_number:     u32,}@*)
+    (*@\added{service\_date:    Date,}@*)
+    (*@\added{procedure\_code:  CodedValue,        // CPT or HCPCS}@*)
+    (*@\added{modifiers:       Vec<CodedValue>,   // CPT modifiers}@*)
+    (*@\added{diagnosis\_refs:  Vec<CodedValue>,   // ICD-10 pointers}@*)
+    (*@\added{units:           u32,}@*)
+    (*@\added{billed\_amount:   Money,}@*)
+    (*@\added{place\_of\_service: Option<CodedValue>,}@*)
+    (*@\added{rendering\_provider: Option<String>,}@*)
+(*@\added{\}}@*)
+\end{lstlisting}
+
+\texttt{Adjudication} correspondingly gains line-level detail:
+
+\begin{lstlisting}
+Adjudication {
+    claim_id:                 String,
+    (*@\added{lines:                    Vec<AdjudicationLine>,}@*)
+    (*@\added{total\_allowed:            Money,}@*)
+    (*@\added{total\_patient\_resp:       Money,}@*)
+    status:                   AdjudicationStatus,
+    (*@\added{processed\_date:           Date,}@*)
+}
+
+(*@\added{AdjudicationLine \{}@*)
+    (*@\added{line\_number:          u32, // matches ClaimLine.line\_number}@*)
+    (*@\added{allowed\_amount:       Money,}@*)
+    (*@\added{paid\_amount:          Money,}@*)
+    (*@\added{patient\_responsibility: Money,}@*)
+    (*@\added{deductible\_applied:   Money,}@*)
+    (*@\added{coinsurance\_applied:  Money,}@*)
+    (*@\added{copay\_applied:        Money,}@*)
+    (*@\added{denial\_codes:         Vec<CodedValue>, // CARC/RARC per Sec.~\ref{sec:denial-codes}}@*)
+    (*@\added{line\_status:          AdjudicationStatus,}@*)
+(*@\added{\}}@*)
+\end{lstlisting}
+
+\section{PlanAccumulator}
+\label{sec:accumulator}
+
+Deductible and out-of-pocket accumulator state is derived from
+adjudications but reported by the payer as a snapshot. Patients need to
+see it directly. Providers use it to quote patient responsibility before
+a service. The current schema has no representation of accumulator state.
+
+\begin{lstlisting}
+FactPayload {
+    // ...
+
+    (*@\added{PlanAccumulator \{}@*)
+        (*@\added{coverage\_ref:              FactId,   // link to Coverage fact}@*)
+        (*@\added{as\_of:                     Date,}@*)
+        (*@\added{plan\_year:                 u16,}@*)
+        (*@\added{individual\_deductible:     AccumulatorAmount,}@*)
+        (*@\added{family\_deductible:         Option<AccumulatorAmount>,}@*)
+        (*@\added{individual\_oop\_max:        AccumulatorAmount,}@*)
+        (*@\added{family\_oop\_max:            Option<AccumulatorAmount>,}@*)
+        (*@\added{network\_scope:             NetworkScope,}@*)
+        (*@\added{reported\_via:              Option<AccumulatorChannel>,}@*)
+    (*@\added{\},}@*)
+}
+
+(*@\added{AccumulatorAmount \{}@*)
+    (*@\added{limit:  Money,}@*)
+    (*@\added{met:    Money,       // amount accumulated toward the limit}@*)
+(*@\added{\}}@*)
+
+(*@\added{NetworkScope \{ InNetwork, OutOfNetwork, Combined \}}@*)
+
+(*@\added{AccumulatorChannel \{}@*)
+    (*@\added{PayerApi,          // 270/271 eligibility or Patient Access API}@*)
+    (*@\added{ProviderPortal,    // captured at time of service}@*)
+    (*@\added{PatientStatement,  // from paper or portal EOB}@*)
+(*@\added{\}}@*)
+\end{lstlisting}
+
+\texttt{reported\_via} describes a domain communication channel; it is not
+evidence provenance. The enclosing Fact cites the response, statement, or
+table row through \texttt{Fact.evidence}. A value computed from prior
+Adjudication Facts instead uses \texttt{AssertionMethod::Inferred}, cites
+those Facts through \texttt{EvidenceRef::PriorFact}, and records the evaluator
+or rule version used.
+
+\textbf{Design decision: event-driven, not superseded.} Each
+\texttt{PlanAccumulator} fact is an independent observation, not a
+correction of a prior one. A new accumulator reading does not supersede
+the previous one; both facts remain \texttt{Active} and reflect the
+accumulator state at their respective \texttt{as\_of} dates. This
+diverges from an earlier design that used
+\texttt{FactStatus::Superseded} with an \texttt{AccumulatorUpdate}
+supersession reason.
+
+The rationale: supersession is appropriate when a fact is being
+corrected or refined --- the earlier fact was wrong or partial, and the
+newer fact replaces it. Accumulator readings are not corrections. Each
+reading is a true observation at a real point in time, and the
+progression of readings is itself informative. A patient who hit their
+deductible at three different visits wants to see the progression
+(``\$500 met in March, \$1{,}200 met in May, \$3{,}000 met in July''),
+not just the most recent snapshot. Supersession would erase the
+progression.
+
+This mirrors how \texttt{LabResult} works in the existing schema. Every
+lab draw is a separate \texttt{LabResult} fact with its own timestamp,
+not a supersession of the previous draw. A hemoglobin value from last
+month is not made wrong by a hemoglobin value from this month; both
+are true observations at their respective times. The same reasoning
+applies to accumulators.
+
+The read model selects the most recent \texttt{PlanAccumulator} for the
+relevant coverage and plan year. A historical query such as ``what was my
+deductible progress on July 1?'' selects the latest observation available at
+that date. Neither query requires supersession.
+
+Supersession is still available for the rare case where a payer
+retroactively corrects an accumulator reading. The prior Fact is then marked
+\texttt{Superseded} for clinical refinement. This treats the change as a
+correction of one specific observation rather than as a routine update.
+
+\section{Coverage timeline}
+\label{sec:coverage-timeline}
+
+The current \texttt{Coverage} payload represents coverage as a fact
+without explicit temporal bounds:
+
+\begin{lstlisting}
+Coverage {
+    payer:          String,
+    plan:           String,
+    member_id:      String,
+    group_id:       Option<String>,
+    coverage_type:  CoverageType,
+}
+\end{lstlisting}
+
+Coverage changes: patients change employers, plans renew, dependents are
+added, secondary coverage begins. Coverage must be represented as a
+period, not a point. The \texttt{Fact.occurred\_at} field can carry a
+\texttt{TemporalAnchor::Period}, but the schema does not currently
+express the domain-specific fields that make coverage-as-timeline
+usable.
+
+\begin{lstlisting}
+Coverage {
+    (*@\added{payer:              InstitutionId,}@*)
+    plan:               String,
+    member_id:          String,
+    group_id:           Option<String>,
+    coverage_type:      CoverageType,
+    (*@\added{plan\_structure:     PlanStructure,}@*)
+    (*@\added{effective\_from:     Date,}@*)
+    (*@\added{effective\_through:  Option<Date>,   // None means currently active}@*)
+    (*@\added{plan\_year:          Option<u16>,}@*)
+    (*@\added{network\_status:     NetworkStatus,}@*)
+    (*@\added{relationship\_to\_subscriber: SubscriberRelationship,}@*)
+    (*@\added{policy\_holder:      Option<String>,}@*)
+}
+
+(*@\added{NetworkStatus \{ InNetwork, OutOfNetwork, Unknown \}}@*)
+
+(*@\added{SubscriberRelationship \{}@*)
+    (*@\added{Self\_,     // patient is the subscriber}@*)
+    (*@\added{Spouse,}@*)
+    (*@\added{Dependent,}@*)
+    (*@\added{Other,}@*)
+(*@\added{\}}@*)
+\end{lstlisting}
+
+\texttt{effective\_through: None} indicates the coverage is currently
+active. When coverage ends, the fact is superseded and a new
+\texttt{Coverage} fact is created for the replacement coverage.
+
+The \texttt{plan\_year} field distinguishes ``same employer, different
+plan year'' (a plan renewal with updated benefits) from ``different
+employer.'' This distinction matters for accumulator resets: at the
+start of a new plan year the deductible resets even if the coverage is
+continuous.
+
+\subsection{PlanStructure}
+\label{sec:plan-structure}
+
+The existing \texttt{CoverageType} enum
+(\texttt{Commercial\ \textbar{}\ Medicare\ \textbar{}\ Medicaid\ \textbar{}\ Tricare\ \textbar{}\ SelfPay\ \textbar{}\ Other})
+distinguishes \emph{who pays} but not \emph{how the plan is
+structured}. A commercial HDHP with a \$6{,}000 deductible and 20\%
+coinsurance behaves totally differently from a commercial PPO with
+\$30 copays and no deductible, and the patient's cost-share reasoning
+depends on the structure. \texttt{PlanStructure} captures the
+structural distinction:
+
+\begin{lstlisting}
+(*@\added{PlanStructure \{}@*)
+    (*@\added{plan\_type:               PlanType,}@*)
+    (*@\added{has\_deductible:          bool,}@*)
+    (*@\added{has\_coinsurance:         bool,}@*)
+    (*@\added{has\_copay:               bool,}@*)
+    (*@\added{is\_hsa\_eligible:         bool,   // HDHP paired with HSA}@*)
+(*@\added{\}}@*)
+
+(*@\added{PlanType \{}@*)
+    (*@\added{Hmo,}@*)
+    (*@\added{Ppo,}@*)
+    (*@\added{Epo,}@*)
+    (*@\added{Pos,}@*)
+    (*@\added{Hdhp,      // High-Deductible Health Plan}@*)
+    (*@\added{Indemnity,}@*)
+    (*@\added{Unknown,}@*)
+(*@\added{\}}@*)
+\end{lstlisting}
+
+\texttt{PlanStructure} is deliberately minimal. It does not attempt to
+model the full plan design (formulary, service-level coverage rules,
+network tiers, benefit-year rules). Those belong in a separate
+plan-design contextual model outside \texttt{FactPayload}. The
+structural type is included on \texttt{Coverage} because the patient
+needs to know whether their next visit will hit a deductible or a
+copay, and that requires knowing the plan structure.
+
+\texttt{PlanStructure} is a field on \texttt{Coverage} rather than a
+separate fact. It describes the coverage and does not vary
+independently over time --- when the plan structure changes (e.g., the
+employer switches plans mid-year), a new \texttt{Coverage} fact is
+created and the prior one is superseded.
+
+\section{Structured denial reasons}
+\label{sec:denial-codes}
+
+The current \texttt{PreAuthDecision} payload uses a free-text denial
+reason:
+
+\begin{lstlisting}
+PreAuthDecision {
+    authorization_id:   String,
+    status:             AuthorizationStatus,
+    reason:             Option<String>,
+    approved_service:   Option<CodedValue>,
+    valid_through:      Option<Date>,
+}
+\end{lstlisting}
+
+Free-text denial reasons are unparseable. Payers actually communicate
+denials using standardized codes: CARC (Claim Adjustment Reason Codes,
+maintained by X12) and RARC (Remittance Advice Remark Codes, maintained
+by CMS). Structured codes enable a real feature: given a denial reason,
+determine whether the patient has a viable appeal path, what
+documentation is required, and what the timeline is.
+
+\begin{lstlisting}
+PreAuthDecision {
+    authorization_id:   String,
+    status:             AuthorizationStatus,
+    (*@\added{denial\_codes:       Vec<CodedValue>,   // CARC and RARC}@*)
+    (*@\added{denial\_narrative:   Option<String>,    // free-text supplement}@*)
+    approved_service:   Option<CodedValue>,
+    valid_through:      Option<Date>,
+    (*@\added{decision\_date:      Date,}@*)
+    (*@\added{appeal\_deadline:    Option<Date>,}@*)
+}
+\end{lstlisting}
+
+The same treatment applies to \texttt{AdjudicationLine.denial\_codes}
+(see Section~\ref{sec:claim-lines}). CARC and RARC vocabularies are
+represented as \texttt{CodedValue} with the code system identifier
+distinguishing the two.
+
+The free-text \texttt{denial\_narrative} field is preserved as an
+optional supplement. Payer notices frequently include narrative
+explanations that add context beyond the structured code (``member has
+not tried step-therapy tier 1 medication'' is a RARC N123 with a
+specific meaning; the narrative provides the humanized version).
+
+When a payer supplies the codes, the normalized Fact cites the relevant notice
+or transaction location. When Phoros maps free text to codes, that mapping is
+a separate inferred coding assertion supported by the original denial Fact.
+It does not silently convert model output into payer-authored content.
+
+\section{Appeal lifecycle}
+\label{sec:appeal-lifecycle}
+
+The current \texttt{Appeal} payload captures the case but not its
+progression:
+
+\begin{lstlisting}
+Appeal {
+    original_decision_id:   FactId,
+    grounds:                String,
+    supporting_facts:       Vec<FactId>,
+}
+\end{lstlisting}
+
+An appeal is a multi-week process with distinct states: filed,
+acknowledged, additional information requested, decided at first level,
+escalated to second level, escalated to external review, resolved.
+Without lifecycle tracking, the schema cannot answer basic questions
+such as ``is this appeal still open,'' ``did it succeed,'' or ``what
+level is it at.''
+
+\subsection{Design decision: event-driven vs.\ state-machine}
+
+Two designs were considered for appeal lifecycle. The adopted design uses the
+same event pattern as medication modeling: an \texttt{Appeal} Fact establishes
+the case, and \texttt{AppealEvent} Facts record each state transition. The
+current state of an appeal is computed by folding over its events. The
+state-machine design (not adopted) would place a mutable \texttt{status}
+field on \texttt{Appeal} that gets updated as the appeal progresses,
+without separate event facts.
+
+\paragraph{Arguments for event-driven (adopted).}
+Consistent with the medication-event idiom, so
+readers of the schema encounter one pattern rather than two. Each
+\texttt{AppealEvent} preserves its own assertion metadata and evidence: who
+reported the event, when and how it was asserted, and which document or prior
+Fact supports it. The full
+history is preserved as an immutable sequence of facts rather than
+compressed into a single mutable status. Payer decisions, patient
+escalations, and external review outcomes are genuine events with
+external actors, dates, and documents, and treating them as first-class
+facts respects that. The read model for ``current state'' is trivially
+implementable and cacheable.
+
+\paragraph{Arguments for state-machine (not adopted).}
+Simpler for common queries such as ``list all open appeals'' --- a
+single field lookup rather than a fold over events. Fewer total facts.
+The FEN schema already has a state-machine mechanism in
+\texttt{FactStatus} (\texttt{Active}, \texttt{Superseded},
+\texttt{EnteredInError}), so appeal state could be modeled the same way
+rather than introducing a second pattern.
+
+\paragraph{Why event-driven wins here.}
+An \texttt{AppealEvent} corresponds to a specific real-world
+communication: a letter from the payer acknowledging the appeal, a
+request for additional documentation, a decision letter with a
+determination, a notice of escalation to external review. The appeal
+itself is a case; the events are what came in the mail. Treating those
+communications as first-class facts (with dates, senders, assertion metadata,
+and evidence) is faithful to how the appeal actually unfolds. A
+mutable \texttt{status} field cannot carry that structure without
+either losing information or duplicating it in a shadow event log.
+
+The state-machine design is preferable when the entity being tracked
+is genuinely a single object whose state changes internally, and the
+history of state changes is not itself an object of interest. Neither
+condition holds for appeals.
+
+The same reasoning was applied to \texttt{PlanAccumulator}
+(Section~\ref{sec:accumulator}), where each observation is a first-class
+event and supersession was rejected.
+
+\subsection{Schema}
+
+The pattern mirrors medication-order event modeling. The \texttt{Appeal} Fact
+establishes the case; \texttt{AppealEvent} Facts track state transitions.
+
+\begin{lstlisting}
+Appeal {
+    (*@\added{appeal\_id:              Option<String>, // source-system ID}@*)
+    original_decision_id:   FactId,
+    (*@\added{appeal\_level:           AppealLevel,}@*)
+    grounds:                String,
+    (*@\added{filed\_date:             Date,}@*)
+    (*@\added{filed\_by:               AppealFiler,}@*)
+}
+
+(*@\added{AppealLevel \{}@*)
+    (*@\added{Internal1,        // first-level internal payer review}@*)
+    (*@\added{Internal2,        // second-level internal review}@*)
+    (*@\added{ExternalReview,   // independent external review}@*)
+    (*@\added{StateComplaint,   // filed with state insurance commissioner}@*)
+(*@\added{\}}@*)
+
+(*@\added{AppealFiler \{ Patient, Provider, AuthorizedRepresentative \}}@*)
+
+(*@\added{AppealEvent \{}@*)
+    (*@\added{appeal\_ref:      FactId,   // links to the Appeal fact}@*)
+    (*@\added{event\_type:      AppealEventType,}@*)
+    (*@\added{notes:           Option<String>,}@*)
+(*@\added{\},}@*)
+
+(*@\added{AppealEventType \{}@*)
+    (*@\added{Acknowledged \{ acknowledged\_date: Date \},}@*)
+    (*@\added{InfoRequested \{ items: Vec<String>, deadline: Date \},}@*)
+    (*@\added{InfoSubmitted \{ items: Vec<FactId> \},}@*)
+    (*@\added{Decided \{}@*)
+        (*@\added{outcome:         AppealOutcome,}@*)
+        (*@\added{decision\_date:   Date,}@*)
+        (*@\added{denial\_codes:    Vec<CodedValue>, // if upheld}@*)
+    (*@\added{\},}@*)
+    (*@\added{Escalated \{ to\_level: AppealLevel \},}@*)
+    (*@\added{Withdrawn \{ withdrawn\_date: Date, reason: Option<String> \},}@*)
+(*@\added{\}}@*)
+
+(*@\added{AppealOutcome \{ Overturned, PartiallyOverturned, Upheld \}}@*)
+\end{lstlisting}
+
+The enclosing Appeal and AppealEvent Facts use \texttt{Fact.evidence} for
+supporting documents and prior Facts. A document is cited with
+\texttt{EvidenceRef::Source}; a prior clinical or billing Fact is cited with
+\texttt{EvidenceRef::PriorFact}. The \texttt{InfoSubmitted.items} field
+remains because it describes the content of that event---which items were
+submitted---rather than the epistemic support for the event record itself.
+
+Both \texttt{Appeal} and \texttt{AppealEvent} become \texttt{FactPayload}
+variants. Corresponding \texttt{FactType} variants are added:
+\texttt{FactType::AppealEvent}.
+
+\section{PharmacyClaim}
+\label{sec:pharmacy}
+
+The current \texttt{Claim} payload is designed for medical claims
+(CPT/HCPCS codes, professional or institutional claim types). Pharmacy
+claims use different vocabularies and pricing structures: NDC codes for
+drug identification, days-supply and quantity dispensed, DAW (Dispense
+As Written) codes, formulary tier, and PBM adjudication that includes
+rebates and MAC (Maximum Allowable Cost) pricing. Forcing pharmacy
+claims into the medical \texttt{Claim} structure loses information and
+prevents useful features (formulary alternative suggestions, generic
+substitution tracking, PBM cost comparison).
+
+A separate \texttt{PharmacyClaim} payload:
+
+\begin{lstlisting}
+FactPayload {
+    // ...
+
+    (*@\added{PharmacyClaim \{}@*)
+        (*@\added{rx\_claim\_id:         String,}@*)
+        (*@\added{medication\_order\_ref: Option<FactId>, // link to medication-order Fact}@*)
+        (*@\added{ndc:                 CodedValue,   // National Drug Code}@*)
+        (*@\added{drug\_name:           String,}@*)
+        (*@\added{days\_supply:         u32,}@*)
+        (*@\added{quantity\_dispensed:  Decimal,}@*)
+        (*@\added{unit:                CodedValue,}@*)
+        (*@\added{dispense\_date:       Date,}@*)
+        (*@\added{pharmacy:            InstitutionId,}@*)
+        (*@\added{prescriber:          String,}@*)
+        (*@\added{daw\_code:            Option<u8>,}@*)
+        (*@\added{payer:               InstitutionId,}@*)
+        (*@\added{pbm:                 Option<InstitutionId>,}@*)
+        (*@\added{billed\_amount:       Money,}@*)
+        (*@\added{plan\_paid:           Money,}@*)
+        (*@\added{patient\_paid:        Money,}@*)
+        (*@\added{coverage\_result:     PharmacyCoverageResult,}@*)
+    (*@\added{\},}@*)
+}
+\end{lstlisting}
+
+The \texttt{medication\_order\_ref} field links the pharmacy claim back to
+the originating medication-order Fact when available. This link is
+essential for reasoning about medication adherence (comparing prescribed
+days-supply to actual dispensing intervals) and for detecting formulary
+switches (the pharmacy dispensed a different NDC than prescribed).
+
+\subsection{PharmacyCoverageResult}
+\label{sec:pharmacy-coverage-result}
+
+An earlier design placed covered, not-covered, prior-authorization,
+step-therapy, quantity-limit, and cash-pay outcomes in one status enum. In
+practice
+pharmacy rejections often carry multiple reasons simultaneously
+(``not covered on formulary, and also requires step therapy, and also
+has a quantity limit''), which an enum with mutually exclusive variants
+cannot represent. A struct that composes the individual conditions
+handles this better:
+
+\begin{lstlisting}
+(*@\added{PharmacyCoverageResult \{}@*)
+    (*@\added{outcome:                CoverageOutcome,}@*)
+    (*@\added{tier:                   Option<u8>,}@*)
+    (*@\added{prior\_auth\_required:    bool,}@*)
+    (*@\added{step\_therapy\_required:  bool,}@*)
+    (*@\added{quantity\_limit\_hit:     bool,}@*)
+    (*@\added{suggested\_alternative:  Option<CodedValue>, // NDC of covered alt}@*)
+    (*@\added{rejection\_codes:        Vec<CodedValue>,    // NCPDP reject codes}@*)
+    (*@\added{requires\_manufacturer\_assistance: bool,}@*)
+(*@\added{\}}@*)
+
+(*@\added{CoverageOutcome \{}@*)
+    (*@\added{Paid,}@*)
+    (*@\added{Rejected,}@*)
+    (*@\added{Pending,}@*)
+    (*@\added{CashPay,     // adjudicated as cash by patient choice or plan denial}@*)
+(*@\added{\}}@*)
+\end{lstlisting}
+
+\subsection{MedicationCoverageCheck at prescribing}
+\label{sec:formulary-tier}
+
+Formulary tier at the point of prescribing is separately useful from
+formulary tier at adjudication. Provider EHRs increasingly run
+real-time benefit checks (RTBC) via NCPDP formulary APIs at the moment
+a prescription is written, so the tier and prior-auth requirements
+are known before the patient ever reaches the pharmacy.
+
+The RTBC result must not be inserted into the clinician-authored medication
+order as though the clinician asserted it. The PBM or benefit service made a
+separate assertion, often from a separate response artifact. The adopted
+representation is therefore another Fact:
+
+\begin{lstlisting}
+FactPayload {
+    (*@\added{MedicationCoverageCheck \{}@*)
+        (*@\added{medication:          CodedValue,}@*)
+        (*@\added{medication\_order\_ref: Option<FactId>,}@*)
+        (*@\added{coverage\_ref:       Option<FactId>,}@*)
+        (*@\added{checked\_at:         Timestamp,}@*)
+        (*@\added{formulary\_tier:     Option<u8>,}@*)
+        (*@\added{formulary\_status:   FormularyStatus,}@*)
+    (*@\added{\},}@*)
+}
+
+(*@\added{FormularyStatus \{}@*)
+    (*@\added{Covered,}@*)
+    (*@\added{NotCovered,}@*)
+    (*@\added{PriorAuthRequired,}@*)
+    (*@\added{StepTherapyRequired,}@*)
+    (*@\added{QuantityLimited,}@*)
+    (*@\added{NotChecked,     // no RTBC was performed}@*)
+(*@\added{\}}@*)
+\end{lstlisting}
+
+The enclosing Fact records the benefit service's assertion metadata and cites
+the RTBC response through \texttt{Fact.evidence}. Its
+\texttt{medication\_order\_ref} is a semantic connection to the order, not a
+substitute for that evidence. The \texttt{MedicationCoverageCheck} represents
+``what the real-time benefit check said at prescribing.'' The
+\texttt{PharmacyCoverageResult} on \texttt{PharmacyClaim} represents
+``what the PBM actually adjudicated at dispensing.'' The two often
+agree; when they diverge, the divergence itself is informative
+(``the RTBC said covered, but the PBM rejected --- something changed
+between prescribing and pickup'').
+
+Formulary is properly a plan-design property, and the tier value only
+has meaning in the context of a specific plan's formulary. Modeling
+the plan formulary itself is out of scope for this document
+(see Section~\ref{sec:what-not-added}); capturing the tier at
+observation time is sufficient for patient-facing reasoning.
+
+\section{Payment sources and methods}
+\label{sec:payment-sources}
+
+The current \texttt{Payment} payload and \texttt{PayerType} enum treat
+payments as a small closed set:
+
+\begin{lstlisting}
+Payment {
+    claim_id:  String,
+    amount:    Money,
+    paid_by:   PayerType,
+}
+
+PayerType {
+    PrimaryInsurance,
+    SecondaryInsurance,
+    Patient,
+    Other,
+}
+\end{lstlisting}
+
+Real patient payments come from a wider set of sources with different
+tax and financial-management implications. HSA/FSA payments are pre-tax
+dollars with reporting requirements. Payment plans are partial payments
+over time and change what the patient owes. Medical credit lines
+(CareCredit) are debt with interest terms. Charity care and financial
+assistance reduce the patient's obligation. Collections activity
+indicates a payment failure that affects credit. Each of these matters
+to the patient and to any downstream reasoning about what the patient
+actually spent on healthcare.
+
+\begin{lstlisting}
+Payment {
+    claim_id:              String,
+    (*@\added{provider\_statement\_ref: Option<FactId>, // link to statement paid}@*)
+    amount:                Money,
+    paid_by:               PayerType,
+    (*@\added{payment\_method:        PaymentMethod,}@*)
+    (*@\added{payment\_date:          Date,}@*)
+    (*@\added{payment\_plan\_ref:      Option<FactId>,}@*)
+}
+
+(*@\added{PayerType \{}@*)
+    (*@\added{PrimaryInsurance,}@*)
+    (*@\added{SecondaryInsurance,}@*)
+    (*@\added{Medicare,}@*)
+    (*@\added{Medicaid,}@*)
+    (*@\added{Patient,}@*)
+    (*@\added{HSA,}@*)
+    (*@\added{FSA,}@*)
+    (*@\added{HRA,}@*)
+    (*@\added{MedicalCredit \{ issuer: String \},        // e.g. CareCredit}@*)
+    (*@\added{CharityCare \{ program: String \},}@*)
+    (*@\added{FinancialAssistance \{ program: String \},}@*)
+    (*@\added{Collections \{ agency: String \},}@*)
+    (*@\added{WorkersComp,}@*)
+    (*@\added{AutoInsurance,}@*)
+    (*@\added{Other \{ description: String \},}@*)
+(*@\added{\}}@*)
+
+(*@\added{PaymentMethod \{}@*)
+    (*@\added{Card,}@*)
+    (*@\added{Check,}@*)
+    (*@\added{BankTransfer,}@*)
+    (*@\added{Cash,}@*)
+    (*@\added{PaymentPlan,}@*)
+    (*@\added{Adjustment,       // contractual or courtesy write-off}@*)
+    (*@\added{Other,}@*)
+(*@\added{\}}@*)
+\end{lstlisting}
+
+A payment plan itself is not a payment; it is an agreement that
+produces a sequence of payments. Payment plans need their own payload.
+
+An earlier design assumed the provider always manages the payment plan. Some
+plans instead use third-party medical financing companies, including
+CareCredit, PayZen, AccessOne, and ClearBalance. Others are managed by
+collections agencies, hospital charity programs, or state assistance. The
+\texttt{PaymentPlan} payload uses a \texttt{PaymentPlanManager} enum
+to distinguish these:
+
+\begin{lstlisting}
+FactPayload {
+    // ...
+
+    (*@\added{PaymentPlan \{}@*)
+        (*@\added{plan\_id:            String,}@*)
+        (*@\added{manager:            PaymentPlanManager,}@*)
+        (*@\added{total\_amount:       Money,}@*)
+        (*@\added{monthly\_amount:     Money,}@*)
+        (*@\added{start\_date:         Date,}@*)
+        (*@\added{end\_date:           Option<Date>,}@*)
+        (*@\added{interest\_rate:      Option<Decimal>,}@*)
+        (*@\added{related\_statements: Vec<FactId>,  // statements covered by plan}@*)
+    (*@\added{\},}@*)
+}
+
+(*@\added{PaymentPlanManager \{}@*)
+    (*@\added{Provider \{ institution: InstitutionId \},}@*)
+    (*@\added{MedicalFinancing \{ issuer: String \},   // e.g. CareCredit, PayZen}@*)
+    (*@\added{CollectionsAgency \{ agency: String \},}@*)
+    (*@\added{CharityProgram \{ program: String \},   // hospital or nonprofit}@*)
+    (*@\added{StateAssistance \{ program: String \},}@*)
+    (*@\added{Other \{ description: String \},}@*)
+(*@\added{\}}@*)
+\end{lstlisting}
+
+Individual \texttt{Payment} facts made under a payment plan link back
+via \texttt{payment\_plan\_ref}. This lets the patient see, on any
+statement, whether the balance is being paid down under an active
+agreement, whether it is with a third-party financier accruing interest,
+or whether it has fallen into collections.
+
+Earlier \texttt{PayerType} variants such as \texttt{MedicalCredit} and
+\texttt{Collections} conflated two questions. \texttt{PayerType} answers
+\emph{what funded this payment}; \texttt{PaymentPlanManager} answers
+\emph{who administers the agreement}. For a patient paying a CareCredit
+balance, the Payment Fact records the patient as the funding source, while the
+related PaymentPlan records CareCredit as the financing manager. The two
+dimensions are orthogonal.
+
+\section{FactRelation for billing}
+\label{sec:fact-relation}
+
+Billing Facts currently refer to one another through inline \texttt{FactId}
+fields. Examples include:
+
+\begin{itemize}
+\item \texttt{Adjudication.claim\_id} and \texttt{Payment.claim\_id};
+\item \texttt{Appeal.original\_decision\_id} and \texttt{AppealEvent.appeal\_ref};
+\item \texttt{Payment.provider\_statement\_ref} and \texttt{Payment.payment\_plan\_ref};
+\item \texttt{PlanAccumulator.coverage\_ref} and \texttt{PharmacyClaim.medication\_order\_ref};
+\item the order and coverage references on \texttt{MedicationCoverageCheck};
+\item \texttt{ProviderStatement.related\_claim} and \texttt{PaymentPlan.related\_statements}.
+\end{itemize}
+
+These are implicit relations. The existing FEN schema handles
+clinical relations through \texttt{EpisodeRelation} and
+\texttt{NarrativeRelation} --- explicit relation types with their own
+assertion metadata. For consistency, and because billing has genuinely
+many-to-many relations that inline \texttt{FactId} fields cannot
+represent (one payment covering multiple claims; one claim generating
+multiple statements over time), a \texttt{FactRelation} entity is introduced.
+
+\begin{lstlisting}
+(*@\added{FactRelation \{}@*)
+    (*@\added{id:              RelationId,}@*)
+    (*@\added{from\_fact:       FactId,}@*)
+    (*@\added{to\_fact:         FactId,}@*)
+    (*@\added{relation\_type:   FactRelationType,}@*)
+    (*@\added{assertion:       AssertionProvenance,}@*)
+    (*@\added{evidence:        Vec<EvidenceRef>,}@*)
+(*@\added{\}}@*)
+
+(*@\added{FactRelationType \{}@*)
+    (*@\added{// Billing relations}@*)
+    (*@\added{ClaimAdjudicatedBy,         // Claim -> Adjudication}@*)
+    (*@\added{ClaimPaidBy,                // Claim -> Payment}@*)
+    (*@\added{StatementBillsClaim,        // ProviderStatement -> Claim}@*)
+    (*@\added{StatementPaidBy,            // ProviderStatement -> Payment}@*)
+    (*@\added{AppealsDecision,            // Appeal -> PreAuthDecision or Adjudication}@*)
+    (*@\added{AppealEventBelongsTo,       // AppealEvent -> Appeal}@*)
+    (*@\added{PaymentPlanCovers,          // PaymentPlan -> ProviderStatement}@*)
+    (*@\added{PaymentUnderPlan,           // Payment -> PaymentPlan}@*)
+    (*@\added{AccumulatorForCoverage,     // PlanAccumulator -> Coverage}@*)
+    (*@\added{PharmacyClaimFulfillsOrder, // PharmacyClaim -> medication-order Fact}@*)
+    (*@\added{CoverageCheckForOrder,      // MedicationCoverageCheck -> medication-order Fact}@*)
+    (*@\added{CoverageCheckForCoverage,   // MedicationCoverageCheck -> Coverage}@*)
+    (*@\added{PreAuthForService,          // PreAuthRequest -> planned service reference}@*)
+    (*@\added{PreAuthDecisionOnRequest,   // PreAuthDecision -> PreAuthRequest}@*)
+    // ... additional types added as needed
+(*@\added{\}}@*)
+\end{lstlisting}
+
+The direction is part of each relation type's contract. For example,
+\texttt{StatementBillsClaim} always points from a ProviderStatement Fact to a
+Claim Fact, while \texttt{ClaimPaidBy} always points from a Claim Fact to a
+Payment Fact. Ingestion validates the permitted endpoint types.
+
+\texttt{FactRelation} is for domain structure, not ordinary evidentiary
+support. If prior Facts support an Appeal Fact, the Appeal records them in
+\texttt{Fact.evidence}. A separate ``supports appeal'' edge would duplicate
+that canonical evidence relationship.
+
+\paragraph{Migration of inline \texttt{FactId} fields.}
+Existing inline references are preserved during a transition period.
+The intent is that ingestion produces both the inline field (for
+backward compatibility with existing queries) and the corresponding
+\texttt{FactRelation} (for the graph representation). Consumers migrate
+to querying via relations over time. Once no consumer depends on the
+inline fields, they are removed in a subsequent schema revision.
+Fields identified for removal:
+
+\begin{itemize}
+\item \texttt{Adjudication.claim\_id} $\rightarrow$ \texttt{ClaimAdjudicatedBy}
+\item \texttt{Payment.claim\_id} $\rightarrow$ \texttt{ClaimPaidBy}
+\item \texttt{Payment.provider\_statement\_ref} $\rightarrow$ \texttt{StatementPaidBy}
+\item \texttt{Payment.payment\_plan\_ref} $\rightarrow$ \texttt{PaymentUnderPlan}
+\item \texttt{Appeal.original\_decision\_id} $\rightarrow$ \texttt{AppealsDecision}
+\item \texttt{Appeal.supporting\_facts} $\rightarrow$ \texttt{Fact.evidence}
+\item \texttt{AppealEvent.appeal\_ref} $\rightarrow$ \texttt{AppealEventBelongsTo}
+\item \texttt{PlanAccumulator.coverage\_ref} $\rightarrow$ \texttt{AccumulatorForCoverage}
+\item \texttt{PharmacyClaim.medication\_order\_ref} $\rightarrow$ \texttt{PharmacyClaimFulfillsOrder}
+\item \texttt{MedicationCoverageCheck.medication\_order\_ref} $\rightarrow$ \texttt{CoverageCheckForOrder}
+\item \texttt{MedicationCoverageCheck.coverage\_ref} $\rightarrow$ \texttt{CoverageCheckForCoverage}
+\item \texttt{ProviderStatement.related\_claim} $\rightarrow$ \texttt{StatementBillsClaim}
+\item \texttt{PaymentPlan.related\_statements} $\rightarrow$ \texttt{PaymentPlanCovers}
+\end{itemize}
+
+\paragraph{Advantages.}
+Relations carry assertion metadata and evidence, so ``the payer told us this
+claim goes with this statement'' is distinguishable from ``Phoros inferred
+this relation because the amounts and dates match.'' Many-to-many relations
+are directly representable. The graph
+becomes uniformly queryable: ``what facts relate to this appeal''
+is a single relation lookup, not a scan across multiple inline fields
+on multiple fact types. New relation types are added without changing
+existing fact structures.
+
+\paragraph{Costs.}
+More entities to store, and joins are required to reconstruct related
+facts. The database engine must efficiently query relations by
+\texttt{from\_fact} and \texttt{to\_fact}, which requires appropriate
+indexing. Ingestion pipelines produce more entities per source event.
+These costs are the standard tradeoff of graph-oriented modeling and
+are consistent with the tradeoffs already accepted for
+\texttt{EpisodeRelation} and \texttt{NarrativeRelation}.
+
+\section{Updated FactType enumeration}
+
+The \texttt{FactType} enum expands to include the new variants:
+
+\begin{lstlisting}
+pub enum FactType {
+    Measurement,
+    Prescription,
+    Administration,
+    Procedure,
+    Diagnosis,
+    ImagingResult,
+    LabResult,
+    Note,
+    Encounter,
+    Referral,
+    Document,
+    Coverage,
+    Claim,
+    Adjudication,
+    Payment,
+    PreAuthRequest,
+    PreAuthDecision,
+    Appeal,
+    (*@\added{ProviderStatement,}@*)
+    (*@\added{PlanAccumulator,}@*)
+    (*@\added{AppealEvent,}@*)
+    (*@\added{PharmacyClaim,}@*)
+    (*@\added{MedicationCoverageCheck,}@*)
+    (*@\added{PaymentPlan,}@*)
+}
+\end{lstlisting}
+
+The \texttt{From<\&FactPayload> for FactType} implementation is updated
+accordingly. The compiler enforces exhaustiveness, so every new
+\texttt{FactPayload} variant requires a corresponding
+\texttt{FactType} match arm.
+
+\section{Migration and ingestion considerations}
+
+The extensions in this document are additive with respect to the graph
+model. Existing \texttt{Coverage}, \texttt{Claim}, \texttt{Adjudication},
+\texttt{Payment}, \texttt{PreAuthDecision}, and \texttt{Appeal} facts
+must be migrated to the extended structures.
+
+Migration follows three guarantees: preserve the original representation;
+do not invent source-authored specificity; and make every extraction,
+reconstruction, or inference traceable to a source citation or prior Fact.
+
+\begin{itemize}
+
+\item \texttt{Claim.billed\_codes} and \texttt{Claim.billed\_amount}
+migrate to a single-line \texttt{ClaimLine} where the source data does
+not carry line detail. Ingestion pipelines that receive claim-level data
+without lines produce a synthetic \texttt{ClaimLine} with the aggregate
+amount and codes; the \texttt{line\_number} is \texttt{1} and the
+enclosing Fact uses \texttt{AssertionMethod::Inferred}. Its evidence cites the
+source record or prior Fact, and migration metadata records the reconstruction
+rule version.
+
+\item Existing \texttt{Coverage} facts without \texttt{effective\_from}
+are migrated using \texttt{Fact.occurred\_at} as
+\texttt{effective\_from}. \texttt{effective\_through} is set to
+\texttt{None} for the most recent coverage and to the next coverage's
+\texttt{effective\_from} for prior coverages, provided they are
+non-overlapping.
+
+\item Existing \texttt{PreAuthDecision.reason} strings are preserved in
+the new \texttt{denial\_narrative} field. The
+\texttt{denial\_codes} vector is left empty. A subsequent enrichment
+pass may map free-text reasons to CARC/RARC codes, but it creates a separate
+inferred coding Fact with the original denial Fact as evidence. It does not
+supersede payer-authored content merely because enrichment became available.
+
+\item Existing \texttt{Appeal} facts are preserved as-is. The
+\texttt{appeal\_id} field is populated from any source-system
+identifier available. If no such identifier exists, the field remains absent;
+an internal deterministic key may support implementation but must not be
+presented as a source identifier. \texttt{appeal\_level} defaults to
+\texttt{Internal1}. \texttt{AppealEvent} facts are not
+retroactively constructed; the appeal lifecycle is tracked
+prospectively from the migration date forward.
+
+\item Existing \texttt{Payment} facts are preserved as-is. The
+\texttt{payment\_method} field defaults to \texttt{Other} where the
+source data does not distinguish, and can be enriched during ingestion
+from provider statement records if those are also ingested.
+
+\end{itemize}
+
+Ingestion pipelines from payer sources (CARIN Blue Button, Patient
+Access APIs where available) produce the extended structures directly.
+Ingestion from provider EHR exports (Epic EHI, generic FHIR) continues
+to produce medical facts; billing detail from EHR exports is typically
+limited to claim summaries and is ingested as reconstructed
+single-line claims per above.
+
+For every path, the original PDF, transaction, API response, or EHI export is
+registered as a \texttt{SourceArtifact}; normalized Facts cite exact passages,
+records, or rows. Source-provided claim and statement identifiers remain
+\texttt{ExternalRef} values and are not confused with those citations.
+
+\section{What this does not add}
+\label{sec:what-not-added}
+
+The extensions in this document capture billing and insurance events at
+patient-facing granularity. They do not add:
+
+\begin{itemize}
+
+\item \textbf{Full plan design.} A \texttt{PlanDesign} object
+describing formulary contents, service-level coverage rules, network
+tiers, and benefit-year rules is not included. The minimal
+\texttt{PlanStructure} type on \texttt{Coverage}
+(Section~\ref{sec:plan-structure}) captures the plan's structural
+category (HMO, PPO, HDHP, etc.) and cost-share dimensions (has
+deductible, has copay, has coinsurance), but not the full plan
+document. Individual accumulator state
+(Section~\ref{sec:accumulator}) is captured, but the plan's benefit
+schedule is not. If a benefits-intelligence use case emerges, full
+plan design belongs in a separate contextual model outside
+\texttt{FactPayload}.
+
+\item \textbf{Vendor and benefit program utilization.} Enrollment in and
+interaction with employer-sponsored benefit vendors (fertility, mental
+health, MSK, diabetes management) is not modeled. These are relevant
+to a benefits-intelligence product but not to a patient-facing health
+record.
+
+\item \textbf{Employer or plan-sponsor identity on coverage.}
+\texttt{Coverage} identifies the payer and plan but not the plan
+sponsor. Adding sponsor identity would enable aggregation across a
+workforce but would make the FEN record employer-legible in ways that
+conflict with the patient-owned positioning.
+
+\item \textbf{Negotiated rate and market pricing context.} Cost
+transparency comparisons (``what did this employee pay for a knee MRI
+versus the plan's negotiated rate at another facility'') require
+reference pricing data alongside claims. This is out of scope for
+patient-facing billing defense and belongs in a separate pricing model
+if pursued.
+
+\end{itemize}
+
+\section{Ontological placement summary}
+
+\begin{center}
+\small
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{>{\raggedright\arraybackslash}p{5.4cm} >{\raggedright\arraybackslash}p{7.6cm}}
+\textbf{Concern} & \textbf{Placement} \\
+\hline
+Original EOB, statement, export, or transaction & Immutable \texttt{SourceArtifact} outside FEN \\
+Claim, Adjudication, Payment, Appeal, or billing event & FEN Fact payload \\
+Payer, provider, pharmacy, or PBM identity & Contextual \texttt{Institution} registry \\
+Claim-to-payment or statement-to-claim connection & Authored \texttt{FactRelation} \\
+Evidence supporting a billing Fact & \texttt{Fact.evidence} \\
+Source-system identity or correlation key & \texttt{Fact.external\_refs} \\
+Current appeal state or reconciliation view & Projection or operational materialization \\
+\end{tabular}
+\end{center}
+
+These omissions are deliberate. The extensions in this document
+strengthen Phoros as a patient-owned health passport with meaningful
+billing awareness. They do not turn Phoros into a benefits-intelligence
+platform.
+
+\end{document}

@@ -10,20 +10,20 @@
 //! `DecisionPoint` belong to the future clinical family and are intentionally
 //! absent.
 //!
-//! Health-economic facts reference the *same* [`SubjectId`] the identity
-//! crate owns and reuse its value types (`TemporalAnchor`, `CodedValue`,
+//! Health-economic facts reference the *same* [`SubjectId`] used by identity
+//! and reuse `fen-core` value types (`TemporalAnchor`, `CodedValue`,
 //! `CodingSystem`, `ExternalRef`, `Provenance`, `Author`, `TimeInterval`).
 //! Inference-tier payloads carry a [`DerivedFrom`] citing the facts and rule
 //! versions that produced them: provenance for conclusions, not just
 //! documents. Plan-shaped objects (benefit catalogs) are versioned reference
 //! data *outside* the fact graph, cited via [`ReferenceDataRef`].
 
-use identity_model::{
+use fen_core::{
     CodedValue, ExternalRef, FactId, FactStatus, Provenance, SubjectId, TemporalAnchor,
     TimeInterval,
 };
 
-/// A health-economic fact: this family's analogue of the identity crate's
+/// A health-economic fact: this family's analogue of an identity fact,
 /// `Fact`, with the same envelope-relevant fields (id, subject, temporal
 /// anchor, status, provenance, external refs) so it can flow through the
 /// shared encrypted envelope store unchanged. Only

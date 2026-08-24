@@ -26,11 +26,16 @@ pub(super) async fn insert_stored_workflow_slice_rows(
     )
     .await?;
     for envelope in &workflow_slice.encrypted_facts {
-        insert_encrypted_fact_row(
+        let row = fen_store_postgres::EncryptedFactPostgresRow::try_from_envelope_in_family::<
+            IdentityPayloadFamily,
+        >(envelope)
+        .map_err(fen_store_postgres_error)?;
+        fen_store_postgres::insert_encrypted_fact_row(
             transaction,
-            &PostgresEncryptedFactRow::try_from_envelope(envelope)?,
+            &row,
         )
-        .await?;
+        .await
+        .map_err(fen_store_postgres_error)?;
     }
     for membership in &workflow_slice.memberships {
         insert_episode_membership_row(
@@ -67,11 +72,16 @@ pub(super) async fn insert_stored_episode_composition_rows(
         )
         .await?;
         for envelope in &child_slice.encrypted_facts {
-            insert_encrypted_fact_row(
+            let row = fen_store_postgres::EncryptedFactPostgresRow::try_from_envelope_in_family::<
+                IdentityPayloadFamily,
+            >(envelope)
+            .map_err(fen_store_postgres_error)?;
+            fen_store_postgres::insert_encrypted_fact_row(
                 transaction,
-                &PostgresEncryptedFactRow::try_from_envelope(envelope)?,
+                &row,
             )
-            .await?;
+            .await
+            .map_err(fen_store_postgres_error)?;
         }
         for membership in &child_slice.memberships {
             insert_episode_membership_row(

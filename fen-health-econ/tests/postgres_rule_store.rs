@@ -85,7 +85,7 @@ fn postgres_rule_labels_are_pinned_and_match_the_identity_labels() {
 mod live {
     use super::*;
     use fen_health_econ::PostgresReconciliationRuleStore;
-    use identity_model::SqlxPostgresEncryptedFactRepository;
+    use fen_store_postgres::SqlxPostgresEnvelopeStore;
 
     const POSTGRES_URL_ENV: &str = "IDENTITY_MODEL_POSTGRES_URL";
 
@@ -109,16 +109,18 @@ mod live {
         };
 
         sqlx::test_block_on(async {
-            // Migrations run through the shared identity migration registry,
-            // which now carries 0006.
-            let repository = SqlxPostgresEncryptedFactRepository::connect(&database_url)
+            let repository = SqlxPostgresEnvelopeStore::connect(&database_url)
                 .await
                 .expect("live PostgreSQL repository should connect");
             repository
-                .run_migration()
+                .run_migrations()
                 .await
                 .expect("migration should run against live PostgreSQL");
             let store = PostgresReconciliationRuleStore::from_pool(repository.pool().clone());
+            store
+                .run_migration()
+                .await
+                .expect("health-economic rule migration should run");
 
             let suffix = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

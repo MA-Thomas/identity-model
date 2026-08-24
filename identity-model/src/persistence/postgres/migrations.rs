@@ -1,5 +1,9 @@
+#[cfg(not(feature = "postgres-adapter"))]
 pub const IDENTITY_ENCRYPTED_FACTS_MIGRATION_SQL: &str =
     include_str!("../../../migrations/0001_identity_encrypted_facts.sql");
+#[cfg(feature = "postgres-adapter")]
+pub const IDENTITY_ENCRYPTED_FACTS_MIGRATION_SQL: &str =
+    fen_store_postgres::FEN_ENCRYPTED_FACTS_MIGRATION_SQL;
 pub const IDENTITY_WORKFLOW_TRANSACTIONS_MIGRATION_SQL: &str =
     include_str!("../../../migrations/0002_identity_workflow_transactions.sql");
 pub const IDENTITY_APP_ATTEST_KEY_STATE_MIGRATION_SQL: &str =

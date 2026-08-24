@@ -1,0 +1,12 @@
+[package]
+name = "fen-store"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+production-crypto = ["dep:ring"]
+
+[dependencies]
+fen-core = { path = "../fen-core" }
+ring = { version = "0.17.14", optional = true }

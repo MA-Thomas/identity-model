@@ -1,12 +1,12 @@
 //! PostgreSQL label wiring for the health-economic family.
 //!
-//! The identity crate's envelope table is payload-agnostic; what this file
+//! The shared envelope table is payload-agnostic; what this file
 //! pins is the family-owned part of the durable contract:
 //!
 //! - the `health_econ.*` label strings are frozen (they land in stored rows
 //!   and in the authenticated associated data, so they can never change once
 //!   a production row exists),
-//! - every label round-trips through the shared `PostgresEncryptedFactRow`
+//! - every label round-trips through the shared `EncryptedFactPostgresRow`
 //!   mapping via the family-generic conversions,
 //! - family scoping is real: a row carrying another family's label is a hard
 //!   `UnknownPayloadType` error for this family (query-level scoping is what
@@ -16,11 +16,12 @@
 //!   replay seeing only its own rows.
 
 use fen_health_econ::{HealthEconFactPayloadType, HealthEconPayloadFamily};
-use identity_model::{
-    FactEncryptionMetadata, FactId, FactPayloadType, FactStatus, IdentityPayloadFamily,
-    PersistenceTransactionId, PolicyRef, PostgresAdapterError, PostgresEncryptedFactRow,
-    StoredEncryptedFactEnvelope, SubjectId, TemporalAnchor, Timestamp,
+use fen_core::{FactId, FactStatus, PolicyRef, SubjectId, TemporalAnchor, Timestamp};
+use fen_store::{
+    FactEncryptionMetadata, PersistenceTransactionId, StoredEncryptedFactEnvelope,
 };
+use fen_store_postgres::{EncryptedFactPostgresRow, FenStorePostgresError};
+use identity_model::{FactPayloadType, IdentityPayloadFamily};
 
 const KEY_ID: &str = "health-econ-fact-key";
 
@@ -144,7 +145,7 @@ fn postgres_row_round_trips_every_health_econ_label() {
             *payload_type,
         );
 
-        let row = PostgresEncryptedFactRow::try_from_envelope_in_family::<HealthEconPayloadFamily>(
+        let row = EncryptedFactPostgresRow::try_from_envelope_in_family::<HealthEconPayloadFamily>(
             &stored,
         )
         .expect("health-econ envelope should map onto the shared row shape");
@@ -163,7 +164,7 @@ fn postgres_row_round_trips_every_health_econ_label() {
 #[test]
 fn postgres_row_rejects_labels_outside_the_family() {
     let health_econ_row =
-        PostgresEncryptedFactRow::try_from_envelope_in_family::<HealthEconPayloadFamily>(
+        EncryptedFactPostgresRow::try_from_envelope_in_family::<HealthEconPayloadFamily>(
             &envelope(
                 0,
                 "fact-health-econ-cross-family",
@@ -177,13 +178,13 @@ fn postgres_row_rejects_labels_outside_the_family() {
         health_econ_row
             .clone()
             .try_into_envelope_in_family::<IdentityPayloadFamily>(),
-        Err(PostgresAdapterError::UnknownPayloadType(
+        Err(FenStorePostgresError::UnknownPayloadType(
             "health_econ.claim".to_string()
         )),
         "the identity family must not parse health_econ.* rows"
     );
 
-    let identity_row = PostgresEncryptedFactRow::try_from_envelope_in_family::<
+    let identity_row = EncryptedFactPostgresRow::try_from_envelope_in_family::<
         IdentityPayloadFamily,
     >(&envelope(
         1,
@@ -197,7 +198,7 @@ fn postgres_row_rejects_labels_outside_the_family() {
         identity_row
             .clone()
             .try_into_envelope_in_family::<HealthEconPayloadFamily>(),
-        Err(PostgresAdapterError::UnknownPayloadType(
+        Err(FenStorePostgresError::UnknownPayloadType(
             "subject_created".to_string()
         )),
         "the health-econ family must not parse identity rows"
@@ -208,7 +209,7 @@ fn postgres_row_rejects_labels_outside_the_family() {
     assert_eq!(
         corrupt_row
             .try_into_envelope_in_family::<HealthEconPayloadFamily>(),
-        Err(PostgresAdapterError::UnknownPayloadType(
+        Err(FenStorePostgresError::UnknownPayloadType(
             "not_a_label_in_any_family".to_string()
         )),
         "a label outside every family's set stays a hard error, never a skipped row"
@@ -218,7 +219,8 @@ fn postgres_row_rejects_labels_outside_the_family() {
 #[cfg(feature = "postgres-adapter")]
 mod live {
     use super::*;
-    use identity_model::{AppendSequence, SqlxPostgresEncryptedFactRepository};
+    use fen_store::AppendSequence;
+    use fen_store_postgres::SqlxPostgresEnvelopeStore;
 
     const POSTGRES_URL_ENV: &str = "IDENTITY_MODEL_POSTGRES_URL";
 
@@ -252,11 +254,11 @@ mod live {
         };
 
         sqlx::test_block_on(async {
-            let repository = SqlxPostgresEncryptedFactRepository::connect(&database_url)
+            let repository = SqlxPostgresEnvelopeStore::connect(&database_url)
                 .await
                 .expect("live PostgreSQL repository should connect");
             repository
-                .run_migration()
+                .run_migrations()
                 .await
                 .expect("migration should run against live PostgreSQL");
 
@@ -286,7 +288,7 @@ mod live {
             );
 
             repository
-                .append_encrypted_fact(&identity_envelope)
+                .append_encrypted_fact_in_family::<IdentityPayloadFamily>(&identity_envelope)
                 .await
                 .expect("identity fact should append to the shared envelope table");
             repository
@@ -295,7 +297,9 @@ mod live {
                 .expect("health-econ fact should append to the shared envelope table");
 
             let identity_rows = repository
-                .encrypted_facts_for_subject(&SubjectId::new(&subject))
+                .encrypted_facts_for_subject_in_family::<IdentityPayloadFamily>(&SubjectId::new(
+                    &subject,
+                ))
                 .await
                 .expect("identity subject replay should not error on health_econ.* rows");
             assert_eq!(identity_rows, vec![identity_envelope]);

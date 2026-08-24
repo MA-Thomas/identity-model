@@ -1,0 +1,941 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1.2in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{microtype}
+\usepackage{parskip}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{mdframed}
+
+\definecolor{codegray}{RGB}{245, 245, 245}
+\definecolor{codecomment}{RGB}{100, 116, 139}
+\definecolor{codestring}{RGB}{22, 101, 52}
+\definecolor{codenumber}{RGB}{100, 116, 139}
+\definecolor{bordercolor}{RGB}{203, 213, 225}
+\definecolor{accentblue}{RGB}{30, 64, 175}
+\definecolor{warningyellow}{RGB}{254, 243, 199}
+\definecolor{warningborder}{RGB}{217, 119, 6}
+\definecolor{notegreen}{RGB}{220, 252, 231}
+\definecolor{noteborder}{RGB}{22, 101, 52}
+
+\lstdefinelanguage{Rust}{
+  keywords={pub, struct, enum, fn, let, mut, impl, use, self, Self,
+            match, if, else, for, while, return, true, false,
+            Vec, Option, Result, HashMap, HashSet, Some, None, Ok, Err,
+            type, where, trait, as, in, ref, mod, super, Box, Arc,
+            String, bool, u32, u64, f64, usize},
+  keywordstyle=\color{accentblue}\bfseries,
+  comment=[l]{//},
+  commentstyle=\color{codecomment}\itshape,
+  stringstyle=\color{codestring},
+  string=[b]",
+  sensitive=true,
+  morecomment=[s]{/*}{*/},
+}
+
+\lstset{
+  language=Rust,
+  backgroundcolor=\color{codegray},
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  keepspaces=true,
+  showstringspaces=false,
+  frame=single,
+  framerule=0.5pt,
+  rulecolor=\color{bordercolor},
+  xleftmargin=12pt,
+  xrightmargin=12pt,
+  aboveskip=8pt,
+  belowskip=8pt,
+  numbers=left,
+  numberstyle=\tiny\color{codenumber},
+  numbersep=8pt,
+  escapeinside={(*@}{@*)},
+}
+
+\newcommand{\entity}[1]{\texttt{\textbf{#1}}}
+\newcommand{\field}[1]{\texttt{#1}}
+
+\newenvironment{prosbox}{%
+  \begin{mdframed}[backgroundcolor=notegreen,
+    linecolor=noteborder, linewidth=1pt,
+    innertopmargin=8pt, innerbottommargin=8pt,
+    innerleftmargin=10pt, innerrightmargin=10pt]
+  \small
+}{%
+  \end{mdframed}
+}
+
+\newenvironment{consbox}{%
+  \begin{mdframed}[backgroundcolor=warningyellow,
+    linecolor=warningborder, linewidth=1pt,
+    innertopmargin=8pt, innerbottommargin=8pt,
+    innerleftmargin=10pt, innerrightmargin=10pt]
+  \small
+}{%
+  \end{mdframed}
+}
+
+\title{Prescription Modeling in the FEN Schema:\\
+Design Options and Medication Interactions}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Problems with the Current Prescription Payload}
+\label{sec:current-problems}
+
+The current \entity{Prescription} payload in the FEN schema is:
+
+\begin{lstlisting}
+Prescription {
+    medication:    CodedValue,
+    dosage:        Dosage,
+    frequency:     Frequency,     // currently Vec<Duration>
+    period:        Option<TimeInterval>,
+    relevant_note: Option<FactId>,
+}
+\end{lstlisting}
+
+Three issues with this representation motivate the design options
+explored in the rest of this document.
+
+\subsection{Issue 1: \texttt{Frequency} as \texttt{Vec<Duration>}}
+\label{sec:freq}
+
+As currently typed, \field{Frequency} is a \texttt{Vec<Duration>}~---
+a sequence of time gaps between doses. This representation has
+significant limitations.
+
+For a regular schedule, all entries in the vector are identical:
+three gaps of eight hours to express TID, two gaps of twelve hours for
+BID. The repetition carries no additional information. More
+importantly, the representation cannot express:
+
+\begin{itemize}[noitemsep]
+  \item \field{PRN} (as needed)~--- no regular interval exists
+  \item Frequency conditioned on meals, symptoms, or lab values
+    (``take with food,'' ``hold if systolic below 90'')
+  \item Titration schedules (``0.25mg weekly for four weeks,
+    then 0.5mg weekly'')
+  \item Standard named frequencies used universally in clinical
+    practice (QD, BID, TID, QID, QHS)
+\end{itemize}
+
+It is also misaligned with standard medical coding systems that
+already handle this well: FHIR's \texttt{Timing} type, the RxNorm
+term structure, and NCI Thesaurus frequency codes all provide richer,
+standardized representations.
+
+A typed enum addresses these limitations:
+
+\begin{lstlisting}
+pub enum Frequency {
+    // Standard named frequencies
+    QD,         // once daily
+    BID,        // twice daily
+    TID,        // three times daily
+    QID,        // four times daily
+    QHS,        // at bedtime
+    QOD,        // every other day
+    Weekly,
+    BiWeekly,
+    Monthly,
+    // Interval-based for non-standard schedules
+    EveryNHours { n: u32 },
+    EveryNDays  { n: u32 },
+    EveryNWeeks { n: u32 },
+    // Conditional -- no fixed interval
+    PRN { indication: Option<String> },
+    // Complex or titration schedules
+    Complex { description: String, coded: Option<CodedValue> },
+}
+\end{lstlisting}
+
+This change is independent of the lifecycle design options discussed
+in Section~\ref{sec:lifecycle} and applies regardless of which option
+is adopted.
+
+\subsection{Issue 2: Temporal Representation --- \texttt{occurred\_at} and \texttt{period}}
+\label{sec:temporal}
+
+\field{Fact.occurred\_at} is a \field{TemporalAnchor}, which can be
+either a \field{Point(Timestamp)} or a
+\field{Period\{start, end\}}. The \entity{Prescription} payload also
+carries \field{period: Option<TimeInterval>}. This creates two
+overlapping temporal fields with no clear contract for what each means
+or which takes precedence.
+
+For discrete events~--- lab results, imaging results, encounters~---
+\field{occurred\_at} is unambiguous. A lab result happened at a point;
+an encounter spanned a period. One field covers both cases cleanly.
+
+For prescriptions the situation is more complex:
+
+\paragraph{Under the current single-snapshot model.}
+The prescription is written at a point in time (\field{occurred\_at}
+as \field{Point}), but it remains active for an unknown duration.
+A clinician writes a prescription without knowing when it will be
+stopped or modified. The actual duration of the prescription course is
+therefore an open period~--- start known, end unknown.
+\field{TemporalAnchor::Period} cannot express this: it requires both
+\field{start} and \field{end}. The \field{period} field in the payload
+was presumably added to capture the intended course length (``for 10
+days''), but this is distinct from the actual duration and creates two
+temporal fields that mean different things.
+
+\paragraph{Under the event-per-fact model (Option~A or Option~B).}
+This ambiguity dissolves. Each prescription event is a discrete
+occurrence: the \field{Start} event happened at a point in time (when
+the prescription was written); the \field{Stop} event happened at a
+point in time (when it was discontinued). \field{occurred\_at} is
+always \field{Point} for prescription events. The duration of the
+prescription course is not a property of any single fact~--- it is
+derived by the \field{FoldMedicationState} evaluator as the span
+between the \field{Start} and \field{Stop} events for a given
+\field{medication\_order\_id}. The \field{period} payload field is no
+longer needed and can be removed.
+
+One remaining edge case: a prescription written for a defined finite
+course (``amoxicillin 500mg TID for 10 days'') has a known
+\emph{intended} end date at the time of writing, which differs from
+the actual stop date if the patient stops early or the prescriber
+extends the course. Under the event-per-fact model this is captured as
+an \field{intended\_duration: Option<Duration>} on the \field{Start}
+event, not as a period timestamp:
+
+\begin{lstlisting}
+pub enum PrescriptionEvent {
+    Start {
+        intended_duration: Option<Duration>,  // None for indefinite
+    },
+    Modify  { changed: Vec<PrescriptionField> },
+    Stop    { reason: Option<String> },
+    Hold    { reason: Option<String>,
+              expected_resume: Option<ApproximateDate> },
+    Resume,
+    Renew,
+}
+\end{lstlisting}
+
+\field{intended\_duration} is enrichable by the LLM path from note
+text and is distinct from the actual course duration.
+
+\paragraph{Under Option~D (separate top-level entity).}
+\entity{MedicationOrder} carries \field{started\_at} and
+\field{stopped\_at} directly as first-class fields. The temporal
+ambiguity in the \entity{Fact} model does not arise because the
+medication order is no longer a \entity{Fact}.
+
+\subsection{Issue 3: The Lifecycle Gap}
+\label{sec:lifecycle-gap}
+
+The current payload captures a single snapshot. It does not record
+what changed, why, or how a prescription relates to the one it
+replaced. A dosage reduction, a route change, a temporary hold, and a
+renewal are all clinically distinct events~--- but the current model
+treats them identically: a new \entity{Prescription} fact with
+different field values, with no structured record of the transition.
+
+The options in Section~\ref{sec:lifecycle} address this gap directly.
+
+\section{Prescription Lifecycle Options}
+\label{sec:lifecycle}
+
+\subsection{Option A: Event-per-Fact Within the Existing Enum}
+\label{sec:option-a}
+
+Keep \entity{Prescription} as a \entity{FactPayload} variant, but add
+an explicit event type field that records what kind of prescription
+event this fact represents. Each lifecycle change is a new \entity{Fact}
+with a stable \field{medication\_order\_id} that groups all events for
+the same medication course.
+
+\begin{lstlisting}
+pub enum PrescriptionEvent {
+    Start { intended_duration: Option<Duration> },
+    Modify {
+        changed: Vec<PrescriptionField>,
+    },
+    Stop {
+        reason: Option<String>,
+    },
+    Hold {
+        reason:           Option<String>,
+        expected_resume:  Option<ApproximateDate>,
+    },
+    Resume,
+    Renew,
+}
+
+pub enum PrescriptionField {
+    Dosage, Frequency, Route,
+}
+
+Prescription {
+    medication:           CodedValue,
+    medication_order_id:  OrderGroupId,
+    event:                PrescriptionEvent,
+    dosage:               Dosage,
+    frequency:            Frequency,
+    route:                Option<String>,
+    rationale:            Option<String>,
+    relevant_note:        Option<FactId>,
+}
+\end{lstlisting}
+
+The \field{medication\_order\_id} is stable across all prescription
+events for a single medication course, providing a direct grouping key
+without requiring chain traversal. The \field{period} payload field is
+removed: course duration is derived from the \field{Start} and
+\field{Stop} events. The \field{intended\_duration} on \field{Start}
+handles finite prescribed courses.
+
+\paragraph{Example.}
+
+\begin{lstlisting}
+// Initial prescription (2022)
+Fact {
+    id: FactId("f-met-001"),
+    occurred_at: TemporalAnchor::Point(Timestamp("2022-03-01")),
+    payload: Prescription {
+        medication:          CodedValue { system: RxNorm, code: "860975",
+                                         display: "Metformin 1000mg" },
+        medication_order_id: OrderGroupId("mo-metformin-chen"),
+        event: PrescriptionEvent::Start {
+            intended_duration: None,  // indefinite
+        },
+        dosage:       Dosage { amount: 1000.0, unit: "mg" },
+        frequency:    Frequency::BID,
+        rationale:    None,
+        relevant_note: None,
+    },
+    ..
+}
+
+// Dose reduction (2026-01-15)
+Fact {
+    id: FactId("f-met-002"),
+    occurred_at: TemporalAnchor::Point(Timestamp("2026-01-15")),
+    payload: Prescription {
+        medication:          CodedValue { system: RxNorm, code: "860975",
+                                         display: "Metformin 500mg" },
+        medication_order_id: OrderGroupId("mo-metformin-chen"),
+        event: PrescriptionEvent::Modify {
+            changed: vec![PrescriptionField::Dosage,
+                          PrescriptionField::Frequency],
+        },
+        dosage:       Dosage { amount: 500.0, unit: "mg" },
+        frequency:    Frequency::QD,
+        rationale:    Some("Dose reduced due to declining renal \
+                            function, eGFR approximately 38"),
+        relevant_note: Some(FactId("f-note-patel-20260115")),
+    },
+    ..
+}
+\end{lstlisting}
+
+\begin{prosbox}
+\textbf{Pros.}
+\begin{itemize}[noitemsep]
+  \item Stays within the \entity{Fact} enum --- each event is genuinely
+    a discrete ground truth event from Epic
+  \item \field{medication\_order\_id} provides a direct grouping key;
+    no chain traversal needed
+  \item \field{FoldMedicationState} evaluator processes the ordered
+    list of events for a course to compute current active medications
+  \item Deterministic path maps cleanly: Epic's order modification
+    events have explicit modification type codes that map directly to
+    \field{PrescriptionEvent} variants
+  \item \field{occurred\_at} is always \field{Point}~--- the temporal
+    ambiguity of the current model is resolved
+  \item \field{period} payload field is no longer needed
+  \item Task~0 note linking and Task~1 enrichment apply naturally
+\end{itemize}
+\end{prosbox}
+
+\begin{consbox}
+\textbf{Cons.}
+\begin{itemize}[noitemsep]
+  \item Querying the current dose requires selecting the most recent
+    prescription event for the course, not reading a single record
+  \item The \field{changed} field in \field{Modify} is informational
+    but not enforced: the full dosage/frequency must still be repeated
+    even when only one changed
+  \item \field{medication\_order\_id} is a new identifier type not
+    in the original schema; it must be assigned and kept stable across
+    encounters at deterministic uplift time
+\end{itemize}
+\end{consbox}
+
+\subsection{Option B: Separate PrescriptionOrder and PrescriptionEvent Variants}
+\label{sec:option-b}
+
+Split into two distinct \entity{FactPayload} variants.
+\entity{PrescriptionOrder} captures the initial order as written.
+\entity{PrescriptionEvent} captures each discrete lifecycle change,
+referencing the order it modifies. Only the fields that actually
+changed are populated on the event.
+
+\begin{lstlisting}
+// The initial order -- written once
+PrescriptionOrder {
+    medication:          CodedValue,
+    dosage:              Dosage,
+    frequency:           Frequency,
+    route:               Option<String>,
+    intended_duration:   Option<Duration>,
+    relevant_note:       Option<FactId>,
+}
+
+// Each lifecycle change -- carries only what changed
+PrescriptionEvent {
+    order_fact_id:  FactId,
+    event_type:     PrescriptionEventType,
+    new_dosage:     Option<Dosage>,
+    new_frequency:  Option<Frequency>,
+    new_route:      Option<String>,
+    reason:         Option<String>,
+    relevant_note:  Option<FactId>,
+}
+
+pub enum PrescriptionEventType {
+    DosageChange,
+    FrequencyChange,
+    RouteChange,
+    Stop,
+    Hold { expected_resume: Option<ApproximateDate> },
+    Renew,
+    Resume,
+}
+\end{lstlisting}
+
+\begin{prosbox}
+\textbf{Pros.}
+\begin{itemize}[noitemsep]
+  \item Clean separation: the order is the standing record; events are
+    mutations of it
+  \item \entity{PrescriptionEvent} carries only fields that changed~---
+    no repetition of unchanged dosage or frequency
+  \item Querying the event history for a medication is a direct lookup
+    by \field{order\_fact\_id}
+  \item \field{occurred\_at} is always \field{Point} on both fact types
+\end{itemize}
+\end{prosbox}
+
+\begin{consbox}
+\textbf{Cons.}
+\begin{itemize}[noitemsep]
+  \item \field{FoldMedicationState} must join across two fact types to
+    compute current state, rather than processing a uniform event stream
+  \item The \entity{PrescriptionOrder} fact has an unusual lifecycle:
+    it is never \field{Superseded} in the traditional sense; its
+    evolution is expressed entirely through events
+  \item More complex deterministic uplift: Epic's data must be mapped
+    to a two-type structure rather than a single event stream
+\end{itemize}
+\end{consbox}
+
+\subsection{Option C: Reuse the Superseded Chain}
+\label{sec:option-c}
+
+Do not add an event type. Each prescription change creates a new
+\entity{Prescription} fact with the updated fields, and the prior
+prescription receives \field{FactStatus::Superseded\{reason:
+ClinicalRefinement\}}.
+
+\begin{lstlisting}
+Prescription {
+    medication:    CodedValue,
+    dosage:        Dosage,
+    frequency:     Frequency,
+    route:         Option<String>,
+    stop_reason:   Option<String>,
+    relevant_note: Option<FactId>,
+}
+\end{lstlisting}
+
+\begin{prosbox}
+\textbf{Pros.}
+\begin{itemize}[noitemsep]
+  \item Simplest representation --- no new fields or types
+  \item Reuses existing \field{FactStatus} machinery
+  \item Current active medication query: find \field{Active}
+    prescription facts for this subject
+\end{itemize}
+\end{prosbox}
+
+\begin{consbox}
+\textbf{Cons.}
+\begin{itemize}[noitemsep]
+  \item \textbf{Semantic conflation.} \field{Superseded} was designed
+    for AI-enrichment and clinical refinement of the \emph{same event}.
+    A dosage change is a new clinical action, not a refinement of
+    a prior fact. Using \field{Superseded} for prescription lifecycle
+    changes corrupts its semantics and makes it impossible to
+    distinguish AI enrichment supersessions from clinical modification
+    supersessions.
+  \item No event type information: a dosage change, a route change,
+    and a renewal are indistinguishable without comparing field values
+    across versions
+  \item The reason for a change has no natural home
+  \item The temporal ambiguity of the current model is not resolved:
+    \field{occurred\_at} would still need to represent an open period
+    for the active prescription
+\end{itemize}
+\end{consbox}
+
+\subsection{Option D: Prescription as a Separate Top-Level Entity}
+\label{sec:option-d}
+
+Promote \entity{MedicationOrder} out of the \entity{Fact} enum
+entirely, making it a first-class entity analogous to
+\entity{ProblemEpisode}. Prescription lifecycle events become a
+timeline on the \entity{MedicationOrder}.
+
+\begin{lstlisting}
+pub struct MedicationOrder {
+    pub id:           MedicationOrderId,
+    pub subject_id:   SubjectId,
+    pub medication:   CodedValue,
+    pub status:       MedicationOrderStatus,
+    pub started_at:   Timestamp,
+    pub stopped_at:   Option<Timestamp>,  // None while active
+    pub authored_by:  Author,
+    pub provenance:   Provenance,
+}
+
+pub enum MedicationOrderStatus {
+    Active,
+    OnHold,
+    Stopped  { reason: Option<String> },
+    Completed,
+}
+
+pub struct MedicationOrderEvent {
+    pub id:            EventId,
+    pub order_id:      MedicationOrderId,
+    pub occurred_at:   Timestamp,
+    pub event_type:    MedicationOrderEventType,
+    pub new_dosage:    Option<Dosage>,
+    pub new_frequency: Option<Frequency>,
+    pub reason:        Option<String>,
+    pub provenance:    Provenance,
+}
+
+pub enum MedicationOrderEventType {
+    Start, DosageChange, FrequencyChange, RouteChange,
+    Hold, Resume, Stop, Renew,
+}
+\end{lstlisting}
+
+The temporal ambiguity does not arise under this model: the medication
+order carries \field{started\_at} and \field{stopped\_at} as
+first-class fields. An active medication order has
+\field{stopped\_at: None}, which is a natural representation of an
+open-ended course with no sentinel value required.
+
+\begin{prosbox}
+\textbf{Pros.}
+\begin{itemize}[noitemsep]
+  \item Cleanest semantic model: a medication order is more like an
+    episode (a persistent evolving object) than a lab result (a point
+    observation)
+  \item Status and history are first-class properties; current
+    medication query is \field{MedicationOrder} where
+    \field{status == Active}
+  \item \field{stopped\_at: Option<Timestamp>} naturally represents
+    an open-ended course without sentinel values
+  \item Enables \entity{MedicationRelation} as a typed edge between
+    medication orders (see Section~\ref{sec:interactions})
+  \item Aligns with FHIR's \texttt{MedicationRequest} model
+\end{itemize}
+\end{prosbox}
+
+\begin{consbox}
+\textbf{Cons.}
+\begin{itemize}[noitemsep]
+  \item Breaks the \entity{Fact} enum's guarantee. Prescription acts
+    (written, modified, stopped) are discrete ground truth events from
+    Epic; promoting \entity{MedicationOrder} to a separate entity
+    makes it a derived summary rather than a raw observation.
+  \item Introduces a fourth top-level layer: Facts, Episodes,
+    Narratives, and MedicationOrders. Every part of the system~---
+    query engine, security model, read models~--- must learn about a
+    new entity type.
+  \item \entity{EpisodeMembership} currently links \entity{Fact}
+    records to episodes. Medication orders would need their own
+    membership mechanism, or the membership model must be generalized.
+  \item The \field{Authored} and \field{Temporal} traits apply less
+    uniformly across the schema.
+\end{itemize}
+\end{consbox}
+
+\section{Other ``Dynamic'' Fact Types}
+\label{sec:dynamic}
+
+The prescription discussion raises a broader question: which other
+\entity{FactPayload} variants share this ``dynamic'' character?
+
+\paragraph{Coverage.}
+A patient enrolls in a plan, changes plans, has a gap, and re-enrolls.
+The current \entity{Coverage} payload captures a single enrollment
+period. The same event-type modeling applies: each enrollment, plan
+change, or termination is a separate fact with an event type and a
+\field{coverage\_group\_id} to link events for the same coverage
+relationship.
+
+\begin{lstlisting}
+Coverage {
+    payer:              String,
+    plan:               String,
+    coverage_group_id:  CoverageGroupId,
+    event:              CoverageEvent,   // Enroll, PlanChange,
+                                         // Terminate, Renew
+    member_id:          String,
+    coverage_type:      CoverageType,
+}
+\end{lstlisting}
+
+Note that \field{period} is removed here too: the coverage period
+is derived from the \field{Enroll} and \field{Terminate} events
+for a given \field{coverage\_group\_id}, mirroring the prescription
+approach.
+
+\paragraph{PreAuthRequest and PreAuthDecision.}
+These already model part of a lifecycle (request then decision), but
+the lifecycle continues: denial is appealed, approval is modified,
+authorization expires and requires renewal. The \entity{Appeal} variant
+handles some of this, but there is no \field{authorization\_group\_id}
+tying the whole lifecycle together. Adding one would allow ``show me
+the full authorization history for this procedure request'' as a direct
+lookup.
+
+\paragraph{Diagnosis.}
+Certainty changes (working $\to$ confirmed $\to$ ruled out) are
+enrichments on the same diagnostic assertion, handled by the LLM
+enrichment path populating \field{certainty}. A new diagnostic
+assertion superseding a prior one (reclassifying a condition,
+correcting a misdiagnosis) is genuinely a new event, handled correctly
+by \field{FactStatus::Superseded\{reason: ClinicalRefinement\}}.
+Diagnosis does not need event-type modeling.
+
+\textcolor{blue}{We are removing certainty modeling / tracking from Diagnosis.}
+
+\section{Medication Interactions}
+\label{sec:interactions}
+
+\subsection{What Is Currently Missing}
+
+Medication interactions are not modeled anywhere in the current schema.
+They appear only as:
+
+\begin{itemize}[noitemsep]
+  \item \field{DecisionPoint.rationale}~--- free text, not queryable
+  \item \field{Alternative}~--- captures drugs not chosen, not the
+    relationship between drugs that were chosen together
+  \item \entity{EpisodeRelation}~--- captures problem-to-problem
+    relationships but not medication-to-medication relationships
+\end{itemize}
+
+Cohort queries like ``show me all patients on a counter-medication
+for a drug they are currently taking'' are not answerable from
+structured data.
+
+\subsection{Taxonomy of Medication Relationships}
+
+``Interaction'' covers several clinically distinct concepts:
+
+\begin{enumerate}[noitemsep]
+  \item \textbf{Contraindication / conflict.} Drug A and Drug B should
+    not be taken together; a conscious override was made and documented.
+  \item \textbf{Counter-medication.} Drug B is prescribed to manage a
+    side effect of Drug A. Proton pump inhibitor alongside NSAIDs;
+    semaglutide for renal protection alongside metformin.
+  \item \textbf{Synergistic / joint regimen.} Drugs A and B are
+    intentionally prescribed together because they work better in
+    combination.
+  \item \textbf{Dose-modifying interaction.} Drug A changes the
+    metabolism of Drug B, requiring a dose adjustment (e.g.\ warfarin
+    and many co-medications).
+  \item \textbf{Causal chain.} Drug A causes a condition that requires
+    Drug B. NSAIDs $\to$ GI damage $\to$ omeprazole.
+  \item \textbf{Sequential / superseding.} Drug B replaces Drug A
+    because A was ineffective, caused intolerable side effects, or the
+    clinical picture changed.
+\end{enumerate}
+
+\subsection{Option I: MedicationRelation as a Standalone Struct}
+\label{sec:interaction-option-i}
+
+A typed edge between medication orders, paralleling how
+\entity{EpisodeRelation} works between \entity{ProblemEpisode} records.
+Most natural under Option~D where the edge links
+\entity{MedicationOrder} records; possible but more awkward under
+Options~A or~B where it would link \entity{FactId} values representing
+prescription events rather than medication courses.
+
+\begin{lstlisting}
+pub struct MedicationRelation {
+    pub id:               RelationId,
+    pub source_order_id:  MedicationOrderId,
+    pub target_order_id:  MedicationOrderId,
+    pub relation_type:    MedicationRelationType,
+    pub asserted_by:      Author,
+    pub asserted_at:      Timestamp,
+    pub provenance:       Provenance,
+}
+
+pub enum MedicationRelationType {
+    CounterMedication {
+        managed_effect: Option<CodedValue>,
+    },
+    CoPrescribed {
+        rationale: Option<String>,
+    },
+    Supersedes {
+        reason: MedicationSupersessionReason,
+    },
+    DoseModifying {
+        direction: DoseAdjustmentDirection,
+    },
+    ContraindicationOverride {
+        clinical_justification: Option<String>,
+    },
+    CausedNeedFor,
+}
+
+pub enum MedicationSupersessionReason {
+    Ineffective,
+    SideEffect { effect: Option<CodedValue> },
+    ClinicalProgressionChange,
+    PatientPreference,
+    Other,
+}
+
+pub enum DoseAdjustmentDirection { Increase, Decrease }
+\end{lstlisting}
+
+\paragraph{Example --- Margaret's medications.}
+
+\begin{lstlisting}
+MedicationRelation {
+    source_order_id: MedicationOrderId("mo-semaglutide"),
+    target_order_id: MedicationOrderId("mo-metformin"),
+    relation_type: MedicationRelationType::CoPrescribed {
+        rationale: Some("Added for glycemic control and renal \
+                         protection alongside reduced metformin"),
+    },
+    asserted_by: Author { author_type: AuthorType::AiAssisted, .. },
+    ..
+}
+\end{lstlisting}
+
+\begin{prosbox}
+\textbf{Pros.}
+\begin{itemize}[noitemsep]
+  \item Fully queryable as structured data
+  \item Authored, provenance-bearing, and contestable
+  \item Can be produced by the LLM path from note text or by a
+    drug-drug interaction knowledge base at prescription time
+\end{itemize}
+\end{prosbox}
+
+\begin{consbox}
+\textbf{Cons.}
+\begin{itemize}[noitemsep]
+  \item Most natural under Option~D; linking \entity{FactId} values
+    under Options~A or~B is semantically awkward (edge between events
+    rather than courses)
+  \item Interaction data not stored in structured form in Epic; must
+    be asserted by LLM or knowledge base
+  \item Adds a third parallel edge type alongside \entity{EpisodeRelation}
+    and \entity{NarrativeRelation}
+\end{itemize}
+\end{consbox}
+
+\subsection{Option II: Encode Interactions Through FactRole on EpisodeMembership}
+\label{sec:interaction-option-ii}
+
+Extend \field{FactRole} with interaction-aware roles. The relationship
+between two medications is implicit in the roles they play within the
+same episode.
+
+\begin{lstlisting}
+pub enum FactRole {
+    TriggeringSymptom,
+    DiagnosticTest,
+    Treatment,
+    OutcomeMeasure,
+    Monitoring,
+    Complication,
+    Referral,
+    Administrative,
+    InsuranceAction,
+    CounterMedication,
+    CoPrescribed,
+    Other,
+}
+\end{lstlisting}
+
+\paragraph{Example.} Naproxen causes GI symptoms; omeprazole manages them.
+
+\begin{lstlisting}
+EpisodeMembership { fact_id: f-naproxen,
+                    episode_id: ep-arthritis,
+                    role: FactRole::Treatment, .. }
+EpisodeMembership { fact_id: f-naproxen,
+                    episode_id: ep-gi-symptoms,
+                    role: FactRole::TriggeringSymptom, .. }
+EpisodeMembership { fact_id: f-omeprazole,
+                    episode_id: ep-gi-symptoms,
+                    role: FactRole::CounterMedication, .. }
+\end{lstlisting}
+
+The relationship between naproxen and omeprazole is implicit via the
+shared episode, not a direct typed edge.
+
+\begin{prosbox}
+\textbf{Pros.}
+\begin{itemize}[noitemsep]
+  \item No new entity types or relation structs
+  \item Small, backward-compatible \field{FactRole} additions
+  \item Consistent with the existing episode membership mechanism
+\end{itemize}
+\end{prosbox}
+
+\begin{consbox}
+\textbf{Cons.}
+\begin{itemize}[noitemsep]
+  \item Relationship between medications is implicit, not queryable
+    directly (``what medication is omeprazole countering?'' requires
+    joining across episode memberships)
+  \item Conflates the role within an episode with the relationship
+    between medications
+  \item Cannot express dose-modifying interactions or contraindication
+    overrides
+  \item Cross-episode interactions are particularly hard to represent
+\end{itemize}
+\end{consbox}
+
+\subsection{Option III: Structured MedicationDecisionContext on DecisionPoint}
+\label{sec:interaction-option-iii}
+
+Add a typed interaction record to \entity{DecisionPoint}.
+
+\begin{lstlisting}
+pub struct MedicationDecisionContext {
+    pub interactions_considered: Vec<MedicationInteractionRecord>,
+}
+
+pub struct MedicationInteractionRecord {
+    pub interaction_type:  MedicationInteractionType,
+    pub involved_fact_ids: Vec<FactId>,
+    pub clinical_note:     Option<String>,
+}
+
+pub enum MedicationInteractionType {
+    SideEffectManaged,
+    ContraindicationOverridden,
+    DoseAdjustedDueTo,
+    CombinationIntentional,
+    Replaced,
+}
+\end{lstlisting}
+
+\begin{prosbox}
+\textbf{Pros.}
+\begin{itemize}[noitemsep]
+  \item Keeps interaction reasoning in the clinical interpretation layer
+    where it originates
+  \item No new entity types
+  \item Authored by a clinician confirming a narrative draft
+\end{itemize}
+\end{prosbox}
+
+\begin{consbox}
+\textbf{Cons.}
+\begin{itemize}[noitemsep]
+  \item Only captures explicitly documented interactions
+  \item Nested inside \entity{Narrative} $\to$ \entity{DecisionPoint};
+    cross-patient queries require traversing the narrative layer
+  \item Per-episode scope; cross-episode interactions are hard to
+    represent
+\end{itemize}
+\end{consbox}
+
+\subsection{Comparing the Interaction Options}
+
+The options serve different purposes and are not mutually exclusive.
+
+Option~I makes interactions structurally queryable: ``show me all
+patients on a counter-medication for metformin'' is a direct lookup.
+
+Option~II is the lightest change and provides implicit interaction
+signals via episode co-membership. It works for same-episode
+interactions but breaks down for cross-episode interactions and cannot
+express dose-modifying or contraindication override scenarios.
+
+Option~III keeps interaction reasoning in the narrative layer, authored
+by clinicians. It is not queryable across patients without traversing
+narratives.
+
+Options~I and~III address different concerns~--- structured
+queryability vs.\ authored clinical reasoning~--- and can coexist in
+the schema without conflict.
+
+\section{The Central Question: Should Prescription Separate?}
+\label{sec:separation}
+
+The lifecycle and interaction questions are connected. The choice of
+lifecycle model affects what medication interaction modeling is
+possible.
+
+Under Options~A or~B, a \entity{MedicationRelation} would link
+\entity{FactId} values representing prescription \emph{events}. The
+clinically meaningful relationship is between the metformin
+\emph{course}~--- which may have had multiple dosage modifications
+over years~--- and the semaglutide course, not between any specific
+prescription event for either.
+
+Under Option~D, \entity{MedicationRelation} links
+\entity{MedicationOrder} records directly, which maps naturally to
+how clinicians think about drug interactions. The prescription events
+become a timeline on the \entity{MedicationOrder}, analogous to how
+\entity{EpisodeMembership} events are a timeline on
+\entity{ProblemEpisode}.
+
+\begin{center}
+\renewcommand{\arraystretch}{1.4}
+\begin{tabular}{p{4.0cm} p{4.0cm} p{4.0cm}}
+\toprule
+\textbf{Concern} & \textbf{Options A/B (within Fact)} &
+  \textbf{Option D (separate entity)} \\
+\midrule
+Schema complexity      & Low                    & High \\
+Semantic correctness   & Good                   & Best \\
+Temporal model         & Point per event        & \field{started\_at} / \field{stopped\_at} \\
+Open-ended courses     & \field{intended\_duration} on Start & \field{stopped\_at: None} \\
+Interaction modeling   & Awkward (event to event) & Natural (order to order) \\
+Current med query      & Requires event scan    & Direct status lookup \\
+FHIR alignment         & Partial                & Strong \\
+Migration path         & Well-defined           & N/A \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+One practical consideration: if Option~A is adopted first, migration
+to Option~D is well-defined. \entity{MedicationOrder} is essentially
+a materialized view of the Option~A event stream, so no clinical data
+is lost in the transition. The \field{medication\_order\_id} introduced
+in Option~A becomes the primary key of the \entity{MedicationOrder}
+entity under Option~D.
+
+
+\end{document}

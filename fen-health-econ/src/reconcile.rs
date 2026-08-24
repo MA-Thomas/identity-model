@@ -24,8 +24,8 @@
 //! engine cannot compare honestly produces no finding — conservative by
 //! construction.
 
-use identity_model::time::seconds_between;
-use identity_model::{CodingSystem, ExternalRef, FactStatus, SubjectId, Timestamp};
+use fen_core::time::seconds_between;
+use fen_core::{CodingSystem, ExternalRef, FactStatus, SubjectId, Timestamp};
 
 use crate::rules::{ActiveReconciliationRule, ReconciliationRuleDefinition};
 use crate::schema::{

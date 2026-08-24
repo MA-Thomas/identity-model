@@ -16,8 +16,8 @@
 //! parameters are normalized columns, so the reviewable definition
 //! reconstructs without parsing rendered output.
 
-use identity_model::time::timestamp_in_closed_interval;
-use identity_model::{Author, AuthorId, AuthorType, TimeInterval, Timestamp};
+use fen_core::time::timestamp_in_closed_interval;
+use fen_core::{Author, AuthorId, AuthorType, TimeInterval, Timestamp};
 use sqlx::{postgres::PgPoolOptions, postgres::PgRow, PgPool, Row};
 
 use crate::rules::{
@@ -25,6 +25,9 @@ use crate::rules::{
     RuleArtifactStatus, RuleReview, RuleStoreError,
 };
 use crate::schema::{Money, RuleArtifactRef};
+
+pub const HEALTH_ECON_RECONCILIATION_RULES_MIGRATION_SQL: &str =
+    include_str!("../migrations/0001_reconciliation_rule_artifacts.sql");
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PostgresRuleStoreError {
@@ -126,6 +129,14 @@ impl PostgresReconciliationRuleStore {
 
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    pub async fn run_migration(&self) -> Result<(), PostgresRuleStoreError> {
+        sqlx::raw_sql(HEALTH_ECON_RECONCILIATION_RULES_MIGRATION_SQL)
+            .execute(&self.pool)
+            .await
+            .map_err(storage)?;
+        Ok(())
     }
 
     pub async fn insert_rule_artifact(

@@ -17,7 +17,7 @@
 //! re-evaluation; a stored envelope's status is part of its authenticated
 //! associated data and is never mutated in place.
 
-use identity_model::{
+use fen_core::{
     Author, AuthorType, FactId, FactStatus, Provenance, ProvenanceTier, SupersessionReason,
     TemporalAnchor, Timestamp,
 };

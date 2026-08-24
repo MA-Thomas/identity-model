@@ -6,21 +6,23 @@
 //! the old one via `SupersessionReason::RuleReEvaluation`, whose persisted
 //! label is pinned here through the authenticated associated data.
 
+use fen_core::{
+    Author, AuthorType, AuthorizationBasis, ExternalRef, ExternalSystem, FactId, FactStatus,
+    PolicyRef, Provenance, ProvenanceTier, SubjectId, SupersessionReason, TemporalAnchor,
+    Timestamp,
+};
 use fen_health_econ::{
     evaluate_reconciliation_rules, finding_to_inference_fact, re_evaluation_supersession,
     ActiveReconciliationRule, AdjudicationOutcome, AdjudicationPayload, HealthEconFact,
     HealthEconFactPayload, HealthEconFactPayloadType, HealthEconPayloadFamily, Money,
     ProviderBillPayload, ProviderRef, ReconciliationRuleDefinition, RuleArtifactRef,
 };
-use identity_model::{
+use fen_store::{
     canonical_encrypted_fact_associated_data_in_family, encrypt_fact_envelope_in_family,
-    materialize_encrypted_fact_in_family, AccessDecisionResult, Author, AuthorType,
-    AuthorizationBasis, DeterministicTestFactEncryptor, ExternalRef, ExternalSystem,
-    FactDataEncryptionKey, FactEncryptionMetadata, FactId, FactStatus,
-    InMemoryEncryptedFactEnvelopeRepository, InMemoryEncryptedFactPlaintextCodec,
-    PersistenceTransactionId, PolicyEvaluation, PolicyRef, Provenance, ProvenanceTier,
-    RepositoryError, SensitiveAction, StaticFactKeyResolver, StoredEncryptedFactEnvelope,
-    SubjectId, SupersessionReason, TemporalAnchor, Timestamp,
+    materialize_encrypted_fact_in_family, DeterministicTestFactEncryptor, EncryptedFactStoreError,
+    FactDataEncryptionKey, FactEncryptionMetadata, InMemoryEncryptedEnvelopeStore,
+    InMemoryEncryptedFactPlaintextCodec, MaterializationAuthorization, PersistenceTransactionId,
+    StaticFactKeyResolver, StoredEncryptedFactEnvelope,
 };
 
 const KEY_ID: &str = "health-econ-fact-key";
@@ -28,8 +30,7 @@ const SUBJECT: &str = "subject-billing-defense";
 
 type HealthEconEncryptor =
     DeterministicTestFactEncryptor<InMemoryEncryptedFactPlaintextCodec<HealthEconFactPayload>>;
-type HealthEconEnvelopeRepository =
-    InMemoryEncryptedFactEnvelopeRepository<HealthEconFactPayloadType>;
+type HealthEconEnvelopeRepository = InMemoryEncryptedEnvelopeStore<HealthEconFactPayloadType>;
 
 fn encryptor() -> HealthEconEncryptor {
     DeterministicTestFactEncryptor::with_codec(InMemoryEncryptedFactPlaintextCodec::<
@@ -45,14 +46,10 @@ fn encryption(nonce: &str) -> FactEncryptionMetadata {
     FactEncryptionMetadata::deterministic_test(KEY_ID, nonce.as_bytes().to_vec())
 }
 
-fn allowed_policy() -> PolicyEvaluation {
-    PolicyEvaluation {
-        action: SensitiveAction::ViewRecord,
-        decision: AccessDecisionResult::Allowed,
-        reasons: Vec::new(),
-        relied_on_facts: Vec::new(),
-        policy_refs: vec![PolicyRef::new("health-econ-materialization-policy@v1")],
-    }
+fn allowed_policy() -> MaterializationAuthorization {
+    MaterializationAuthorization::authorized(vec![PolicyRef::new(
+        "health-econ-materialization-policy@v1",
+    )])
 }
 
 fn ts(value: &str) -> Timestamp {
@@ -160,7 +157,10 @@ fn encrypt(
 
 #[test]
 fn findings_append_as_inference_facts_and_re_evaluation_dedupes() {
-    let inputs = vec![provider_bill("fact-bill-1", 12_000), adjudication("fact-adj-1", 10_000)];
+    let inputs = vec![
+        provider_bill("fact-bill-1", 12_000),
+        adjudication("fact-adj-1", 10_000),
+    ];
     let as_of = ts("2026-07-08T12:00:00Z");
     let findings = evaluate_reconciliation_rules(&rules(), &inputs, &as_of);
     assert_eq!(findings.len(), 1);
@@ -193,7 +193,7 @@ fn findings_append_as_inference_facts_and_re_evaluation_dedupes() {
         HealthEconFactPayloadType::BillingDiscrepancy
     );
     repository
-        .append_encrypted_fact_envelope(envelope.clone())
+        .append(envelope.clone())
         .expect("first append should succeed");
 
     // Re-evaluate over unchanged inputs: identical finding, identical fact
@@ -204,17 +204,12 @@ fn findings_append_as_inference_facts_and_re_evaluation_dedupes() {
     let re_appended = finding_to_inference_fact(&re_evaluated[0], ts("2026-07-09T12:00:01Z"));
     assert_eq!(re_appended.id, inference_fact.id);
     assert!(matches!(
-        repository.append_encrypted_fact_envelope(encrypt(
-            &re_appended,
-            2,
-            "nonce-finding-2",
-            &encryptor
-        )),
-        Err(RepositoryError::DuplicateFactId)
+        repository.append(encrypt(&re_appended, 2, "nonce-finding-2", &encryptor)),
+        Err(EncryptedFactStoreError::DuplicateFactId)
     ));
 
     // The stored finding materializes back through the policy gate intact.
-    let stored = repository.encrypted_fact_envelopes_for_subject(&SubjectId::new(SUBJECT));
+    let stored = repository.for_subject(&SubjectId::new(SUBJECT));
     assert_eq!(stored.len(), 1);
     let materialized = materialize_encrypted_fact_in_family::<HealthEconPayloadFamily>(
         &stored[0],
@@ -233,18 +228,23 @@ fn corrected_inputs_produce_a_superseding_finding() {
     let mut repository = HealthEconEnvelopeRepository::new();
 
     // First evaluation: the original bill disagrees with the EOB.
-    let original_inputs =
-        vec![provider_bill("fact-bill-1", 12_000), adjudication("fact-adj-1", 10_000)];
+    let original_inputs = vec![
+        provider_bill("fact-bill-1", 12_000),
+        adjudication("fact-adj-1", 10_000),
+    ];
     let original_findings = evaluate_reconciliation_rules(&rules(), &original_inputs, &as_of);
-    let original_fact = finding_to_inference_fact(&original_findings[0], ts("2026-07-08T12:00:01Z"));
+    let original_fact =
+        finding_to_inference_fact(&original_findings[0], ts("2026-07-08T12:00:01Z"));
     repository
-        .append_encrypted_fact_envelope(encrypt(&original_fact, 1, "nonce-original", &encryptor))
+        .append(encrypt(&original_fact, 1, "nonce-original", &encryptor))
         .expect("original finding should append");
 
     // A corrected bill arrives as a new fact (the old bill is superseded in
     // its own right); re-evaluation reads the corrected graph.
-    let corrected_inputs =
-        vec![provider_bill("fact-bill-2", 13_000), adjudication("fact-adj-1", 10_000)];
+    let corrected_inputs = vec![
+        provider_bill("fact-bill-2", 13_000),
+        adjudication("fact-adj-1", 10_000),
+    ];
     let corrected_findings = evaluate_reconciliation_rules(&rules(), &corrected_inputs, &as_of);
     let corrected_fact =
         finding_to_inference_fact(&corrected_findings[0], ts("2026-07-10T12:00:01Z"));
@@ -252,7 +252,7 @@ fn corrected_inputs_produce_a_superseding_finding() {
     // Changed inputs → new identity → a normal append, not a duplicate.
     assert_ne!(corrected_fact.id, original_fact.id);
     repository
-        .append_encrypted_fact_envelope(encrypt(&corrected_fact, 2, "nonce-corrected", &encryptor))
+        .append(encrypt(&corrected_fact, 2, "nonce-corrected", &encryptor))
         .expect("corrected finding should append");
 
     // The old finding is superseded by rule re-evaluation. The status is
@@ -281,11 +281,9 @@ fn corrected_inputs_produce_a_superseding_finding() {
     let mut superseded_fact = original_fact.clone();
     superseded_fact.status = supersession;
     let superseded_envelope = encrypt(&superseded_fact, 3, "nonce-superseded", &encryptor);
-    let associated_data = String::from_utf8(
-        canonical_encrypted_fact_associated_data_in_family::<HealthEconPayloadFamily>(
-            &superseded_envelope,
-        ),
-    )
+    let associated_data = String::from_utf8(canonical_encrypted_fact_associated_data_in_family::<
+        HealthEconPayloadFamily,
+    >(&superseded_envelope))
     .expect("associated data should be utf-8 labels");
     assert!(associated_data.contains("reason=18:rule_re_evaluation"));
     assert!(associated_data.contains("payload_type=31:health_econ.billing_discrepancy"));

@@ -1,23 +1,25 @@
 //! Append/replay health-economic facts through the *existing* in-memory
 //! encrypted facade, proving the health-economic [`PayloadFamily`] reuses the
-//! identity crate's envelope store without a schema fork
+//! shared envelope store without a schema fork
 //! (FEN_HEALTH_ECON_EXTENSIONS.md).
 
+use fen_core::{
+    Author, AuthorType, AuthorizationBasis, CodedValue, CodingSystem, ExternalRef, ExternalSystem,
+    FactId, FactStatus, PolicyRef, Provenance, ProvenanceTier, SubjectId, TemporalAnchor,
+    TimeInterval, Timestamp,
+};
 use fen_health_econ::{
     BillingDiscrepancyPayload, ClaimLineItem, ClaimPayload, ClaimType, DerivedFrom,
     DiscrepancyKind, HealthEconFact, HealthEconFactPayload, HealthEconFactPayloadType,
     HealthEconPayloadFamily, Money, ProviderRef, RecordRequestPayload, RequestedDocument,
     RuleArtifactRef,
 };
-use identity_model::{
+use fen_store::{
     canonical_encrypted_fact_associated_data_in_family, encrypt_fact_envelope_in_family,
     materialize_encrypted_fact_in_family, materialize_encrypted_facts_in_family,
-    AccessDecisionResult, Author, AuthorType, AuthorizationBasis, CodedValue, CodingSystem,
-    DeterministicTestFactEncryptor, ExternalRef, ExternalSystem, FactDataEncryptionKey,
-    FactEncryptionMetadata, FactId, FactMaterializationError, FactStatus,
-    InMemoryEncryptedFactPlaintextCodec, PersistenceTransactionId, PolicyEvaluation, PolicyRef,
-    Provenance, ProvenanceTier, SensitiveAction, StaticFactKeyResolver, SubjectId, TemporalAnchor,
-    TimeInterval, Timestamp,
+    DeterministicTestFactEncryptor, FactDataEncryptionKey, FactEncryptionMetadata,
+    FactMaterializationError, InMemoryEncryptedFactPlaintextCodec, MaterializationAuthorization,
+    PersistenceTransactionId, StaticFactKeyResolver,
 };
 
 const KEY_ID: &str = "health-econ-fact-key";
@@ -44,24 +46,12 @@ fn policy_refs() -> Vec<PolicyRef> {
     vec![PolicyRef::new("health-econ-materialization-policy@v1")]
 }
 
-fn allowed_policy() -> PolicyEvaluation {
-    PolicyEvaluation {
-        action: SensitiveAction::ViewRecord,
-        decision: AccessDecisionResult::Allowed,
-        reasons: Vec::new(),
-        relied_on_facts: Vec::new(),
-        policy_refs: policy_refs(),
-    }
+fn allowed_policy() -> MaterializationAuthorization {
+    MaterializationAuthorization::authorized(policy_refs())
 }
 
-fn denied_policy() -> PolicyEvaluation {
-    PolicyEvaluation {
-        action: SensitiveAction::ViewRecord,
-        decision: AccessDecisionResult::Denied,
-        reasons: Vec::new(),
-        relied_on_facts: Vec::new(),
-        policy_refs: policy_refs(),
-    }
+fn denied_policy() -> MaterializationAuthorization {
+    MaterializationAuthorization::denied(policy_refs())
 }
 
 fn provenance(tier: ProvenanceTier) -> Provenance {
@@ -217,9 +207,9 @@ fn health_econ_claim_round_trips_through_shared_encrypted_facade() {
     .expect("authorized health-econ claim should decrypt");
     assert_eq!(materialized, fact);
 
-    let associated_data = String::from_utf8(
-        canonical_encrypted_fact_associated_data_in_family::<HealthEconPayloadFamily>(&envelope),
-    )
+    let associated_data = String::from_utf8(canonical_encrypted_fact_associated_data_in_family::<
+        HealthEconPayloadFamily,
+    >(&envelope))
     .expect("associated data should be utf-8 labels");
     assert!(associated_data.contains("profile=18:fen-encrypted-fact"));
     assert!(associated_data.contains("payload_type=17:health_econ.claim"));

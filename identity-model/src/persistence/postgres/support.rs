@@ -12,6 +12,49 @@ pub(super) fn sqlx_error(error: sqlx::Error) -> PostgresAdapterError {
 }
 
 #[cfg(feature = "postgres-adapter")]
+pub(super) fn fen_store_postgres_error(
+    error: fen_store_postgres::FenStorePostgresError,
+) -> PostgresAdapterError {
+    use fen_store_postgres::FenStorePostgresError as SharedError;
+
+    match error {
+        SharedError::AppendSequenceOutOfRange => PostgresAdapterError::AppendSequenceOutOfRange,
+        SharedError::NegativeAppendSequence => PostgresAdapterError::NegativeAppendSequence,
+        SharedError::InvalidTemporalAnchor => PostgresAdapterError::InvalidTemporalAnchor,
+        SharedError::UnknownTemporalKind(value) => PostgresAdapterError::UnknownTemporalKind(value),
+        SharedError::UnknownFactStatusKind(value) => {
+            PostgresAdapterError::UnknownFactStatusKind(value)
+        }
+        SharedError::InvalidFactStatusPayload => PostgresAdapterError::InvalidFactStatusPayload,
+        SharedError::UnknownAuthorType(value) => PostgresAdapterError::UnknownAuthorType(value),
+        SharedError::UnknownSupersessionReason(value) => {
+            PostgresAdapterError::UnknownSupersessionReason(value)
+        }
+        SharedError::UnknownPayloadType(value) => PostgresAdapterError::UnknownPayloadType(value),
+        SharedError::UnknownEncryptionAlgorithm(value) => {
+            PostgresAdapterError::UnknownEncryptionAlgorithm(value)
+        }
+        SharedError::UnknownAssociatedDataVersion(value) => {
+            PostgresAdapterError::UnknownAssociatedDataVersion(value)
+        }
+        SharedError::UnknownMaterializationAuditOutcome(value) => {
+            PostgresAdapterError::UnknownMaterializationAuditOutcome(value)
+        }
+        SharedError::UnknownMaterializationError(value) => {
+            PostgresAdapterError::UnknownMaterializationError(value)
+        }
+        SharedError::StatusPayloadJson(value) => PostgresAdapterError::StatusPayloadJson(value),
+        SharedError::Store(EncryptedFactStoreError::DuplicateFactId) => {
+            PostgresAdapterError::Repository(RepositoryError::DuplicateFactId)
+        }
+        SharedError::Store(EncryptedFactStoreError::DuplicateAppendSequence) => {
+            PostgresAdapterError::Repository(RepositoryError::DuplicateAppendSequence)
+        }
+        SharedError::Sqlx(value) => PostgresAdapterError::Sqlx(value),
+    }
+}
+
+#[cfg(feature = "postgres-adapter")]
 pub(super) fn repository_sqlx_error(error: sqlx::Error) -> PostgresAdapterError {
     if let sqlx::Error::Database(database_error) = &error {
         match database_error.constraint() {

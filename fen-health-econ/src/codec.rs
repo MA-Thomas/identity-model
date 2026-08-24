@@ -2,17 +2,15 @@
 //! payload-type label namespace plus the fact/plaintext mapping the shared
 //! encrypted envelope store needs (FEN_HEALTH_ECON_EXTENSIONS.md D).
 //!
-//! No new envelope tables and no schema fork: the identity crate's envelope
+//! No new envelope tables and no schema fork: `fen-store`'s envelope
 //! machinery (`encrypt_fact_envelope_in_family`,
 //! `materialize_encrypted_fact_in_family`, the AAD canonicalization, and the
 //! in-memory codec `InMemoryEncryptedFactPlaintextCodec<HealthEconFactPayload>`)
 //! carries health-economic facts unchanged. The `clinical.*` namespace stays
 //! reserved for the future clinical family.
 
-use identity_model::persistence::{
-    EncryptedFactPlaintextOf, PayloadFamily, StoredEncryptedFactEnvelope,
-};
-use identity_model::{FactId, FactStatus, SubjectId, TemporalAnchor};
+use fen_core::{FactId, FactStatus, SubjectId, TemporalAnchor};
+use fen_store::{EncryptedFactPlaintextOf, PayloadFamily, StoredEncryptedFactEnvelope};
 
 use crate::schema::{HealthEconFact, HealthEconFactPayload};
 
@@ -118,8 +116,7 @@ impl HealthEconFactPayloadType {
 /// The health-economic crate's payload family: [`HealthEconFact`],
 /// [`HealthEconFactPayload`], and the [`HealthEconFactPayloadType`] label
 /// enum. Implements [`PayloadFamily`] so health-economic facts reuse the
-/// identity crate's encrypted envelope store, episodes, memberships, and
-/// policy-gated materialization without a schema fork.
+/// shared encrypted envelope contract without a schema fork.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct HealthEconPayloadFamily;
 

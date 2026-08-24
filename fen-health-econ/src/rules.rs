@@ -18,8 +18,8 @@
 //! place. Changing a rule means inserting a new version, activating it, and
 //! retiring the old one.
 
-use identity_model::time::{timestamp_in_closed_interval, TimestampParseError};
-use identity_model::{Author, TimeInterval, Timestamp};
+use fen_core::time::{timestamp_in_closed_interval, TimestampParseError};
+use fen_core::{Author, TimeInterval, Timestamp};
 
 use crate::schema::{Money, RuleArtifactRef};
 

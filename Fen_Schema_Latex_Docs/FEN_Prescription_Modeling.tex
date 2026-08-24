@@ -1,0 +1,837 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1.2in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{microtype}
+\usepackage{parskip}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{mdframed}
+
+\definecolor{codegray}{RGB}{245, 245, 245}
+\definecolor{codecomment}{RGB}{100, 116, 139}
+\definecolor{codestring}{RGB}{22, 101, 52}
+\definecolor{codenumber}{RGB}{100, 116, 139}
+\definecolor{bordercolor}{RGB}{203, 213, 225}
+\definecolor{accentblue}{RGB}{30, 64, 175}
+\definecolor{warningyellow}{RGB}{254, 243, 199}
+\definecolor{warningborder}{RGB}{217, 119, 6}
+\definecolor{notegreen}{RGB}{220, 252, 231}
+\definecolor{noteborder}{RGB}{22, 101, 52}
+
+\lstdefinelanguage{Rust}{
+  keywords={pub, struct, enum, fn, let, mut, impl, use, self, Self,
+            match, if, else, for, while, return, true, false,
+            Vec, Option, Result, HashMap, HashSet, Some, None, Ok, Err,
+            type, where, trait, as, in, ref, mod, super, Box, Arc,
+            String, bool, u32, u64, f64, usize},
+  keywordstyle=\color{accentblue}\bfseries,
+  comment=[l]{//},
+  commentstyle=\color{codecomment}\itshape,
+  stringstyle=\color{codestring},
+  string=[b]",
+  sensitive=true,
+  morecomment=[s]{/*}{*/},
+}
+
+\lstset{
+  language=Rust,
+  backgroundcolor=\color{codegray},
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  keepspaces=true,
+  showstringspaces=false,
+  frame=single,
+  framerule=0.5pt,
+  rulecolor=\color{bordercolor},
+  xleftmargin=12pt,
+  xrightmargin=12pt,
+  aboveskip=8pt,
+  belowskip=8pt,
+  numbers=left,
+  numberstyle=\tiny\color{codenumber},
+  numbersep=8pt,
+  escapeinside={(*@}{@*)},
+}
+
+\newcommand{\entity}[1]{\texttt{\textbf{#1}}}
+\newcommand{\field}[1]{\texttt{#1}}
+
+\newenvironment{decisionbox}{%
+  \begin{mdframed}[backgroundcolor=notegreen,
+    linecolor=noteborder, linewidth=1pt,
+    innertopmargin=8pt, innerbottommargin=8pt,
+    innerleftmargin=10pt, innerrightmargin=10pt]
+  \small
+}{%
+  \end{mdframed}
+}
+
+\newenvironment{cautionbox}{%
+  \begin{mdframed}[backgroundcolor=warningyellow,
+    linecolor=warningborder, linewidth=1pt,
+    innertopmargin=8pt, innerbottommargin=8pt,
+    innerleftmargin=10pt, innerrightmargin=10pt]
+  \small
+}{%
+  \end{mdframed}
+}
+
+\title{Prescription Modeling in the FEN Schema:\\
+Facts, ProblemEpisodes, and Medication-State Assessment}
+\author{Phoros Engineering}
+\date{August 2026}
+
+\begin{document}
+\maketitle
+
+\section{Status and Adopted Direction}
+
+This document specifies how prescription and medication-order information
+participates in the Facts--Episodes--Narratives (FEN) ontology. It replaces
+the earlier comparison among four mutually exclusive lifecycle options.
+
+\begin{decisionbox}
+\textbf{Adopted direction.}
+
+\begin{enumerate}[noitemsep]
+  \item A medication order and each subsequent lifecycle event are Facts.
+  \item Medication Facts may be grouped through authored
+    \entity{EpisodeMembership} records into a medication-management
+    \entity{ProblemEpisode}.
+  \item The schema does not determine the boundary of that
+    \entity{ProblemEpisode}. The boundary is established by whoever authors
+    the memberships and remains contestable in the ordinary FEN manner.
+  \item Source medication-order identifiers are external references. They
+    may support an author's membership judgment, but they are not FEN course
+    identifiers and do not determine episode identity.
+  \item Current medication state is assessed from applicable Facts. A
+    transient assessment is a projection. If Phoros persists the assessment
+    and takes epistemic responsibility for it, the assessment is a
+    Phoros-authored inference Fact whose assertion method is
+    \field{Inferred} and whose evidence cites its inputs.
+\end{enumerate}
+\end{decisionbox}
+
+No fourth top-level medication entity is introduced. A mutable
+\entity{MedicationOrder} may still be useful as an interoperability resource,
+API representation, or materialized read model, but it is not part of the
+core FEN ontology.
+
+\subsection{Reading the source-to-Fact boundary}
+
+Suppose an EHR export contains a medication order in a PDF or EHI table. The
+received file is preserved outside FEN as an immutable
+\entity{SourceArtifact}, with its bytes held by a \entity{StoredObject}. A
+\entity{SourceCitationRef} identifies the relevant page, region, table row, or
+field. The normalized medication event is a Fact: its
+\field{assertion: AssertionProvenance} records who or what admitted the claim,
+when, and how; its \field{evidence: Vec<EvidenceRef>} cites the source location
+or prior Facts that support it. A source order identifier belongs in
+\field{external\_refs}; it supports correlation, not epistemic justification.
+
+\begin{center}
+\small
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular}{>{\raggedright\arraybackslash}p{4.8cm} >{\raggedright\arraybackslash}p{8.0cm}}
+\toprule
+\textbf{Concern} & \textbf{Representation} \\
+\midrule
+Original medication document or export & \entity{SourceArtifact} $\rightarrow$ \entity{StoredObject} \\
+Exact supporting passage or row & \entity{SourceCitationRef} \\
+Who asserted the normalized event and how & \entity{AssertionProvenance} \\
+Supporting source material or prior Facts & \field{Fact.evidence} \\
+Source order, request, version, or event identity & \field{Fact.external\_refs} \\
+Transient processing or display state & \entity{FactOperational} or projection \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Epistemic Commitments}
+\label{sec:epistemic-commitments}
+
+\subsection{Facts carry assertion metadata and evidence}
+
+A Fact is not guaranteed truth. It is an epistemic record admitted to the
+system with assertion metadata, evidence, a temporal anchor, and status.
+Assertion metadata records who or what asserted the Fact, when, and by which
+method. Evidence records the source citations and prior Facts that support the
+claim. Medication
+Facts may be directly observed, authored by a clinician or patient, reported
+by an institution, extracted from a source document, or inferred by Phoros.
+These distinctions determine how a Fact should be evaluated; they do not
+determine whether it is ontologically a Fact.
+
+Examples include:
+
+\begin{itemize}[noitemsep]
+  \item a clinician authored a medication order;
+  \item an EHR reported that an order was modified or discontinued;
+  \item a pharmacy reported that medication was dispensed;
+  \item a patient stated that they stopped taking a medication;
+  \item Phoros inferred a current medication state or a possible interaction;
+  \item a clinician authored a Note explaining the reason for a change.
+\end{itemize}
+
+A clinician-authored Note is therefore prime Fact material. Its content may be
+challenged, contradicted, refined, or interpreted by other epistemic objects,
+but the event and content of its authorship remain a Fact.
+
+\subsection{ProblemEpisodes are authored problem-oriented groupings}
+
+A \entity{ProblemEpisode} is used when treating a collection of Facts
+separately obscures a problem those Facts address together. A medication
+course can be represented as such a problem-oriented grouping, but the schema
+does not supply an objective course-boundary algorithm.
+
+An author may judge that two renewals belong to one medication-management
+ProblemEpisode, while another author may distinguish them. One source order
+may participate in multiple ProblemEpisodes. Multiple source order identifiers
+may participate in one ProblemEpisode. A medication Fact may initially have
+no Episode membership at all.
+
+All such cases are represented by ordinary \entity{EpisodeMembership}
+assertion metadata, status, and contestability. Membership is not a Fact, so
+its \field{asserted\_by} and \field{asserted\_at} fields remain distinct from
+\field{Fact.assertion}. A source order identifier, shared ingredient code,
+temporal adjacency, or automated correlation result may support a membership
+judgment; none is a schema-level rule that creates the boundary. If membership
+evidence becomes first-class, it must remain distinct from the metadata about
+who authored the membership.
+
+\subsection{Narratives provide higher-order accounts}
+
+A \entity{Narrative} is a higher-order authored account of a ProblemEpisode.
+It is not distinguished from Fact merely because it contains interpretation:
+authored and inferred assertions may also be Facts. Narrative is distinguished
+by its episode-level explanatory and synthesizing role.
+
+For example, a clinician's Note explaining a dose change is a Fact. A later
+longitudinal account explaining how renal function, adverse effects, and
+patient preferences shaped several medication decisions is a Narrative.
+
+\subsection{Projections are not a fourth ontological layer}
+
+Read models, indexes, and transient calculations may be materialized for
+performance or presentation without becoming new FEN entity types. The
+distinction is one of epistemic commitment:
+
+\begin{itemize}[noitemsep]
+  \item A transient calculation used to render a screen is a projection.
+  \item A persisted assertion for which Phoros records authorship and
+    evidence is an inference Fact with \field{AssertionMethod::Inferred}.
+\end{itemize}
+
+\section{Problems with the Prior Prescription Payload}
+\label{sec:current-problems}
+
+The prior payload was approximately:
+
+\begin{lstlisting}
+Prescription {
+    medication:    CodedValue,
+    dosage:        Dosage,
+    frequency:     Frequency,     // previously Vec<Duration>
+    period:        Option<TimeInterval>,
+    relevant_note: Option<FactId>,
+}
+\end{lstlisting}
+
+It has five separable problems.
+
+\subsection{Frequency cannot be represented as \texttt{Vec<Duration>}}
+
+A sequence of time gaps cannot faithfully express common medication
+instructions. It cannot adequately distinguish ``twice daily'' from ``every
+twelve hours,'' or represent PRN use, frequency ranges, day-of-week schedules,
+times of day, relationships to meals, titration stages, conditional holds,
+rates, or maximum doses.
+
+Medication instructions must preserve both structured information and the
+original SIG text. The exact Rust representation can evolve independently of
+the lifecycle decision, but it must support at least:
+
+\begin{itemize}[noitemsep]
+  \item ordered or concurrent instruction stages;
+  \item frequency and frequency ranges over a period;
+  \item days of week, times of day, and event-relative timing;
+  \item PRN indication and other conditions;
+  \item dose, route, method, rate, and maximum-dose constraints;
+  \item intended bounds; and
+  \item original source text and source coding.
+\end{itemize}
+
+A representative internal shape is:
+
+\begin{lstlisting}
+pub struct MedicationInstruction {
+    pub dosage: Dosage,
+    pub timing: MedicationTiming,
+    pub route: Option<CodedValue>,
+    pub method: Option<CodedValue>,
+    pub as_needed_for: Vec<CodedValue>,
+    pub maximum_dose: Option<MaximumDose>,
+    pub original_sig: Option<String>,
+}
+
+pub struct MedicationTiming {
+    pub code: Option<CodedValue>,
+    pub repeat: Option<RepeatPattern>,
+    pub event_offsets: Vec<EventOffset>,
+    pub text: Option<String>,
+}
+\end{lstlisting}
+
+This is a requirements sketch rather than a final medication-timing
+specification.
+
+\subsection{Temporal fields had overlapping meanings}
+
+The former \field{Fact.occurred\_at} and
+\field{Prescription.period} fields did not state whether they meant order
+authorship, intended effectiveness, actual medication use, or the duration of
+a retrospectively grouped course.
+
+The revised contract is:
+
+\begin{itemize}[noitemsep]
+  \item \field{Fact.occurred\_at} records when the epistemic event represented
+    by the Fact occurred or was reported to occur.
+  \item \field{effective\_from} records a source-authored prospective
+    effective date when it differs from the order event.
+  \item \field{intended\_duration} records the stated prospective intent.
+  \item A stop, hold, resume, or modification is represented by another Fact.
+  \item A ProblemEpisode does not acquire a schema-determined interval merely
+    because its medication Facts can be temporally ordered.
+\end{itemize}
+
+An inferred actual duration may be calculated from selected Facts and
+memberships, but it remains an assessment whose result can be ambiguous.
+
+\subsection{The lifecycle event was implicit}
+
+The former payload could show two different medication snapshots but could
+not state whether the difference represented an initial order, correction,
+dose modification, hold, renewal, or discontinuation. Comparing values is not
+a substitute for preserving the event asserted by the source.
+
+\subsection{Fact status was easily confused with medication state}
+
+A later dose change does not make the earlier order cease to have occurred.
+Likewise, discontinuation does not make prior order and modification Facts
+epistemically inactive. Medication lifecycle state and \entity{FactStatus}
+answer different questions and must not share one state machine.
+
+\subsection{One relevant Note reference was too narrow}
+
+A medication assertion may be supported by Notes, laboratory results,
+diagnoses, dispensing records, or Facts from another domain. The singular
+\field{relevant\_note} field is therefore removed. General epistemic support
+belongs in the enclosing Fact's evidence collection. Prior Facts use the
+\field{PriorFact} evidence variant; source passages use \field{Source}. A
+referenced Fact retains its own authorization policy; the reference does not
+grant access to its target.
+
+\section{Adopted Medication Event Fact Model}
+\label{sec:adopted-model}
+
+The adopted design combines the best properties of the earlier event-stream
+and order-plus-delta proposals. Every lifecycle event is a Fact. An initial
+order carries a complete instruction. A modification records what the source
+says changed and, when the source supplies it, the complete resulting
+instruction.
+
+\subsection{Payload family}
+
+Medication payloads belong to the closed clinical Fact payload family. The
+shared FEN ontology does not require one global enum containing identity,
+clinical, and health-economic variants.
+
+\begin{lstlisting}
+pub enum ClinicalFactPayload {
+    // Other closed clinical variants...
+    MedicationOrderEvent(MedicationOrderEventPayload),
+    MedicationCourseAssessment(MedicationCourseAssessmentPayload),
+    // The interaction representation remains deferred.
+}
+
+pub struct MedicationOrderEventPayload {
+    pub medication: CodedValue,
+    pub event: MedicationOrderEvent,
+}
+\end{lstlisting}
+
+The enclosing Fact supplies the common identity, subject, temporal, status,
+assertion, evidence, and external-reference fields. Payload-level Fact IDs are
+retained only where they express medication-specific domain semantics, such as
+the event targeted by a modification.
+
+\subsection{Lifecycle events}
+
+\begin{lstlisting}
+pub enum MedicationOrderEvent {
+    Authored {
+        instruction: MedicationInstruction,
+        intended_duration: Option<Duration>,
+        effective_from: Option<ApproximateDate>,
+    },
+
+    Modified {
+        target_fact_id: Option<FactId>,
+        changes: MedicationInstructionPatch,
+        resulting_instruction: Option<MedicationInstruction>,
+        reason: Option<String>,
+    },
+
+    Held {
+        target_fact_id: Option<FactId>,
+        reason: Option<String>,
+        expected_resume: Option<ApproximateDate>,
+    },
+
+    Resumed {
+        target_fact_id: Option<FactId>,
+    },
+
+    Discontinued {
+        target_fact_id: Option<FactId>,
+        reason: Option<String>,
+    },
+
+    Renewed {
+        prior_order_fact_id: Option<FactId>,
+        instruction: MedicationInstruction,
+        intended_duration: Option<Duration>,
+    },
+
+    ReportedSnapshot {
+        instruction: MedicationInstruction,
+        reported_status: Option<ReportedMedicationStatus>,
+        effective_from: Option<ApproximateDate>,
+        effective_through: Option<ApproximateDate>,
+    },
+}
+\end{lstlisting}
+
+\field{ReportedSnapshot} is retained for sources and migrations that provide
+a medication state without reliable evidence of the lifecycle event that
+produced it. Ingestion must not invent \field{Authored} or \field{Modified}
+semantics merely to fit a preferred event model.
+
+\subsection{Patch semantics}
+
+A modification must distinguish an omitted field from a field explicitly
+removed by the source.
+
+\begin{lstlisting}
+pub struct MedicationInstructionPatch {
+    pub dosage: Option<FieldChange<Dosage>>,
+    pub timing: Option<FieldChange<MedicationTiming>>,
+    pub route: Option<FieldChange<CodedValue>>,
+    pub method: Option<FieldChange<CodedValue>>,
+    pub as_needed_for: Option<FieldChange<Vec<CodedValue>>>,
+    pub maximum_dose: Option<FieldChange<MaximumDose>>,
+    pub original_sig: Option<FieldChange<String>>,
+}
+
+pub enum FieldChange<T> {
+    Set(T),
+    Remove,
+}
+\end{lstlisting}
+
+The two fields on \field{Modified} make different epistemic commitments:
+
+\begin{itemize}[noitemsep]
+  \item \field{changes} records what the source identified as changing.
+  \item \field{resulting\_instruction} records a complete post-change
+    instruction only when the source explicitly supplies one.
+\end{itemize}
+
+Phoros must not interpret an omitted field as a source-authored assertion that
+the field remained unchanged unless the source contract establishes that
+semantics.
+
+\subsection{Source identifiers}
+
+The model introduces no FEN \field{MedicationCourseId} or internal
+\field{OrderGroupId}. Source order, request, version, and event identifiers
+are recorded through \field{Fact.external\_refs}. The
+\field{resource\_type} or equivalent discriminator distinguishes an order
+identifier from an event or version identifier.
+
+These identifiers answer ``which source record is this?'' They do not answer
+``what supports this assertion?'' The latter requires a
+\entity{SourceCitationRef} to the relevant source passage, row, or field in
+\field{Fact.evidence}.
+
+A \field{target\_fact\_id} is useful when a source or author states that one
+event specifically changes another. It is not a substitute for
+ProblemEpisode membership and is not required when the target cannot be
+established.
+
+\section{ProblemEpisode Membership}
+\label{sec:problem-episode-membership}
+
+Medication Facts participate in the existing FEN membership mechanism:
+
+\begin{lstlisting}
+EpisodeMembership {
+    id: MembershipId("mem-2"),
+    fact_id: FactId("f-metformin-modified"),
+    episode_id: ProblemEpisodeId("ep-metformin-management"),
+    role: FactRole::Treatment,
+    asserted_by: Author::clinician("Dr. Patel"),
+    asserted_at: TemporalAnchor::Point(Timestamp("2026-01-16")),
+    status: MembershipStatus::Active,
+}
+\end{lstlisting}
+
+The schema deliberately does not answer whether a renewal, restart, changed
+indication, formulation change, or long treatment gap begins a new
+ProblemEpisode. That is a question for the membership author. Automated
+systems may author memberships, but they must do so with identifiable
+authorship and the same contestability expected of other membership
+assertions. Automated authoring also records the rule or model version in the
+appropriate audit or operational record; this mechanism metadata must not be
+collapsed into membership authorship.
+
+A medication Fact may also belong to a broader clinical ProblemEpisode. For
+example, the same dose-modification Fact may be a member of both a metformin
+management ProblemEpisode and a chronic kidney disease ProblemEpisode, with a
+different \entity{FactRole} in each.
+
+\section{Fact Status and Medication Lifecycle State}
+\label{sec:status-distinction}
+
+\entity{FactStatus} expresses the system's current disposition toward an
+epistemic record:
+
+\begin{lstlisting}
+pub enum FactStatus {
+    Active,
+    Superseded {
+        replaced_by: Option<FactId>,
+        reason: SupersessionReason,
+        // author and time omitted here for brevity
+    },
+    EnteredInError {
+        replaced_by: Option<FactId>,
+        // author and time omitted here for brevity
+    },
+}
+\end{lstlisting}
+
+Medication lifecycle state expresses what the available evidence says about
+the medication:
+
+\begin{lstlisting}
+pub enum MedicationLifecycleState {
+    Ordered,
+    Active,
+    OnHold,
+    Discontinued,
+    Completed,
+    Unknown,
+}
+\end{lstlisting}
+
+These states must not be conflated. Consider:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{p{6.4cm} p{3.2cm} p{3.2cm}}
+\toprule
+\textbf{Fact} & \textbf{Fact status} & \textbf{Course effect} \\
+\midrule
+Metformin 500 mg ordered on January 1 & Active & Establishes order \\
+Dose increased to 1000 mg on March 1 & Active & Changes dose \\
+Medication discontinued on June 1 & Active & Ends active use \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+All three Facts remain valid records of events that occurred even though the
+assessed medication state is \field{Discontinued}.
+
+Supersession is appropriate when a new Fact replaces the epistemic position
+of an earlier Fact. For example, an imported Fact saying that the original
+order was 500 mg may be superseded by a corrected Fact grounded in
+authoritative source evidence that establishes it was 250 mg. Ordinary dose
+changes, holds, renewals, and
+discontinuations are not supersessions.
+
+\field{Fact.status} may store the materialized current disposition. The
+history of status transitions must nevertheless remain append-only and
+reconstructable so the system can answer both ``what is the Fact's status
+now?'' and ``what did the system regard as active at time $t$?'' The storage
+mechanism for that history is outside this prescription specification.
+
+\section{Medication-Course State Assessment}
+\label{sec:state-assessment}
+
+The earlier term \field{FoldMedicationState} implied a complete, consistent,
+totally ordered event stream. FEN cannot assume those conditions. Relevant
+Facts may conflict, come from different sources, have uncertain membership,
+or support more than one present-state interpretation.
+
+The evaluator is therefore described as an assessment:
+
+\begin{lstlisting}
+pub enum MedicationCourseAssessment {
+    Determinate {
+        state: CurrentMedicationState,
+    },
+
+    Ambiguous {
+        candidate_states: Vec<CurrentMedicationState>,
+        conflicting_facts: Vec<FactId>,
+    },
+
+    InsufficientEvidence {
+        relevant_facts: Vec<FactId>,
+    },
+}
+\end{lstlisting}
+
+An assessment request identifies a ProblemEpisode, an \field{as\_of} time,
+and an authorized view of its memberships and Facts. The evaluator must
+record the rule or model version and all input Fact IDs on which its result
+depends.
+
+If the result is transient, it remains a projection. If Phoros persists the
+result as an epistemic assertion, it is represented as a Phoros-authored
+inference Fact:
+
+\begin{lstlisting}
+pub struct MedicationCourseAssessmentPayload {
+    pub problem_episode_id: ProblemEpisodeId,
+    pub as_of: Timestamp,
+    pub assessment: MedicationCourseAssessment,
+    pub evaluator: RuleArtifactRef,
+}
+\end{lstlisting}
+
+The enclosing inference Fact records \field{AssertionMethod::Inferred} and
+cites every epistemic input through \field{Fact.evidence}. The
+\field{conflicting\_facts} and \field{relevant\_facts} fields remain inside the
+assessment because they explain why the result is ambiguous or insufficient;
+when the assessment is persisted, those same Fact IDs must also appear as
+evidence. This deliberate duplication is validated for consistency.
+
+Persisted assessments may be superseded when new evidence arrives or the
+evaluator changes. That is epistemic replacement and is appropriately
+represented through \entity{FactStatus} and
+\field{SupersessionReason::RuleReEvaluation}.
+
+\section{Notes, Evidence, and Inferred Rationales}
+\label{sec:notes-and-rationales}
+
+An event payload may carry a reason when that reason was part of the source
+assertion. A clinician-authored Note that explains the decision is itself a
+Fact and may be cited through \field{Fact.evidence}. The medication event's
+source citation establishes what the clinician actually authored.
+
+Phoros must not insert an inferred rationale into a clinician-authored Fact
+as though the clinician supplied it. Instead, Phoros authors a separate
+inference Fact:
+
+\begin{lstlisting}
+pub struct MedicationRationaleInferencePayload {
+    pub medication_event_fact_id: FactId,
+    pub rationale: String,
+    pub confidence: Option<Confidence>,
+    pub evaluator: RuleArtifactRef,
+}
+\end{lstlisting}
+
+This permits a Phoros inference to cite the medication event, relevant Note,
+laboratory results, and Facts from other domains without changing the
+authorship of any original Fact. The payload's
+\field{medication\_event\_fact\_id} identifies the assertion being explained;
+the enclosing inference Fact's \field{evidence} records the inputs that support
+the inferred rationale.
+
+\section{Medication Interactions}
+\label{sec:interactions}
+
+Medication ``interaction'' covers several distinct claims:
+
+\begin{enumerate}[noitemsep]
+  \item contraindication or conflict;
+  \item counter-medication used to manage an effect of another medication;
+  \item intentional joint regimen;
+  \item dose-modifying interaction;
+  \item causal chain in which one medication creates a need for another; and
+  \item sequential replacement or supersession for a stated reason.
+\end{enumerate}
+
+General drug--drug knowledge is contextual reference data, not a patient Fact.
+When a clinician, institution, knowledge system, or Phoros asserts that an
+interaction applies to a particular subject, that patient-specific assertion
+may be represented as a Fact:
+
+\begin{lstlisting}
+pub struct MedicationInteractionAssertionPayload {
+    pub involved_facts: Vec<FactId>,
+    pub interaction_type: MedicationInteractionType,
+    pub assertion: Option<String>,
+    pub knowledge_source: Option<ReferenceDataRef>,
+    pub evaluator: Option<RuleArtifactRef>,
+    pub confidence: Option<Confidence>,
+}
+
+pub enum MedicationInteractionType {
+    Contraindication,
+    CounterMedication,
+    JointRegimen,
+    DoseModifying,
+    CausedNeedFor,
+    Replaced,
+}
+\end{lstlisting}
+
+The enclosing Fact records assertion metadata and evidence. The
+\field{involved\_facts} field identifies the medications participating in the
+interaction; it is domain content rather than a substitute for evidence. An
+inferred interaction cites its patient-specific input Facts and the relevant
+location in the versioned knowledge artifact. \field{ReferenceDataRef}
+identifies the knowledge version, while a source citation identifies the
+supporting passage; \field{evaluator} identifies the rule or model that applied
+it.
+
+Other compatible representations remain available for different purposes:
+
+\begin{itemize}[noitemsep]
+  \item A typed relation between ProblemEpisodes may express a relationship
+    between two medication-management problems.
+  \item \entity{EpisodeMembership.role} may state the function a Fact plays
+    inside one ProblemEpisode, but cannot by itself represent a complete
+    pairwise interaction.
+  \item A Narrative or DecisionPoint may explain how an interaction affected
+    treatment reasoning.
+\end{itemize}
+
+This document does not yet choose one authoritative representation for every
+interaction use case. The adopted medication lifecycle model is compatible
+with all three and does not require a fourth medication entity.
+
+\section{Rejected Alternatives}
+\label{sec:rejected-alternatives}
+
+\subsection{Using Fact supersession for clinical evolution}
+
+Rejected. A dose modification, hold, resume, renewal, or discontinuation is a
+new epistemic event, not a correction of the earlier event. Reusing
+\entity{FactStatus::Superseded} would erase the distinction between change in
+the world and replacement of an epistemic record.
+
+\subsection{A mandatory internal medication-order grouping identifier}
+
+Rejected as the FEN course identity. Source order identifiers remain external
+references, and ProblemEpisode membership supplies authored grouping. An
+operational correlation key may exist in an ingestion or read-model layer,
+but it does not determine ProblemEpisode boundaries.
+
+\subsection{A separate top-level MedicationOrder entity}
+
+Rejected as a core FEN entity. The proposed mutable object combined event
+history, current state, and grouping into a fourth semantic layer. Its useful
+features are already covered by medication event Facts, ProblemEpisodes, and
+state assessments. A derived MedicationOrder representation remains
+permissible for FHIR interchange, APIs, or optimized reads.
+
+\subsection{Full snapshots only}
+
+Rejected as the sole lifecycle representation. Full snapshots are retained
+when that is all a source supplies, but they must be labeled as reported
+snapshots. When the source explicitly reports a modification, the Fact should
+preserve the modification semantics rather than requiring consumers to infer
+them by comparing snapshots.
+
+\section{Scope Beyond Prescription}
+
+Coverage, prior authorization, diagnosis certainty, and other longitudinal
+domains may exhibit a similar pattern: multiple Facts become intelligible
+only when considered under a ProblemEpisode. Their specific payloads,
+membership practices, and state assessments belong to their respective
+domain specifications. This prescription document makes no binding lifecycle
+decision for them.
+
+\section{Migration Considerations}
+\label{sec:migration}
+
+Existing prescription records must be migrated without inventing epistemic
+specificity that the source does not contain.
+
+Migration begins by registering the original document, archive, or export as a
+\entity{SourceArtifact} and preserving its bytes in a \entity{StoredObject}.
+The migration then creates citations to the relevant medication-list row,
+order, or Note before constructing normalized Facts.
+
+\begin{enumerate}
+  \item An existing Fact with evidence of an initial authored order maps to
+    the \field{Authored} event variant.
+  \item An existing source snapshot whose lifecycle event cannot be
+    established maps to \field{ReportedSnapshot}.
+  \item Existing source order identifiers migrate to
+    \field{Fact.external\_refs}; they do not become ProblemEpisode IDs.
+  \item The old relevant-Note value becomes a \field{PriorFact} entry in
+    \field{Fact.evidence}.
+  \item Existing Facts are not assigned to ProblemEpisodes by schema
+    migration alone. A separate authored or automated membership process may
+    propose memberships with explicit authorship and audit metadata.
+  \item Existing Facts are not superseded merely because a later medication
+    record exists. Supersession is preserved only where the migration can
+    establish genuine epistemic replacement or correction.
+  \item A migration-generated resulting instruction is an inferred assertion.
+    It cites the source material and prior Facts used to build it and records
+    the reconstruction rule version.
+\end{enumerate}
+
+This ordering ensures that normalization never becomes the sole surviving
+representation of the source and that future parsers can revisit the original
+meaning.
+
+\section{Decision Summary}
+
+\begin{center}
+\footnotesize
+\renewcommand{\arraystretch}{1.08}
+\begin{tabular}{>{\raggedright\arraybackslash}p{5.0cm} >{\raggedright\arraybackslash}p{8.0cm}}
+\toprule
+\textbf{Concern} & \textbf{FEN representation} \\
+\midrule
+Initial medication order & Fact \\
+Modification, hold, resume, stop, renewal & Facts \\
+Original medication document or export & \entity{SourceArtifact} outside FEN \\
+Exact supporting passage, row, or field & \entity{SourceCitationRef} \\
+Supporting Note, lab, or prior medication Fact & \field{EvidenceRef::PriorFact} \\
+Source medication-order identity & \field{ExternalRef} \\
+Medication-management grouping & \entity{ProblemEpisode} plus authored \entity{EpisodeMembership} \\
+ProblemEpisode boundary & Determined by membership authors, not by schema \\
+Specific event-to-event dependency & Direct \field{FactId} or typed Fact relation \\
+Present-state calculation & Projection or Phoros-authored inference Fact \\
+Clinician Note and stated rationale & Fact \\
+Phoros-inferred rationale & Separate inference Fact \\
+Correction of an epistemic record & \entity{FactStatus::Superseded} or \entity{EnteredInError} \\
+Medication no longer active & Medication lifecycle assessment, not \entity{FactStatus} \\
+Mutable interoperability/API resource & Derived or materialized representation outside core FEN \\
+Transient processing or indexing state & \entity{FactOperational} or projection \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+{\small The central commitment is that prescription modeling uses the existing FEN
+ontology without collapsing clinical evolution into Fact replacement and
+without introducing a fourth medication layer. Facts preserve what was
+authored, observed, reported, or inferred. ProblemEpisodes group those Facts
+under author-defined problems. Narratives synthesize their meaning. Read
+models and transient assessments remain operational artifacts unless Phoros
+persists them as inference Facts with explicit assertion metadata and evidence.}
+
+\end{document}
