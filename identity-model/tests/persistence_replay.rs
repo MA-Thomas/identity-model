@@ -1,4 +1,13 @@
+#[allow(unused_imports)]
+use fen_store::RingAes256GcmFactEncryptor;
+#[allow(unused_imports)]
+use identity_adapters::{continuity::*, device::*, hosted::*, oidc::*};
 use identity_model::*;
+#[allow(unused_imports)]
+use identity_server::{mobile::*, mobile_http::*, runtime::*};
+#[allow(unused_imports)]
+use identity_storage_postgres::*;
+use identity_test_support::*;
 
 mod common;
 use common::*;
@@ -26,7 +35,7 @@ fn append_only_repository_replays_workflow_facts_into_projection() {
         .expect("slice should append");
 
     let replayed = replay_identity_state_from_repository(subject_id.clone(), &repository);
-    let direct = materialize_identity_state(subject_id, &onboarding.facts);
+    let direct = project_identity_history(subject_id, &onboarding.facts);
 
     assert_eq!(replayed, direct);
     assert_eq!(repository.all_episodes(), vec![onboarding.episode.clone()]);
@@ -305,7 +314,7 @@ fn episode_composition_append_persists_parent_children_and_relations_atomically(
             ts("2026-05-29T00:02:00Z"),
         ),
     ];
-    let expected_projection = materialize_identity_state(
+    let expected_projection = project_identity_history(
         subject_id.clone(),
         &[registration.facts.clone(), device.facts.clone()].concat(),
     );
@@ -532,6 +541,9 @@ fn replay_respects_revoked_contested_expired_and_superseded_history() {
         &repository,
         &ts("2026-06-01T00:00:00Z"),
     );
+
+    let replayed = replayed.unwrap();
+    let replayed = replayed.history();
 
     assert_eq!(replayed.assurance_level, AssuranceLevel::High);
     assert!(replayed.active_devices.is_empty());

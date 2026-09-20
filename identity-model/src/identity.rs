@@ -1,6 +1,6 @@
 use crate::fen::*;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Subject {
     pub id: SubjectId,
     pub subject_kind: SubjectKind,
@@ -9,7 +9,7 @@ pub struct Subject {
     pub created_by: Author,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SubjectKind {
     HumanPerson,
     Organization,
@@ -17,7 +17,7 @@ pub enum SubjectKind {
     SystemAgent,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SubjectStatus {
     Active,
     Superseded {
@@ -28,7 +28,7 @@ pub enum SubjectStatus {
     Disputed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SubjectSupersessionReason {
     DuplicateSubject,
     IncorrectMergeCorrection,
@@ -36,14 +36,14 @@ pub enum SubjectSupersessionReason {
     Other(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StableIdentityProfile {
     pub legal_name: Option<String>,
     pub date_of_birth: Option<Date>,
     pub demographic_attributes: Vec<IdentityAttribute>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum IdentityAttribute {
     LegalName,
     DateOfBirth,
@@ -54,14 +54,14 @@ pub enum IdentityAttribute {
     Other(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum IdentityAttributeValue {
     StringValue(String),
     DateValue(Date),
     CodedValue(CodedValue),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ParticipationRole {
     RecordSubject,
     Actor,
@@ -74,7 +74,9 @@ pub enum ParticipationRole {
     Witness,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum AssuranceLevel {
     Low,
     Medium,
@@ -82,7 +84,7 @@ pub enum AssuranceLevel {
     VeryHigh,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MatchConfidence {
     Low,
     Medium,
@@ -92,7 +94,7 @@ pub enum MatchConfidence {
     Conflicting,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum IdentityWitnessType {
     GovernmentIdVerification,
     SelfieLivenessCheck,
@@ -108,14 +110,14 @@ pub enum IdentityWitnessType {
     LegalDocument,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum IdentityWitnessResult {
     Passed,
     Failed,
     Inconclusive,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PresentationAttackDetectionResult {
     Passed,
     Failed,
@@ -123,7 +125,7 @@ pub enum PresentationAttackDetectionResult {
     NotPerformed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct IdentityWitnessContext {
     pub witness_result: Option<IdentityWitnessResult>,
     pub challenge_nonce: Option<String>,
@@ -132,7 +134,7 @@ pub struct IdentityWitnessContext {
     pub retention_policy_refs: Vec<PolicyRef>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AuthenticatorType {
     Passkey,
     PlatformBiometric,
@@ -143,7 +145,7 @@ pub enum AuthenticatorType {
     Other(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum BiometricModality {
     Face,
     Fingerprint,
@@ -152,14 +154,14 @@ pub enum BiometricModality {
     Other,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ContinuityCheckResult {
     Passed,
     Failed,
     Inconclusive,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ContinuityVerificationRejectionReason {
     InvalidSignature,
     UnknownVerificationKey,
@@ -174,14 +176,14 @@ pub enum ContinuityVerificationRejectionReason {
     MalformedAssertion,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CredentialAssertionResult {
     Succeeded,
     Failed,
     Inconclusive,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RiskEvaluationResult {
     Passed,
     Failed,
@@ -189,7 +191,7 @@ pub enum RiskEvaluationResult {
     RequiresManualReview,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AccessDecisionResult {
     Allowed,
     Denied,
@@ -197,7 +199,7 @@ pub enum AccessDecisionResult {
     ManualReviewRequired,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AuthorityType {
     SelfAuthority,
     CaregiverDelegation,
@@ -210,13 +212,13 @@ pub enum AuthorityType {
     OrganizationAgentAuthority,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AuthorityScope {
     pub permitted_actions: Vec<AuthorizedAction>,
     pub constrained_by_policy: Vec<PolicyRef>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AuthorizedAction {
     ViewRecord,
     UploadDocument,
@@ -230,7 +232,7 @@ pub enum AuthorizedAction {
     RevokeAuthority,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SensitiveAction {
     ViewRecord,
     ShareRecord,
@@ -244,7 +246,7 @@ pub enum SensitiveAction {
     EmergencyAccess,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RecoveryMethod {
     ExistingTrustedDevice,
     RecoveryKey,
@@ -254,21 +256,21 @@ pub enum RecoveryMethod {
     ManualReview,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RecoveryResult {
     Approved,
     Denied,
     PendingManualReview,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DisputeResolutionOutcome {
     Confirmed,
     Rejected,
     Inconclusive,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SubjectGraphCorrectionReason {
     DuplicateSubject,
     IncorrectMerge,

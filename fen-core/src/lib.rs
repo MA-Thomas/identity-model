@@ -12,7 +12,7 @@ pub use time::*;
 macro_rules! typed_id {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
         pub struct $name(pub String);
 
         impl $name {
@@ -64,17 +64,17 @@ typed_id!(DocumentId);
 typed_id!(PolicyRef);
 typed_id!(ContentHash);
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct Timestamp(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct Date(pub String);
 
 pub type DeviceRef = String;
 pub type DocumentRef = String;
 pub type OrganizationRef = String;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FactStatus {
     Active,
     Superseded {
@@ -92,7 +92,7 @@ pub enum FactStatus {
 
 /// Stable reasons shared by FEN payload families when one fact supersedes
 /// another. Persisted adapters own the frozen string labels for these values.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SupersessionReason {
     AiEnrichment,
     ClinicalRefinement,
@@ -101,20 +101,20 @@ pub enum SupersessionReason {
     RuleReEvaluation,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TemporalAnchor {
     Point(Timestamp),
     Period(TimeInterval),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TimeInterval {
     pub start: Timestamp,
     pub end: Timestamp,
 }
 
 /// Where a fact came from and under what authority it was ingested.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Provenance {
     pub source_system: Option<String>,
     pub source_document: Option<DocumentId>,
@@ -126,7 +126,7 @@ pub struct Provenance {
 }
 
 /// How the underlying material entered the system.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ProvenanceTier {
     ApiSourced,
     RecordsRequest,
@@ -136,7 +136,7 @@ pub enum ProvenanceTier {
 }
 
 /// The authority under which source material was obtained.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AuthorizationBasis {
     HipaaRightOfAccess,
     PatientDirection,
@@ -144,14 +144,14 @@ pub enum AuthorizationBasis {
     SelfHeld,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Author {
     pub author_type: AuthorType,
     pub author_id: Option<AuthorId>,
     pub display_name: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AuthorType {
     Patient,
     Clinician,
@@ -159,14 +159,14 @@ pub enum AuthorType {
     AiAssisted,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CodedValue {
     pub system: CodingSystem,
     pub code: String,
     pub display: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CodingSystem {
     Snomed,
     Icd10,
@@ -179,7 +179,7 @@ pub enum CodingSystem {
     Local,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ExternalRef {
     pub system: ExternalSystem,
     pub resource_type: Option<String>,
@@ -187,7 +187,7 @@ pub struct ExternalRef {
     pub uri: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ExternalSystem {
     Fhir,
     Omop,

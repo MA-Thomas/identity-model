@@ -2,11 +2,6 @@ use crate::fen::*;
 use crate::identity::*;
 use crate::time;
 
-#[cfg(feature = "oidc-jwks-verifier")]
-mod jwks;
-#[cfg(feature = "oidc-jwks-verifier")]
-pub use jwks::*;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OidcClientConfig {
     pub provider_name: String,
@@ -149,7 +144,10 @@ impl VerifiedOidcSession {
 
     fn matches_client(&self, client_id: &str) -> bool {
         self.audiences.iter().any(|audience| audience == client_id)
-            || self.authorized_party.as_deref() == Some(client_id)
+            && self
+                .authorized_party
+                .as_deref()
+                .map_or(self.audiences.len() == 1, |party| party == client_id)
     }
 }
 
@@ -298,6 +296,15 @@ pub fn validate_oidc_session_context(
         return Err(OidcSessionVerificationError::AudienceMismatch);
     }
 
+    let now = time::timestamp_to_unix_seconds(observed_at)
+        .map_err(|_| OidcSessionVerificationError::InvalidObservedTimestamp)?;
+    let issued = time::timestamp_to_unix_seconds(&session.issued_at)
+        .map_err(|_| OidcSessionVerificationError::InvalidSessionTimestamp)?;
+    let expires = time::timestamp_to_unix_seconds(&session.expires_at)
+        .map_err(|_| OidcSessionVerificationError::InvalidSessionTimestamp)?;
+    if issued > now || expires <= issued {
+        return Err(OidcSessionVerificationError::InvalidSessionTimestamp);
+    }
     let expired = time::timestamp_at_or_after(observed_at, &session.expires_at).map_err(|_| {
         if time::timestamp_to_unix_seconds(observed_at).is_err() {
             OidcSessionVerificationError::InvalidObservedTimestamp

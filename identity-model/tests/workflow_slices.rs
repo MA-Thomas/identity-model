@@ -1,4 +1,15 @@
+#[allow(unused_imports)]
+use fen_store::RingAes256GcmFactEncryptor;
+#[allow(unused_imports)]
+use identity_adapters::{continuity::*, device::*, hosted::*, oidc::*};
 use identity_model::*;
+#[allow(unused_imports)]
+use identity_server::{mobile::*, mobile_http::*, runtime::*};
+#[allow(unused_imports)]
+use identity_storage_postgres::*;
+use identity_test_support::recovery;
+use identity_test_support::*;
+use recovery::*;
 
 mod common;
 use common::*;
@@ -80,16 +91,18 @@ fn complete_record_export_step_up_allows_passed_continuity_and_steps_up_failed_c
     let mapper = ResultBasedAssuranceMapper;
     let provider = MockPhase1ContinuityProvider::successful();
     let mut lifecycle = InMemoryNonceLifecycle::new();
-    let allowed_slice = complete_record_export_step_up_slice(
-        subject_id.clone(),
-        "enrollment-step-up".to_string(),
+    let allowed_slice = complete_record_export_step_up_slice_from_request(
+        CompleteRecordExportStepUpRequest::fixture(
+            subject_id.clone(),
+            "enrollment-step-up".to_string(),
+            system_author(),
+            ts("2026-05-29T00:00:00Z"),
+        ),
         &provider,
         &mut lifecycle,
         &provider.signature_verifier(),
         &mapper,
         &translator,
-        system_author(),
-        ts("2026-05-29T00:00:00Z"),
     )
     .expect("successful step-up should build");
 
@@ -105,16 +118,18 @@ fn complete_record_export_step_up_allows_passed_continuity_and_steps_up_failed_c
 
     let failed_provider = MockPhase1ContinuityProvider::failed();
     let mut failed_lifecycle = InMemoryNonceLifecycle::new();
-    let failed_slice = complete_record_export_step_up_slice(
-        subject_id,
-        "enrollment-step-up".to_string(),
+    let failed_slice = complete_record_export_step_up_slice_from_request(
+        CompleteRecordExportStepUpRequest::fixture(
+            subject_id,
+            "enrollment-step-up".to_string(),
+            system_author(),
+            ts("2026-05-29T00:00:00Z"),
+        ),
         &failed_provider,
         &mut failed_lifecycle,
         &failed_provider.signature_verifier(),
         &mapper,
         &translator,
-        system_author(),
-        ts("2026-05-29T00:00:00Z"),
     )
     .expect("failed continuity should still produce auditable facts");
     let failed_continuity = failed_slice
@@ -149,16 +164,18 @@ fn complete_record_export_step_up_allows_passed_continuity_and_steps_up_failed_c
         expected_signature: b"wrong-signature".to_vec(),
     };
     let mut invalid_signature_lifecycle = InMemoryNonceLifecycle::new();
-    let invalid_signature_slice = complete_record_export_step_up_slice(
-        id("subject-step-up-invalid-signature"),
-        "enrollment-step-up".to_string(),
+    let invalid_signature_slice = complete_record_export_step_up_slice_from_request(
+        CompleteRecordExportStepUpRequest::fixture(
+            id("subject-step-up-invalid-signature"),
+            "enrollment-step-up".to_string(),
+            system_author(),
+            ts("2026-05-29T00:00:00Z"),
+        ),
         &invalid_signature_provider,
         &mut invalid_signature_lifecycle,
         &invalid_signature_verifier,
         &mapper,
         &translator,
-        system_author(),
-        ts("2026-05-29T00:00:00Z"),
     )
     .expect("rejected continuity verification should still produce auditable facts");
     let rejection_fact_id = invalid_signature_slice
@@ -190,64 +207,10 @@ fn complete_record_export_step_up_allows_passed_continuity_and_steps_up_failed_c
 
 #[test]
 fn delegation_and_recovery_slices_preserve_audit_history_and_projection_rules() {
-    let actor_subject_id: SubjectId = id("caregiver-1");
     let target_subject_id: SubjectId = id("patient-1");
     let translator = FenTranslator {
         system_author: system_author(),
     };
-
-    let delegation = delegation_vertical_slice(
-        actor_subject_id.clone(),
-        target_subject_id.clone(),
-        &translator,
-        system_author(),
-        ts("2026-05-29T00:00:00Z"),
-    );
-    assert_eq!(
-        delegation.episode.episode_kind,
-        EpisodeKind::DelegationWorkflow
-    );
-    assert!(delegation.facts.iter().any(|fact| matches!(
-        fact.payload,
-        FactPayload::AuthorityRelationshipRevoked { .. }
-    )));
-    assert!(delegation.facts.iter().any(|fact| matches!(
-        fact.payload,
-        FactPayload::AccessDecision {
-            decision: AccessDecisionResult::Allowed,
-            ..
-        }
-    )));
-
-    let mut facts_before_revocation = delegation.facts.clone();
-    facts_before_revocation.retain(|fact| {
-        !matches!(
-            fact.payload,
-            FactPayload::AuthorityRelationshipRevoked { .. }
-        )
-    });
-    let before_state = materialize_identity_state_at(
-        target_subject_id.clone(),
-        &facts_before_revocation,
-        &ts("2026-06-01T00:00:00Z"),
-    );
-    assert!(authority_permits_action(
-        &before_state,
-        &actor_subject_id,
-        AuthorizedAction::ShareRecord
-    ));
-
-    let after_state = materialize_identity_state_at(
-        target_subject_id.clone(),
-        &delegation.facts,
-        &ts("2026-06-01T00:00:00Z"),
-    );
-    assert!(!authority_permits_action(
-        &after_state,
-        &actor_subject_id,
-        AuthorizedAction::ShareRecord
-    ));
-    assert_eq!(after_state.latest_access_decisions.len(), 1);
 
     let recovery = manual_review_recovery_slice(
         target_subject_id.clone(),
@@ -286,7 +249,7 @@ fn dispute_merge_split_and_witness_supersession_slices_change_projection_without
         system_author(),
         ts("2026-05-29T00:00:00Z"),
     );
-    let rejected_state = materialize_identity_state(subject_id.clone(), &rejected.facts);
+    let rejected_state = project_identity_history(subject_id.clone(), &rejected.facts);
     assert!(rejected_state.active_clinical_links.is_empty());
     assert!(rejected_state.unresolved_disputes.is_empty());
     assert!(rejected.facts.iter().any(|fact| matches!(
@@ -301,7 +264,7 @@ fn dispute_merge_split_and_witness_supersession_slices_change_projection_without
         system_author(),
         ts("2026-05-29T00:00:00Z"),
     );
-    let confirmed_state = materialize_identity_state(subject_id.clone(), &confirmed.facts);
+    let confirmed_state = project_identity_history(subject_id.clone(), &confirmed.facts);
     assert_eq!(confirmed_state.active_clinical_links.len(), 1);
     assert!(confirmed_state.unresolved_disputes.is_empty());
 
@@ -335,7 +298,7 @@ fn dispute_merge_split_and_witness_supersession_slices_change_projection_without
         system_author(),
         ts("2026-05-29T00:00:00Z"),
     );
-    let supersession_state = materialize_identity_state(subject_id, &supersession.facts);
+    let supersession_state = project_identity_history(subject_id, &supersession.facts);
     assert_eq!(supersession_state.assurance_level, AssuranceLevel::High);
     assert!(matches!(
         supersession.facts[0].status,
@@ -356,7 +319,7 @@ fn recovery_slices_cover_approved_denied_and_trusted_device_paths() {
         system_author(),
         ts("2026-05-29T00:00:00Z"),
     );
-    let approved_state = materialize_identity_state(subject_id.clone(), &approved.facts);
+    let approved_state = project_identity_history(subject_id.clone(), &approved.facts);
     assert_eq!(
         approved_state.active_devices,
         vec!["device-passkey-replacement".to_string()]

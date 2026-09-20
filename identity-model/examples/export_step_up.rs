@@ -1,4 +1,7 @@
+use fixtures::*;
 use identity_model::*;
+use identity_test_support::fixtures;
+use identity_test_support::*;
 
 fn main() {
     let subject_id = SubjectId("subject-demo-export".to_string());
@@ -13,7 +16,7 @@ fn main() {
     let mut lifecycle = InMemoryNonceLifecycle::new();
 
     let workflow = service
-        .authorize_complete_record_export_step_up_detailed(
+        .authorize_complete_record_export_step_up(
             CompleteRecordExportStepUpRequest::fixture(
                 subject_id,
                 "demo-enrollment".to_string(),

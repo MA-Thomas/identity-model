@@ -1,0 +1,9 @@
+[package]
+name = "identity-application"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+identity-model = { path = "../identity-model" }
+identity-contract = { path = "../identity-contract" }
+tokio = { version = "1", features = ["rt"] }
+ed25519-dalek = "3.0.0"

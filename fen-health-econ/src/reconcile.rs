@@ -120,7 +120,13 @@ pub fn evaluate_reconciliation_rules(
             ReconciliationRuleDefinition::AppealableDenial {
                 appealable_carc_codes,
             } => {
-                evaluate_appealable_denial(rule, appealable_carc_codes, &active, as_of, &mut findings);
+                evaluate_appealable_denial(
+                    rule,
+                    appealable_carc_codes,
+                    &active,
+                    as_of,
+                    &mut findings,
+                );
             }
         }
     }
@@ -291,7 +297,9 @@ fn evaluate_appealable_denial(
             continue;
         };
         if reason.system != CodingSystem::Carc
-            || !appealable_carc_codes.iter().any(|code| code == &reason.code)
+            || !appealable_carc_codes
+                .iter()
+                .any(|code| code == &reason.code)
         {
             continue;
         }
@@ -363,7 +371,10 @@ fn evaluate_duplicate_charge(
             let summary = if same_fact {
                 format!(
                     "claim {} bills service {} more than once (lines {} and {}) within {} days",
-                    fact_a.id.0, line_a.service.code, line_a.sequence, line_b.sequence,
+                    fact_a.id.0,
+                    line_a.service.code,
+                    line_a.sequence,
+                    line_b.sequence,
                     match_window_days,
                 )
             } else {
@@ -418,7 +429,10 @@ fn tolerance_minor_units(tolerance: Option<&Money>) -> i64 {
 }
 
 fn money_label(money: &Money) -> String {
-    format!("{} {} (minor units)", money.amount_minor_units, money.currency)
+    format!(
+        "{} {} (minor units)",
+        money.amount_minor_units, money.currency
+    )
 }
 
 fn pair_derived_from(rule: &ActiveReconciliationRule, pair: &MatchedPair<'_>) -> DerivedFrom {

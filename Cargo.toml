@@ -1,6 +1,13 @@
 [workspace]
 resolver = "2"
 members = [
+  "identity-application",
+  "identity-adapters",
+  "identity-storage-postgres",
+  "identity-server",
+  "identity-test-support",
+  "identity-contract",
+  "identity-enrollment",
   "fen-core",
   "fen-store",
   "fen-store-postgres",

@@ -82,6 +82,7 @@ pub struct DelegationConstraintsPolicyDefinition {
     pub permitted_actions: Vec<AuthorizedAction>,
     pub requires_target_subject_continuity: bool,
     pub max_validity_seconds: Option<i64>,
+    pub witness_requirements: Vec<crate::authority::WitnessRequirement>,
     pub freshness: EvidenceFreshnessRequirements,
 }
 
@@ -121,7 +122,6 @@ pub struct PolicyArtifact {
     pub effective_period: Option<TimeInterval>,
     pub review: Option<PolicyReview>,
     pub definition: PolicyArtifactDefinition,
-    pub action_policy: ActionPolicy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,7 +160,6 @@ impl PolicyArtifact {
             effective_period,
             review: None,
             definition,
-            action_policy,
         }
     }
 
@@ -248,12 +247,9 @@ impl PolicyArtifact {
         self
     }
 
-    pub fn action_policy(&self) -> &ActionPolicy {
-        &self.action_policy
-    }
-
-    pub fn into_action_policy(self) -> ActionPolicy {
-        self.action_policy
+    pub fn action_policy(&self) -> ActionPolicy {
+        self.definition
+            .to_action_policy(versioned_policy_ref(&self.id, &self.version))
     }
 
     fn from_definition(
@@ -264,7 +260,6 @@ impl PolicyArtifact {
         definition: PolicyArtifactDefinition,
     ) -> Self {
         let version = version.into();
-        let action_policy = definition.to_action_policy(versioned_policy_ref(&id, &version));
 
         Self {
             id,
@@ -275,7 +270,6 @@ impl PolicyArtifact {
             effective_period,
             review: None,
             definition,
-            action_policy,
         }
     }
 }
@@ -369,30 +363,24 @@ pub enum PolicyEvaluationReason {
     PolicyNotYetEffective,
     PolicyExpired,
     PolicyTimestampInvalid,
+    ActionContextRequired,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyEvaluationContext {
-    pub evaluated_at: Option<Timestamp>,
+    pub evaluated_at: Timestamp,
 }
 
 impl PolicyEvaluationContext {
-    pub fn new(evaluated_at: Option<Timestamp>) -> Self {
+    pub fn new(evaluated_at: Timestamp) -> Self {
         Self { evaluated_at }
     }
 
     pub fn from_clock(clock: &impl Clock) -> Self {
         Self {
-            evaluated_at: Some(clock.now()),
+            evaluated_at: clock.now(),
         }
     }
-}
-
-pub fn evaluate_action_policy(
-    policy: &ActionPolicy,
-    evidence: &EvidenceSummary,
-) -> PolicyEvaluation {
-    evaluate_action_policy_at(policy, evidence, None)
 }
 
 pub fn evaluate_action_policy_with_context(
@@ -400,7 +388,7 @@ pub fn evaluate_action_policy_with_context(
     evidence: &EvidenceSummary,
     context: &PolicyEvaluationContext,
 ) -> PolicyEvaluation {
-    evaluate_action_policy_at(policy, evidence, context.evaluated_at.as_ref())
+    evaluate_action_policy_at(policy, evidence, Some(&context.evaluated_at))
 }
 
 pub fn evaluate_policy_artifact_with_context(
@@ -409,9 +397,15 @@ pub fn evaluate_policy_artifact_with_context(
     context: &PolicyEvaluationContext,
 ) -> PolicyEvaluation {
     let mut evaluation =
-        evaluate_action_policy_with_context(artifact.action_policy(), evidence, context);
-    let mut artifact_reasons = policy_artifact_reasons(artifact, context.evaluated_at.as_ref());
+        evaluate_action_policy_with_context(&artifact.action_policy(), evidence, context);
+    let mut artifact_reasons = policy_artifact_reasons(artifact, Some(&context.evaluated_at));
 
+    if matches!(
+        artifact.definition,
+        PolicyArtifactDefinition::DelegationConstraints(_)
+    ) {
+        artifact_reasons.push(PolicyEvaluationReason::ActionContextRequired);
+    }
     if !artifact_reasons.is_empty() {
         artifact_reasons.append(&mut evaluation.reasons);
         evaluation.reasons = artifact_reasons;
@@ -421,7 +415,7 @@ pub fn evaluate_policy_artifact_with_context(
     evaluation
 }
 
-pub fn evaluate_action_policy_at(
+fn evaluate_action_policy_at(
     policy: &ActionPolicy,
     evidence: &EvidenceSummary,
     evaluated_at: Option<&Timestamp>,
@@ -518,6 +512,9 @@ fn policy_artifact_reasons(
     evaluated_at: Option<&Timestamp>,
 ) -> Vec<PolicyEvaluationReason> {
     let mut reasons = Vec::new();
+    if evaluated_at.is_none() {
+        reasons.push(PolicyEvaluationReason::PolicyTimestampInvalid);
+    }
 
     if artifact.status != PolicyArtifactStatus::Active {
         reasons.push(PolicyEvaluationReason::PolicyArtifactNotActive);
@@ -622,10 +619,17 @@ fn is_stale(
 ) -> bool {
     match (observed_at, evaluated_at, requirement) {
         (Some(observed_at), Some(evaluated_at), Some(requirement)) => {
-            time::seconds_between(observed_at, evaluated_at)
-                .map_or(true, |age| age > requirement.max_age_seconds)
+            time::seconds_between(observed_at, evaluated_at).map_or(true, |age| {
+                age < 0 || requirement.max_age_seconds < 0 || age > requirement.max_age_seconds
+            })
         }
-        (None, Some(_), Some(_)) => true,
+        (_, _, Some(_)) => true,
         _ => false,
     }
+}
+
+/// Authentication evidence belongs to the authenticated principal, never a caller-supplied decision.
+pub struct PrincipalEvidence<'a> {
+    pub principal: &'a SubjectId,
+    pub evidence: &'a EvidenceSummary,
 }

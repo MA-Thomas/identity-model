@@ -1,4 +1,13 @@
+#[allow(unused_imports)]
+use fen_store::RingAes256GcmFactEncryptor;
+#[allow(unused_imports)]
+use identity_adapters::{continuity::*, device::*, hosted::*, oidc::*};
 use identity_model::*;
+#[allow(unused_imports)]
+use identity_server::{mobile::*, mobile_http::*, runtime::*};
+#[allow(unused_imports)]
+use identity_storage_postgres::*;
+use identity_test_support::*;
 
 mod common;
 use common::*;
@@ -14,30 +23,34 @@ fn provider_swap_preserves_canonical_continuity_and_policy_shape() {
     let hosted_provider = MockHostedContinuityProvider::successful();
 
     let mut phase1_lifecycle = InMemoryNonceLifecycle::new();
-    let phase1_slice = complete_record_export_step_up_slice(
-        subject_id.clone(),
-        "enrollment-provider-swap".to_string(),
+    let phase1_slice = complete_record_export_step_up_slice_from_request(
+        CompleteRecordExportStepUpRequest::fixture(
+            subject_id.clone(),
+            "enrollment-provider-swap".to_string(),
+            system_author(),
+            ts("2026-05-29T00:00:00Z"),
+        ),
         &phase1_provider,
         &mut phase1_lifecycle,
         &phase1_provider.signature_verifier(),
         &mapper,
         &translator,
-        system_author(),
-        ts("2026-05-29T00:00:00Z"),
     )
     .expect("phase 1 provider should drive step-up");
 
     let mut hosted_lifecycle = InMemoryNonceLifecycle::new();
-    let hosted_slice = complete_record_export_step_up_slice(
-        subject_id,
-        "enrollment-provider-swap".to_string(),
+    let hosted_slice = complete_record_export_step_up_slice_from_request(
+        CompleteRecordExportStepUpRequest::fixture(
+            subject_id,
+            "enrollment-provider-swap".to_string(),
+            system_author(),
+            ts("2026-05-29T00:00:00Z"),
+        ),
         &hosted_provider,
         &mut hosted_lifecycle,
         &hosted_provider.signature_verifier(),
         &mapper,
         &translator,
-        system_author(),
-        ts("2026-05-29T00:00:00Z"),
     )
     .expect("hosted provider should drive the same step-up shape");
 
@@ -82,30 +95,34 @@ fn scripted_hosted_adapter_maps_provider_shapes_without_changing_fen_facts() {
     );
 
     let mut mock_lifecycle = InMemoryNonceLifecycle::new();
-    let mock_slice = complete_record_export_step_up_slice(
-        subject_id.clone(),
-        "hosted-enrollment-demo".to_string(),
+    let mock_slice = complete_record_export_step_up_slice_from_request(
+        CompleteRecordExportStepUpRequest::fixture(
+            subject_id.clone(),
+            "hosted-enrollment-demo".to_string(),
+            system_author(),
+            ts("2026-05-29T00:00:00Z"),
+        ),
         &mock_provider,
         &mut mock_lifecycle,
         &mock_provider.signature_verifier(),
         &mapper,
         &translator,
-        system_author(),
-        ts("2026-05-29T00:00:00Z"),
     )
     .expect("mock provider should drive step-up");
 
     let mut hosted_lifecycle = InMemoryNonceLifecycle::new();
-    let hosted_slice = complete_record_export_step_up_slice(
-        subject_id,
-        "hosted-enrollment-demo".to_string(),
+    let hosted_slice = complete_record_export_step_up_slice_from_request(
+        CompleteRecordExportStepUpRequest::fixture(
+            subject_id,
+            "hosted-enrollment-demo".to_string(),
+            system_author(),
+            ts("2026-05-29T00:00:00Z"),
+        ),
         &hosted_adapter,
         &mut hosted_lifecycle,
         &hosted_adapter.signature_verifier(),
         &mapper,
         &translator,
-        system_author(),
-        ts("2026-05-29T00:00:00Z"),
     )
     .expect("scripted hosted provider should drive step-up");
 
@@ -118,8 +135,6 @@ fn scripted_hosted_adapter_maps_provider_shapes_without_changing_fen_facts() {
         access_decision_shape(&hosted_slice.facts)
     );
 }
-
-#[cfg(feature = "ed25519-dalek-verifier")]
 #[test]
 fn fen_native_ed25519_hosted_adapter_drives_service_step_up() {
     let subject_id: SubjectId = id("subject-ed25519-provider");
@@ -135,16 +150,18 @@ fn fen_native_ed25519_hosted_adapter_drives_service_step_up() {
     let verifier = provider.signature_verifier();
     let mut lifecycle = InMemoryNonceLifecycle::new();
 
-    let slice = complete_record_export_step_up_slice(
-        subject_id,
-        "hosted-enrollment-demo".to_string(),
+    let slice = complete_record_export_step_up_slice_from_request(
+        CompleteRecordExportStepUpRequest::fixture(
+            subject_id,
+            "hosted-enrollment-demo".to_string(),
+            system_author(),
+            ts("2026-05-29T00:00:00Z"),
+        ),
         &provider,
         &mut lifecycle,
         &verifier,
         &mapper,
         &translator,
-        system_author(),
-        ts("2026-05-29T00:00:00Z"),
     )
     .expect("FEN-native Ed25519 provider should drive step-up");
 
@@ -176,8 +193,6 @@ fn fen_native_ed25519_hosted_adapter_drives_service_step_up() {
         }
     )));
 }
-
-#[cfg(feature = "ed25519-dalek-verifier")]
 #[test]
 fn fen_native_ed25519_rotation_and_nonce_failures_remain_typed() {
     let service = IdentityWorkflowService::new(FenTranslator {

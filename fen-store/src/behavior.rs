@@ -190,20 +190,6 @@ pub struct RingAes256GcmFactEncryptor<C> {
 }
 
 #[cfg(feature = "production-crypto")]
-impl<P> RingAes256GcmFactEncryptor<InMemoryEncryptedFactPlaintextCodec<P>> {
-    pub fn new() -> Self {
-        Self::with_codec(InMemoryEncryptedFactPlaintextCodec::new())
-    }
-}
-
-#[cfg(feature = "production-crypto")]
-impl<P> Default for RingAes256GcmFactEncryptor<InMemoryEncryptedFactPlaintextCodec<P>> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(feature = "production-crypto")]
 impl<C> RingAes256GcmFactEncryptor<C> {
     pub fn with_codec(codec: C) -> Self {
         Self { codec }

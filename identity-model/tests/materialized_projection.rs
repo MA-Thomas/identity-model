@@ -1,4 +1,12 @@
+#[allow(unused_imports)]
+use fen_store::RingAes256GcmFactEncryptor;
+#[allow(unused_imports)]
+use identity_adapters::{continuity::*, device::*, hosted::*, oidc::*};
 use identity_model::*;
+#[allow(unused_imports)]
+use identity_server::{mobile::*, mobile_http::*, runtime::*};
+#[allow(unused_imports)]
+use identity_storage_postgres::*;
 
 mod common;
 use common::*;
@@ -50,7 +58,7 @@ fn materialized_state_excludes_revoked_devices_and_contested_links() {
         ),
     ];
 
-    let state = materialize_identity_state(subject_id, &facts);
+    let state = project_identity_history(subject_id, &facts);
 
     assert!(state.active_devices.is_empty());
     assert!(state.active_clinical_links.is_empty());
@@ -107,7 +115,8 @@ fn materialized_state_respects_validity_witness_expiration_and_continuity_outcom
         ),
     ];
 
-    let state = materialize_identity_state_at(subject_id, &facts, &ts("2026-06-01T00:00:00Z"));
+    let snapshot = authorization_snapshot(subject_id, &facts, &ts("2026-06-01T00:00:00Z")).unwrap();
+    let state = snapshot.history();
 
     assert_eq!(state.assurance_level, AssuranceLevel::Low);
     assert_eq!(state.active_payer_links.len(), 1);
@@ -192,7 +201,7 @@ fn materialized_state_deduplicates_replayed_active_views() {
         ),
     ];
 
-    let state = materialize_identity_state(subject_id, &facts);
+    let state = project_identity_history(subject_id, &facts);
 
     assert_eq!(state.active_devices, vec![device_ref]);
     assert_eq!(state.active_clinical_links.len(), 1);
@@ -201,4 +210,34 @@ fn materialized_state_deduplicates_replayed_active_views() {
         id("clinical-link-active-dedupe")
     );
     assert_eq!(state.unresolved_disputes, vec![id("clinical-link-dedupe")]);
+}
+
+#[test]
+fn failed_credentials_and_denied_recovery_do_not_raise_assurance() {
+    let subject: SubjectId = id("failed-evidence");
+    let facts = vec![
+        fact(
+            "failed-credential",
+            subject.clone(),
+            FactPayload::CredentialAssertion {
+                authenticator_type: AuthenticatorType::Passkey,
+                device_ref: None,
+                result: CredentialAssertionResult::Failed,
+                assurance_level: AssuranceLevel::VeryHigh,
+            },
+        ),
+        fact(
+            "denied-recovery",
+            subject.clone(),
+            FactPayload::AccountRecoveryEvent {
+                method: RecoveryMethod::ManualReview,
+                result: RecoveryResult::Denied,
+                assurance_level: AssuranceLevel::VeryHigh,
+            },
+        ),
+    ];
+    assert_eq!(
+        project_identity_history(subject, &facts).assurance_level,
+        AssuranceLevel::Low
+    );
 }

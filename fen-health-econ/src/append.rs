@@ -69,10 +69,7 @@ pub fn finding_to_inference_fact(
 /// The status a superseded finding carries once a re-evaluation over changed
 /// inputs replaced it: system-authored, `RuleReEvaluation`, pointing at the
 /// replacing finding.
-pub fn re_evaluation_supersession(
-    replaced_by: FactId,
-    superseded_at: Timestamp,
-) -> FactStatus {
+pub fn re_evaluation_supersession(replaced_by: FactId, superseded_at: Timestamp) -> FactStatus {
     FactStatus::Superseded {
         superseded_by: engine_author(),
         superseded_at: TemporalAnchor::Point(superseded_at),

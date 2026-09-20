@@ -60,41 +60,13 @@ impl AccountSessionBootstrapRequest {
             assurance_policy,
         }
     }
-
-    pub fn fixture(subject_id: SubjectId, authored_by: Author, observed_at: Timestamp) -> Self {
-        let session = VerifiedOidcSession::keycloak(
-            "https://id.example.test/realms/fen",
-            "keycloak-user-123",
-            "fen-identity",
-            "keycloak-session-123",
-            Timestamp("2026-05-29T00:00:00Z".to_string()),
-            Timestamp("2026-05-29T01:00:00Z".to_string()),
-        )
-        .with_amr(vec!["pwd".to_string(), "webauthn".to_string()])
-        .with_verified_email("patient@example.test");
-
-        Self {
-            subject_id,
-            authored_by,
-            observed_at,
-            id_plan: WorkflowIdPlan::deterministic(
-                "account-session",
-                ProblemEpisodeId("episode-account-session".to_string()),
-                account_session_bootstrap_fact_count(&session),
-            ),
-            session,
-            device_ref: Some("iphone-passkey-device".to_string()),
-            app_attest_assertion: None,
-            assurance_policy: OidcAssurancePolicy::default(),
-        }
-    }
 }
 
-pub fn account_session_bootstrap_fact_count(session: &VerifiedOidcSession) -> usize {
+pub(crate) fn account_session_bootstrap_fact_count(session: &VerifiedOidcSession) -> usize {
     account_session_bootstrap_fact_count_with_device(session, false)
 }
 
-pub fn account_session_bootstrap_fact_count_with_device(
+pub(crate) fn account_session_bootstrap_fact_count_with_device(
     session: &VerifiedOidcSession,
     has_device_attestation: bool,
 ) -> usize {
@@ -109,7 +81,7 @@ pub fn account_session_bootstrap_fact_count_with_device(
     count
 }
 
-pub fn account_session_bootstrap_slice_from_request(
+pub(crate) fn account_session_bootstrap_slice_from_request(
     request: AccountSessionBootstrapRequest,
     translator: &FenTranslator,
 ) -> IdentityWorkflowSlice {

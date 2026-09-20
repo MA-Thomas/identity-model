@@ -1,4 +1,7 @@
+use fixtures::*;
 use identity_model::*;
+use identity_test_support::fixtures;
+use identity_test_support::*;
 
 fn main() {
     let authored_at = Timestamp("2026-05-29T00:00:00Z".to_string());

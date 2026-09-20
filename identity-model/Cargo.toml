@@ -3,39 +3,30 @@ name = "identity-model"
 version = "0.1.0"
 edition = "2021"
 
-[features]
-default = []
-ed25519-dalek-verifier = ["dep:ed25519-dalek"]
-mobile-http = ["dep:serde", "dep:serde_json"]
-oidc-jwks-verifier = ["dep:jsonwebtoken", "dep:reqwest", "dep:serde", "dep:serde_json"]
-postgres-adapter = ["dep:fen-store-postgres", "dep:serde", "dep:serde_json", "dep:sqlx", "dep:tokio"]
-production-crypto = ["dep:ring", "fen-store/production-crypto"]
-runtime-server = [
-  "mobile-http",
-  "postgres-adapter",
-  "oidc-jwks-verifier",
-  "production-crypto",
-  "dep:tokio",
-  "tokio/signal",
-]
-
 [dependencies]
+serde = { version = "1", features = ["derive"] }
 fen-core = { path = "../fen-core" }
 fen-store = { path = "../fen-store" }
-fen-store-postgres = { path = "../fen-store-postgres", optional = true }
-ed25519-dalek = { version = "2.2.0", optional = true }
-jsonwebtoken = { version = "9.3.1", optional = true }
-reqwest = { version = "0.12.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
-ring = { version = "0.17.14", optional = true }
-serde = { version = "1.0.228", features = ["derive"], optional = true }
-serde_json = { version = "1.0.149", optional = true }
-sqlx = { version = "0.8.6", default-features = false, features = ["postgres", "runtime-tokio-rustls"], optional = true }
-tokio = { version = "1.52.3", features = ["rt", "time", "net"], optional = true }
 
 [dev-dependencies]
+identity-application = { path = "../identity-application" }
+identity-test-support = { path = "../identity-test-support" }
 # Test-only pure-Rust P-384 signer used to reproduce Apple's real App Attest
 # certificate chain shape (a P-256 leaf signed by a P-384 intermediate with
 # ecdsa-with-SHA256). `ring` can only sign the two matched curve/digest
 # combinations, which is exactly why the all-P-256 fixtures missed the bug.
 p384 = { version = "0.13", features = ["ecdsa"] }
 sha2 = "0.10"
+
+identity-adapters = { path = "../identity-adapters" }
+identity-storage-postgres = { path = "../identity-storage-postgres" }
+identity-server = { path = "../identity-server" }
+fen-store = { path = "../fen-store", features = ["production-crypto"] }
+serde_json = "1"
+jsonwebtoken = "9.3.1"
+ring = "0.17.14"
+ed25519-dalek = "2.2.0"
+sqlx = { version = "0.8.6", default-features = false, features = ["postgres", "runtime-tokio-rustls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time"] }
+serde = { version = "1", features = ["derive"] }
+fen-store-postgres = { path = "../fen-store-postgres" }

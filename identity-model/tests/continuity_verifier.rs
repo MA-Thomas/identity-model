@@ -1,4 +1,12 @@
+#[allow(unused_imports)]
+use fen_store::RingAes256GcmFactEncryptor;
+#[allow(unused_imports)]
+use identity_adapters::{continuity::*, device::*, hosted::*, oidc::*};
 use identity_model::*;
+#[allow(unused_imports)]
+use identity_server::{mobile::*, mobile_http::*, runtime::*};
+#[allow(unused_imports)]
+use identity_storage_postgres::*;
 
 mod common;
 use common::*;
@@ -302,8 +310,6 @@ fn registry_backed_signature_verifier_handles_key_rotation_and_replay() {
         assert_eq!(verifier_result, Err(reason));
     }
 }
-
-#[cfg(feature = "ed25519-dalek-verifier")]
 #[test]
 fn ed25519_strict_verifier_checks_canonical_profile_and_key_registry() {
     use ed25519_dalek::{Signer, SigningKey};

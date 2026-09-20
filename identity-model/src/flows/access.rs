@@ -49,38 +49,6 @@ impl CompleteRecordExportStepUpRequest {
             device_ref,
         }
     }
-
-    pub fn fixture(
-        subject_id: SubjectId,
-        enrollment_ref: String,
-        authored_by: Author,
-        started_at: Timestamp,
-    ) -> Self {
-        Self {
-            subject_id,
-            enrollment_ref,
-            authored_by,
-            started_at,
-            id_plan: WorkflowIdPlan::deterministic_with_fact_overrides(
-                "export",
-                ProblemEpisodeId("episode-export-step-up".to_string()),
-                4,
-                vec![
-                    (0, FactId("fact-export-credential".to_string())),
-                    (1, FactId("fact-export-continuity".to_string())),
-                    (2, FactId("fact-export-risk".to_string())),
-                    (3, FactId("fact-export-access-decision".to_string())),
-                ],
-            )
-            .with_challenge(
-                ChallengeId("challenge-export-step-up".to_string()),
-                "nonce-export-step-up".to_string(),
-            ),
-            challenge_expires_at: Timestamp("2026-05-29T00:10:00Z".to_string()),
-            policy_ref: PolicyRef("complete-record-export-policy".to_string()),
-            device_ref: Some("device-passkey-1".to_string()),
-        }
-    }
 }
 
 pub fn complete_record_export_step_up_slice_from_request(
@@ -202,7 +170,7 @@ pub fn complete_record_export_step_up_outcome_from_request(
     facts.push(risk_fact.clone());
 
     let policy = default_policy_for_action(action, request.policy_ref);
-    let policy_context = PolicyEvaluationContext::new(Some(request.started_at.clone()));
+    let policy_context = PolicyEvaluationContext::new(request.started_at.clone());
     let policy_evaluation = evaluate_action_policy_with_context(
         &policy,
         &EvidenceSummary {
@@ -264,30 +232,4 @@ pub fn complete_record_export_step_up_outcome_from_request(
         policy_evaluation,
         access_decision_fact_id,
     })
-}
-
-pub fn complete_record_export_step_up_slice(
-    subject_id: SubjectId,
-    enrollment_ref: String,
-    provider: &impl ContinuityVaultProvider,
-    nonce_lifecycle: &mut InMemoryNonceLifecycle,
-    signature_verifier: &impl ContinuitySignatureVerifier,
-    assurance_mapper: &impl ContinuityAssuranceMapper,
-    translator: &FenTranslator,
-    authored_by: Author,
-    started_at: Timestamp,
-) -> Result<IdentityWorkflowSlice, VerticalSliceError> {
-    complete_record_export_step_up_slice_from_request(
-        CompleteRecordExportStepUpRequest::fixture(
-            subject_id,
-            enrollment_ref,
-            authored_by,
-            started_at,
-        ),
-        provider,
-        nonce_lifecycle,
-        signature_verifier,
-        assurance_mapper,
-        translator,
-    )
 }

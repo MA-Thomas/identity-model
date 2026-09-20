@@ -1,14 +1,14 @@
 use super::WorkflowOutcome;
 use crate::fen::{FactId, FactPayload, SubjectId};
-use crate::fixtures::workflow_narrative_lines;
 use crate::flows::IdentityWorkflowSlice;
-use crate::materialized::materialize_identity_state;
+use crate::materialized::project_identity_history;
+use crate::narrative::workflow_narrative_lines;
 
 pub(super) fn workflow_outcome(
     subject_id: SubjectId,
     slice: IdentityWorkflowSlice,
 ) -> WorkflowOutcome {
-    let projection = materialize_identity_state(subject_id, &slice.facts);
+    let projection = project_identity_history(subject_id, &slice.facts);
     let narrative = workflow_narrative_lines(&slice);
 
     WorkflowOutcome {

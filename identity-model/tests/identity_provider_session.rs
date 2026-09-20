@@ -1,4 +1,12 @@
+#[allow(unused_imports)]
+use fen_store::RingAes256GcmFactEncryptor;
+#[allow(unused_imports)]
+use identity_adapters::{continuity::*, device::*, hosted::*, oidc::*};
 use identity_model::*;
+#[allow(unused_imports)]
+use identity_server::{mobile::*, mobile_http::*, runtime::*};
+#[allow(unused_imports)]
+use identity_storage_postgres::*;
 
 mod common;
 use common::*;
@@ -22,26 +30,24 @@ fn keycloak_session_bootstrap_records_login_witness_and_verified_email() {
     .with_verified_email("patient@example.test")
     .with_preferred_username("patient");
     let verifier = StaticOidcSessionVerifier::new("verified-access-token", session);
-    let verified_session = verifier
-        .verify_session(
-            "verified-access-token",
-            &config,
-            &ts("2026-05-29T00:05:00Z"),
-        )
-        .expect("static verifier should accept expected Keycloak session");
     let mut ids = DeterministicIdGenerator::new();
 
-    let outcome =
-        service.accept_account_session(AccountSessionBootstrapRequest::with_generated_ids(
-            id("subject-keycloak-bootstrap"),
-            author,
-            ts("2026-05-29T00:05:00Z"),
-            verified_session,
-            Some("iphone-passkey-device".to_string()),
-            OidcAssurancePolicy::default(),
-            "keycloak-bootstrap",
+    let outcome = service
+        .accept_account_token(
+            AccountTokenBootstrapRequest {
+                subject_id: id("subject-keycloak-bootstrap"),
+                authored_by: author,
+                observed_at: ts("2026-05-29T00:05:00Z"),
+                token: "verified-access-token".into(),
+                oidc_config: config,
+                device_ref: Some("iphone-passkey-device".into()),
+                assurance_policy: OidcAssurancePolicy::default(),
+                id_namespace: "keycloak-bootstrap".into(),
+            },
+            &verifier,
             &mut ids,
-        ));
+        )
+        .unwrap();
 
     assert_eq!(
         outcome.workflow.slice.episode.label,
@@ -219,17 +225,25 @@ fn unverified_oidc_email_is_not_promoted_to_identity_attribute_fact() {
     .with_unverified_email("unverified@example.test");
     let mut ids = DeterministicIdGenerator::new();
 
-    let outcome =
-        service.accept_account_session(AccountSessionBootstrapRequest::with_generated_ids(
-            id("subject-unverified-email"),
-            author,
-            ts("2026-05-29T00:05:00Z"),
-            session,
-            None,
-            OidcAssurancePolicy::default(),
-            "unverified-email",
+    let outcome = service
+        .accept_account_token(
+            AccountTokenBootstrapRequest {
+                subject_id: id("subject-unverified-email"),
+                authored_by: author,
+                observed_at: ts("2026-05-29T00:05:00Z"),
+                token: "token".into(),
+                oidc_config: OidcClientConfig::keycloak(
+                    "https://id.example.test/realms/fen",
+                    "fen-identity",
+                ),
+                device_ref: None,
+                assurance_policy: OidcAssurancePolicy::default(),
+                id_namespace: "unverified-email".into(),
+            },
+            &StaticOidcSessionVerifier::new("token", session),
             &mut ids,
-        ));
+        )
+        .unwrap();
 
     assert_eq!(outcome.workflow.slice.facts.len(), 2);
     assert_eq!(outcome.verified_email_attribute_fact_id, None);
@@ -570,8 +584,6 @@ fn fact_by_id<'a>(facts: &'a [Fact], fact_id: &FactId) -> &'a Fact {
         .find(|fact| &fact.id == fact_id)
         .expect("fact should exist")
 }
-
-#[cfg(feature = "oidc-jwks-verifier")]
 mod live_jwks {
     use super::*;
     use jsonwebtoken::jwk::JwkSet;
@@ -741,12 +753,24 @@ mod live_jwks {
     #[test]
     fn live_keycloak_token_can_bootstrap_append_and_replay_when_env_is_set() {
         let Ok(issuer) = env::var("IDENTITY_MODEL_KEYCLOAK_ISSUER") else {
+            assert!(
+                std::env::var_os("IDENTITY_REQUIRE_PROVIDER_TESTS").is_none(),
+                "required provider test configuration is missing"
+            );
             return;
         };
         let Ok(client_id) = env::var("IDENTITY_MODEL_KEYCLOAK_CLIENT_ID") else {
+            assert!(
+                std::env::var_os("IDENTITY_REQUIRE_PROVIDER_TESTS").is_none(),
+                "required provider test configuration is missing"
+            );
             return;
         };
         let Ok(token) = env::var("IDENTITY_MODEL_KEYCLOAK_TOKEN") else {
+            assert!(
+                std::env::var_os("IDENTITY_REQUIRE_PROVIDER_TESTS").is_none(),
+                "required provider test configuration is missing"
+            );
             return;
         };
         let subject_id: SubjectId = env::var("IDENTITY_MODEL_KEYCLOAK_SUBJECT_ID")
@@ -855,4 +879,43 @@ GcZ0izY/30012ajdHY+/QK5lsMoxTnn0skdS+spLxaS5ZEO4qvPVb8RAoCkWMMal
 2pOhmquJQVDPDLuZHdrIiKiDM20dy9sMfHygWcZjQ4WSxf/J7T9canLZIXFhHAZT
 3wc9h4G8BBCtWN2TN/LsGZdB
 -----END PRIVATE KEY-----"#;
+}
+
+#[test]
+fn audience_and_authorized_party_are_independent_requirements() {
+    let config = OidcClientConfig::keycloak("https://issuer.test", "product");
+    let start = ts("2026-05-29T00:00:00Z");
+    let now = ts("2026-05-29T00:05:00Z");
+    let mut session = VerifiedOidcSession::keycloak(
+        config.issuer.clone(),
+        "login",
+        "product",
+        "session",
+        start,
+        ts("2026-05-29T01:00:00Z"),
+    );
+    session.audiences = vec!["another-product".into()];
+    assert_eq!(
+        validate_oidc_session_context(&session, &config, &now),
+        Err(OidcSessionVerificationError::AudienceMismatch)
+    );
+    session.audiences = vec!["product".into()];
+    session.authorized_party = Some("another-product".into());
+    assert_eq!(
+        validate_oidc_session_context(&session, &config, &now),
+        Err(OidcSessionVerificationError::AudienceMismatch)
+    );
+    session.authorized_party = None;
+    assert!(validate_oidc_session_context(&session, &config, &now).is_ok());
+    session.audiences.push("another-product".into());
+    assert_eq!(
+        validate_oidc_session_context(&session, &config, &now),
+        Err(OidcSessionVerificationError::AudienceMismatch)
+    );
+    session.authorized_party = Some("product".into());
+    session.issued_at = ts("2026-05-29T00:10:00Z");
+    assert_eq!(
+        validate_oidc_session_context(&session, &config, &now),
+        Err(OidcSessionVerificationError::InvalidSessionTimestamp)
+    );
 }

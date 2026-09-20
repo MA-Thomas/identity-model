@@ -10,8 +10,8 @@
 use fen_health_econ::{
     discrepancy_kind_identity_label, postgres_rule_definition_type_label,
     postgres_rule_status_label, DiscrepancyKind, Money, PostgresRuleStoreError,
-    ReconciliationRuleArtifact, ReconciliationRuleDefinition, RuleArtifactRef,
-    RuleArtifactStatus, RuleReview, RuleStoreError,
+    ReconciliationRuleArtifact, ReconciliationRuleDefinition, RuleArtifactRef, RuleArtifactStatus,
+    RuleReview, RuleStoreError,
 };
 use identity_model::{Author, AuthorId, AuthorType, TimeInterval, Timestamp};
 
@@ -31,7 +31,11 @@ fn review() -> RuleReview {
     }
 }
 
-fn draft(id: &str, version: &str, definition: ReconciliationRuleDefinition) -> ReconciliationRuleArtifact {
+fn draft(
+    id: &str,
+    version: &str,
+    definition: ReconciliationRuleDefinition,
+) -> ReconciliationRuleArtifact {
     ReconciliationRuleArtifact {
         id: RuleArtifactRef::new(id),
         version: version.to_string(),
@@ -46,9 +50,18 @@ fn draft(id: &str, version: &str, definition: ReconciliationRuleDefinition) -> R
 
 #[test]
 fn postgres_rule_labels_are_pinned_and_match_the_identity_labels() {
-    assert_eq!(postgres_rule_status_label(RuleArtifactStatus::Draft), "draft");
-    assert_eq!(postgres_rule_status_label(RuleArtifactStatus::Active), "active");
-    assert_eq!(postgres_rule_status_label(RuleArtifactStatus::Retired), "retired");
+    assert_eq!(
+        postgres_rule_status_label(RuleArtifactStatus::Draft),
+        "draft"
+    );
+    assert_eq!(
+        postgres_rule_status_label(RuleArtifactStatus::Active),
+        "active"
+    );
+    assert_eq!(
+        postgres_rule_status_label(RuleArtifactStatus::Retired),
+        "retired"
+    );
 
     // The definition-type column carries exactly the frozen discrepancy-kind
     // identity labels: one vocabulary from rule review to finding identity.
@@ -90,21 +103,21 @@ mod live {
     const POSTGRES_URL_ENV: &str = "IDENTITY_MODEL_POSTGRES_URL";
 
     async fn cleanup(pool: &sqlx::PgPool, rule_id: &str) {
-        sqlx::query(
-            "DELETE FROM health_econ_reconciliation_rule_artifacts WHERE rule_id = $1",
-        )
-        .bind(rule_id)
-        .execute(pool)
-        .await
-        .expect("live rule cleanup should succeed");
+        sqlx::query("DELETE FROM health_econ_reconciliation_rule_artifacts WHERE rule_id = $1")
+            .bind(rule_id)
+            .execute(pool)
+            .await
+            .expect("live rule cleanup should succeed");
     }
 
     #[test]
     fn live_postgres_rule_store_preserves_in_memory_semantics_when_env_is_set() {
         let Ok(database_url) = std::env::var(POSTGRES_URL_ENV) else {
-            eprintln!(
-                "skipping live PostgreSQL rule store test; set {POSTGRES_URL_ENV} to run it"
+            assert!(
+                std::env::var_os("IDENTITY_REQUIRE_POSTGRES_TESTS").is_none(),
+                "required PostgreSQL test configuration is missing"
             );
+            eprintln!("skipping live PostgreSQL rule store test; set {POSTGRES_URL_ENV} to run it");
             return;
         };
 
@@ -157,7 +170,10 @@ mod live {
             );
 
             // Drafts are never resolved for evaluation.
-            let resolved = store.active_rules(&as_of).await.expect("resolution should succeed");
+            let resolved = store
+                .active_rules(&as_of)
+                .await
+                .expect("resolution should succeed");
             assert!(resolved.iter().all(|rule| rule.rule_ref != v1_ref));
 
             // Activation records the review and makes the rule resolvable
@@ -182,7 +198,10 @@ mod live {
                     from: RuleArtifactStatus::Active,
                 })
             );
-            let resolved = store.active_rules(&as_of).await.expect("resolution should succeed");
+            let resolved = store
+                .active_rules(&as_of)
+                .await
+                .expect("resolution should succeed");
             let live_v1 = resolved
                 .iter()
                 .find(|rule| rule.rule_ref == v1_ref)
@@ -211,7 +230,10 @@ mod live {
                 .await
                 .expect("draft v2 should activate");
 
-            let inside = store.active_rules(&as_of).await.expect("resolution should succeed");
+            let inside = store
+                .active_rules(&as_of)
+                .await
+                .expect("resolution should succeed");
             assert!(inside.iter().any(|rule| rule.rule_ref == v2_ref));
             let before_window = store
                 .active_rules(&ts("2026-06-01T00:00:00Z"))
@@ -221,8 +243,14 @@ mod live {
             assert!(before_window.iter().any(|rule| rule.rule_ref == v1_ref));
 
             // Retire v1: gone from resolution, kept as history.
-            store.retire(&id, "v1").await.expect("active v1 should retire");
-            let after_retire = store.active_rules(&as_of).await.expect("resolution should succeed");
+            store
+                .retire(&id, "v1")
+                .await
+                .expect("active v1 should retire");
+            let after_retire = store
+                .active_rules(&as_of)
+                .await
+                .expect("resolution should succeed");
             assert!(after_retire.iter().all(|rule| rule.rule_ref != v1_ref));
             assert!(after_retire.iter().any(|rule| rule.rule_ref == v2_ref));
             assert_eq!(
@@ -242,7 +270,10 @@ mod live {
             );
 
             // Both versions remain rows, in insertion order.
-            let versions = store.versions_of(&id).await.expect("versions query should succeed");
+            let versions = store
+                .versions_of(&id)
+                .await
+                .expect("versions query should succeed");
             assert_eq!(
                 versions
                     .iter()

@@ -1,6 +1,13 @@
-#![cfg(feature = "mobile-http")]
-
+#[allow(unused_imports)]
+use fen_store::RingAes256GcmFactEncryptor;
+#[allow(unused_imports)]
+use identity_adapters::{continuity::*, device::*, hosted::*, oidc::*};
+use identity_application::workflows::EncryptedWorkflowService;
 use identity_model::*;
+#[allow(unused_imports)]
+use identity_server::{mobile::*, mobile_http::*, runtime::*};
+#[allow(unused_imports)]
+use identity_storage_postgres::*;
 use serde_json::json;
 
 mod common;
@@ -350,8 +357,6 @@ fn mobile_app_attest_key_registration_challenge_endpoint_issues_challenge() {
         }
     );
 }
-
-#[cfg(feature = "production-crypto")]
 #[test]
 fn mobile_app_attest_key_registration_endpoint_records_verified_registration() {
     let store = InMemoryAppAttestKeyStateStore::new();
@@ -721,7 +726,6 @@ fn mobile_onboarding_http_endpoint_can_append_through_encrypted_facade() {
     );
     let mut ids = DeterministicIdGenerator::new();
     let key = http_active_key();
-    let resolver = StaticFactKeyResolver::from_keys([key.clone()]);
     let policy_refs = http_materialization_policy_refs();
     let mut repository = EncryptionAwareWorkflowRepository::new(
         InMemoryStoredEncryptedWorkflowRepository::new(),
@@ -769,10 +773,7 @@ fn mobile_onboarding_http_endpoint_can_append_through_encrypted_facade() {
         MobileOnboardingEncryptedPersistenceContext {
             transaction_id: id("tx-encrypted-mobile-http"),
             committed_at: ts("2026-05-29T00:05:31Z"),
-            materialization_policy: http_allowed_policy(policy_refs.clone()),
-            materialization_audit_context: FactMaterializationAuditContext::default(),
         },
-        &resolver,
     );
 
     assert_eq!(response.status_code, 200, "{}", response.body);
@@ -856,7 +857,6 @@ fn mobile_identity_onboarding_http_endpoint_can_append_composition_through_encry
     let identity_proofing_provider = PersonaIdentityProofingProvider::new();
     let mut ids = DeterministicIdGenerator::new();
     let key = http_active_key();
-    let resolver = StaticFactKeyResolver::from_keys([key.clone()]);
     let policy_refs = http_materialization_policy_refs();
     let mut repository = EncryptionAwareWorkflowRepository::new(
         InMemoryStoredEncryptedWorkflowRepository::new(),
@@ -916,10 +916,7 @@ fn mobile_identity_onboarding_http_endpoint_can_append_composition_through_encry
         MobileOnboardingEncryptedPersistenceContext {
             transaction_id: id("tx-encrypted-mobile-identity-http"),
             committed_at: ts("2026-05-29T00:05:31Z"),
-            materialization_policy: http_allowed_policy(policy_refs.clone()),
-            materialization_audit_context: FactMaterializationAuditContext::default(),
         },
-        &resolver,
     );
 
     assert_eq!(response.status_code, 200, "{}", response.body);
@@ -975,11 +972,13 @@ fn mobile_identity_onboarding_http_endpoint_can_append_composition_through_encry
         EncryptedWorkflowAppendSequenceState::with_relation_append_sequence(1010, 2005, 3010, 4004)
     );
 }
-
-#[cfg(feature = "postgres-adapter")]
 #[test]
 fn live_postgres_mobile_onboarding_http_endpoint_uses_durable_encrypted_facade_when_env_is_set() {
     let Ok(database_url) = std::env::var("IDENTITY_MODEL_POSTGRES_URL") else {
+        assert!(
+            std::env::var_os("IDENTITY_REQUIRE_POSTGRES_TESTS").is_none(),
+            "required PostgreSQL test configuration is missing"
+        );
         eprintln!(
             "skipping live PostgreSQL mobile HTTP test; set IDENTITY_MODEL_POSTGRES_URL to run it"
         );
@@ -1072,9 +1071,8 @@ fn live_postgres_mobile_onboarding_http_endpoint_uses_durable_encrypted_facade_w
         .await;
 
         let key = http_active_key();
-        let resolver = StaticFactKeyResolver::from_keys([key.clone()]);
         let policy_refs = http_materialization_policy_refs();
-        let repository = SqlxPostgresEncryptionAwareWorkflowRepository::new(
+        let repository = EncryptedWorkflowService::new(
             storage,
             DeterministicTestFactEncryptionMetadataPlanner::new(
                 "mobile-http-key",
@@ -1091,7 +1089,6 @@ fn live_postgres_mobile_onboarding_http_endpoint_uses_durable_encrypted_facade_w
             app_attest_verifier,
             DeterministicIdGenerator::new(),
             repository,
-            resolver,
         );
         let request_body = json!({
             "subject_id": subject_id.0.clone(),
@@ -1126,12 +1123,6 @@ fn live_postgres_mobile_onboarding_http_endpoint_uses_durable_encrypted_facade_w
                 MobileOnboardingEncryptedPersistenceContext {
                     transaction_id: transaction_id.clone(),
                     committed_at: ts("2026-05-29T00:05:31Z"),
-                    materialization_policy: http_allowed_policy(policy_refs.clone()),
-                    materialization_audit_context: FactMaterializationAuditContext::new(
-                        Some("mobile-http-handler".to_string()),
-                        Some("mobile-onboarding-summary".to_string()),
-                        Some(ts("2026-05-29T00:05:31Z")),
-                    ),
                 },
             )
             .await;
@@ -1172,7 +1163,7 @@ fn live_postgres_mobile_onboarding_http_endpoint_uses_durable_encrypted_facade_w
         .fetch_one(runtime.repository.storage().pool())
         .await
         .expect("materialization audit count should query");
-        assert_eq!(audit_event_count, 20);
+        assert_eq!(audit_event_count, 0);
 
         cleanup_live_mobile_http_postgres_rows(
             runtime.repository.storage().pool(),
@@ -1328,11 +1319,7 @@ fn assert_callback_error_code(
             if error.code == code
     ));
 }
-
-#[cfg(feature = "production-crypto")]
 struct AcceptingAppAttestKeyRegistrationVerifier;
-
-#[cfg(feature = "production-crypto")]
 impl AppAttestKeyRegistrationVerifier for AcceptingAppAttestKeyRegistrationVerifier {
     fn verify_app_attest_key_registration(
         &self,
@@ -1439,17 +1426,6 @@ fn http_materialization_policy_refs() -> Vec<PolicyRef> {
     vec![id("mobile-http-materialization-policy@v1")]
 }
 
-fn http_allowed_policy(policy_refs: Vec<PolicyRef>) -> PolicyEvaluation {
-    PolicyEvaluation {
-        action: SensitiveAction::ViewRecord,
-        decision: AccessDecisionResult::Allowed,
-        reasons: Vec::new(),
-        relied_on_facts: Vec::new(),
-        policy_refs,
-    }
-}
-
-#[cfg(feature = "postgres-adapter")]
 fn live_http_test_suffix() -> String {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1457,8 +1433,6 @@ fn live_http_test_suffix() -> String {
         .as_nanos()
         .to_string()
 }
-
-#[cfg(feature = "postgres-adapter")]
 async fn cleanup_live_mobile_http_postgres_rows(
     pool: &sqlx::PgPool,
     subject_id: &SubjectId,

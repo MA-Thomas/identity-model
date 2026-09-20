@@ -1,5 +1,12 @@
+#[allow(unused_imports)]
+use fen_store::RingAes256GcmFactEncryptor;
+#[allow(unused_imports)]
+use identity_adapters::{continuity::*, device::*, hosted::*, oidc::*};
 use identity_model::*;
-#[cfg(feature = "production-crypto")]
+#[allow(unused_imports)]
+use identity_server::{mobile::*, mobile_http::*, runtime::*};
+#[allow(unused_imports)]
+use identity_storage_postgres::*;
 use ring::{
     rand::SystemRandom,
     signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_ASN1_SIGNING},
@@ -180,8 +187,6 @@ fn stateful_app_attest_verifier_rejects_revoked_keys() {
         Err(AppAttestAssertionVerificationError::KeyRevoked)
     );
 }
-
-#[cfg(feature = "production-crypto")]
 #[test]
 fn apple_app_attest_assertion_verifier_accepts_signed_challenge_bound_assertion() {
     let config = app_attest_config();
@@ -209,8 +214,6 @@ fn apple_app_attest_assertion_verifier_accepts_signed_challenge_bound_assertion(
     assert_eq!(verified.app_id, config.app_id);
     assert_eq!(verified.assurance_level, AssuranceLevel::Medium);
 }
-
-#[cfg(feature = "production-crypto")]
 #[test]
 fn apple_app_attest_assertion_verifier_rejects_tampered_challenge_and_signature() {
     let config = app_attest_config();
@@ -253,8 +256,6 @@ fn apple_app_attest_assertion_verifier_rejects_tampered_challenge_and_signature(
         Err(AppAttestAssertionVerificationError::InvalidSignature)
     );
 }
-
-#[cfg(feature = "production-crypto")]
 #[test]
 fn apple_app_attest_assertion_verifier_accepts_raw_cbor_assertion_object_envelope() {
     let config = app_attest_config();
@@ -285,8 +286,6 @@ fn apple_app_attest_assertion_verifier_accepts_raw_cbor_assertion_object_envelop
     assert_eq!(verified.key_id, "apple-key-real");
     assert_eq!(verified.sign_count, 23);
 }
-
-#[cfg(feature = "production-crypto")]
 #[test]
 fn apple_app_attest_assertion_verifier_rejects_malformed_raw_cbor_assertion_object() {
     let config = app_attest_config();
@@ -318,8 +317,6 @@ fn apple_app_attest_assertion_verifier_rejects_malformed_raw_cbor_assertion_obje
         Err(AppAttestAssertionVerificationError::InvalidAssertionEncoding)
     );
 }
-
-#[cfg(feature = "production-crypto")]
 #[test]
 fn apple_app_attest_assertion_verifier_rejects_app_id_hash_mismatch() {
     let config = app_attest_config();
@@ -349,8 +346,6 @@ fn apple_app_attest_assertion_verifier_rejects_app_id_hash_mismatch() {
         Err(AppAttestAssertionVerificationError::AppIdHashMismatch)
     );
 }
-
-#[cfg(feature = "production-crypto")]
 #[test]
 fn apple_app_attest_key_registration_verifier_records_public_key_for_assertions() {
     let config = app_attest_config();
@@ -395,8 +390,6 @@ fn apple_app_attest_key_registration_verifier_records_public_key_for_assertions(
     assert_eq!(verified.key_id, key_id);
     assert_eq!(verified.sign_count, 3);
 }
-
-#[cfg(feature = "production-crypto")]
 #[test]
 fn apple_app_attest_key_registration_verifier_accepts_attestation_object_envelope() {
     let config = app_attest_config();
@@ -424,8 +417,6 @@ fn apple_app_attest_key_registration_verifier_accepts_attestation_object_envelop
     assert_eq!(registration.device_ref, "iphone-native-device");
     assert_eq!(registration.public_key_bytes, public_key_bytes);
 }
-
-#[cfg(feature = "production-crypto")]
 #[test]
 fn apple_app_attest_key_registration_verifier_rejects_certificate_key_mismatch() {
     let config = app_attest_config();
@@ -447,8 +438,6 @@ fn apple_app_attest_key_registration_verifier_rejects_certificate_key_mismatch()
         Err(AppAttestAssertionVerificationError::InvalidSignature)
     );
 }
-
-#[cfg(feature = "production-crypto")]
 #[test]
 fn apple_app_attest_key_registration_verifier_rejects_bad_certificate_nonce_and_untrusted_root() {
     let config = app_attest_config();
@@ -485,8 +474,6 @@ fn apple_app_attest_key_registration_verifier_rejects_bad_certificate_nonce_and_
         Err(AppAttestAssertionVerificationError::CertificateChainMismatch)
     );
 }
-
-#[cfg(feature = "production-crypto")]
 #[test]
 fn apple_app_attest_key_registration_verifier_rejects_mismatched_credential_and_challenge() {
     let config = app_attest_config();
@@ -513,8 +500,6 @@ fn apple_app_attest_key_registration_verifier_rejects_mismatched_credential_and_
         Err(AppAttestAssertionVerificationError::ClientDataHashMismatch)
     );
 }
-
-#[cfg(feature = "production-crypto")]
 #[test]
 fn stateful_apple_app_attest_verifier_keeps_durable_replay_and_counter_guards() {
     let config = app_attest_config();
@@ -586,8 +571,6 @@ fn verified_assertion(
         assurance_level: AssuranceLevel::Medium,
     }
 }
-
-#[cfg(feature = "production-crypto")]
 fn signed_apple_app_attest_request(
     config: &AppAttestClientConfig,
     device_ref: &str,
@@ -608,14 +591,10 @@ fn signed_apple_app_attest_request(
         public_key_bytes,
     )
 }
-
-#[cfg(feature = "production-crypto")]
 struct TestAppAttestKeyRegistrationFixture {
     request: AppleAppAttestKeyRegistrationVerificationRequest,
     trusted_root_certificate_der: Vec<u8>,
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_app_attest_key_registration_verifier(
     config: &AppAttestClientConfig,
     fixture: &TestAppAttestKeyRegistrationFixture,
@@ -625,8 +604,6 @@ fn test_app_attest_key_registration_verifier(
         vec![fixture.trusted_root_certificate_der.clone()],
     )
 }
-
-#[cfg(feature = "production-crypto")]
 fn apple_app_attest_key_registration_fixture(
     config: &AppAttestClientConfig,
     key_id: &str,
@@ -657,8 +634,6 @@ fn apple_app_attest_key_registration_fixture(
         trusted_root_certificate_der,
     }
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_app_attest_attestation_nonce(
     authenticator_data: &[u8],
     client_data_hash: &[u8],
@@ -670,8 +645,6 @@ fn test_app_attest_attestation_nonce(
         .as_ref()
         .to_vec()
 }
-
-#[cfg(feature = "production-crypto")]
 fn apple_app_attest_registration_authenticator_data(
     config: &AppAttestClientConfig,
     key_id: &str,
@@ -687,8 +660,6 @@ fn apple_app_attest_registration_authenticator_data(
     authenticator_data.extend_from_slice(&test_cose_p256_public_key(public_key_bytes));
     authenticator_data
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_cose_p256_public_key(public_key_bytes: &[u8]) -> Vec<u8> {
     assert_eq!(public_key_bytes.len(), 65);
     assert_eq!(public_key_bytes[0], 0x04);
@@ -706,8 +677,6 @@ fn test_cose_p256_public_key(public_key_bytes: &[u8]) -> Vec<u8> {
     test_cbor_write_bytes(&mut output, &public_key_bytes[33..65]);
     output
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_certificate_chain(
     public_key_bytes: &[u8],
     app_attest_nonce: &[u8],
@@ -743,8 +712,6 @@ fn test_certificate_chain(
         root_certificate,
     )
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_certificate_der(
     subject_der: &[u8],
     issuer_der: &[u8],
@@ -783,8 +750,6 @@ fn test_certificate_der(
         test_der_bit_string(signature.as_ref()),
     ])
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_subject_public_key_info(public_key_bytes: &[u8]) -> Vec<u8> {
     test_der_sequence(&[
         test_der_sequence(&[
@@ -794,15 +759,11 @@ fn test_subject_public_key_info(public_key_bytes: &[u8]) -> Vec<u8> {
         test_der_bit_string(public_key_bytes),
     ])
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_ecdsa_sha256_algorithm_identifier() -> Vec<u8> {
     test_der_sequence(&[test_der_oid(&[
         0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02,
     ])])
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_x509_extensions(app_attest_nonce: &[u8]) -> Vec<u8> {
     let nonce_extension_payload = test_der_sequence(&[test_der_octet_string(app_attest_nonce)]);
     let app_attest_extension = test_der_sequence(&[
@@ -811,16 +772,12 @@ fn test_x509_extensions(app_attest_nonce: &[u8]) -> Vec<u8> {
     ]);
     test_der_tag(0xa3, &test_der_sequence(&[app_attest_extension]))
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_x509_name(common_name: &str) -> Vec<u8> {
     test_der_sequence(&[test_der_set(&[test_der_sequence(&[
         test_der_oid(&[0x55, 0x04, 0x03]),
         test_der_utf8_string(common_name),
     ])])])
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_der_sequence(elements: &[Vec<u8>]) -> Vec<u8> {
     let mut contents = Vec::new();
     for element in elements {
@@ -828,8 +785,6 @@ fn test_der_sequence(elements: &[Vec<u8>]) -> Vec<u8> {
     }
     test_der_tag(0x30, &contents)
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_der_set(elements: &[Vec<u8>]) -> Vec<u8> {
     let mut contents = Vec::new();
     for element in elements {
@@ -837,49 +792,33 @@ fn test_der_set(elements: &[Vec<u8>]) -> Vec<u8> {
     }
     test_der_tag(0x31, &contents)
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_der_integer(bytes: &[u8]) -> Vec<u8> {
     test_der_tag(0x02, bytes)
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_der_oid(body: &[u8]) -> Vec<u8> {
     test_der_tag(0x06, body)
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_der_octet_string(bytes: &[u8]) -> Vec<u8> {
     test_der_tag(0x04, bytes)
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_der_utf8_string(value: &str) -> Vec<u8> {
     test_der_tag(0x0c, value.as_bytes())
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_der_generalized_time(value: &str) -> Vec<u8> {
     test_der_tag(0x18, value.as_bytes())
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_der_bit_string(bytes: &[u8]) -> Vec<u8> {
     let mut contents = Vec::with_capacity(bytes.len() + 1);
     contents.push(0);
     contents.extend_from_slice(bytes);
     test_der_tag(0x03, &contents)
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_der_tag(tag: u8, contents: &[u8]) -> Vec<u8> {
     let mut output = vec![tag];
     test_der_write_len(&mut output, contents.len());
     output.extend_from_slice(contents);
     output
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_der_write_len(output: &mut Vec<u8>, len: usize) {
     if len < 128 {
         output.push(len as u8);
@@ -891,14 +830,10 @@ fn test_der_write_len(output: &mut Vec<u8>, len: usize) {
         output.extend_from_slice(&(len as u16).to_be_bytes());
     }
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_cbor_write_bytes(output: &mut Vec<u8>, value: &[u8]) {
     test_cbor_write_len(output, 2, value.len());
     output.extend_from_slice(value);
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_cbor_write_i64(output: &mut Vec<u8>, value: i64) {
     if value >= 0 {
         test_cbor_write_len(output, 0, value as usize);
@@ -906,8 +841,6 @@ fn test_cbor_write_i64(output: &mut Vec<u8>, value: i64) {
         test_cbor_write_len(output, 1, (-1 - value) as usize);
     }
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_cbor_write_len(output: &mut Vec<u8>, major: u8, len: usize) {
     let prefix = major << 5;
     if len <= 23 {
@@ -920,8 +853,6 @@ fn test_cbor_write_len(output: &mut Vec<u8>, major: u8, len: usize) {
         output.extend_from_slice(&(len as u16).to_be_bytes());
     }
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_app_attest_key_pair() -> (Vec<u8>, Vec<u8>) {
     let rng = SystemRandom::new();
     let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &rng)
@@ -933,8 +864,6 @@ fn test_app_attest_key_pair() -> (Vec<u8>, Vec<u8>) {
         key_pair.public_key().as_ref().to_vec(),
     )
 }
-
-#[cfg(feature = "production-crypto")]
 fn signed_apple_app_attest_request_with_key(
     config: &AppAttestClientConfig,
     device_ref: &str,
@@ -953,8 +882,6 @@ fn signed_apple_app_attest_request_with_key(
         pkcs8,
     )
 }
-
-#[cfg(feature = "production-crypto")]
 fn signed_apple_app_attest_request_with_authenticator_config(
     authenticator_config: &AppAttestClientConfig,
     request_config: &AppAttestClientConfig,
@@ -993,8 +920,6 @@ fn signed_apple_app_attest_request_with_authenticator_config(
         config: request_config.clone(),
     }
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_hex_encode(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut encoded = String::with_capacity(bytes.len() * 2);
@@ -1006,24 +931,18 @@ fn test_hex_encode(bytes: &[u8]) -> String {
 }
 
 // --- P-384 intermediate chain regression (real Apple App Attest cert shape) ---
-
-#[cfg(feature = "production-crypto")]
 fn test_p384_signing_key(fill: u8) -> p384::ecdsa::SigningKey {
     // A fixed, small, non-zero scalar is a valid P-384 private key and keeps the
     // test deterministic without an RNG.
     p384::ecdsa::SigningKey::from_slice(&[fill.max(1); 48])
         .expect("test P-384 scalar should be a valid signing key")
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_p384_public_key_bytes(key: &p384::ecdsa::SigningKey) -> Vec<u8> {
     key.verifying_key()
         .to_encoded_point(false)
         .as_bytes()
         .to_vec()
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_p384_sign_prehash(key: &p384::ecdsa::SigningKey, prehash: &[u8]) -> Vec<u8> {
     use p384::ecdsa::signature::hazmat::PrehashSigner;
     let signature: p384::ecdsa::Signature = key
@@ -1035,8 +954,6 @@ fn test_p384_sign_prehash(key: &p384::ecdsa::SigningKey, prehash: &[u8]) -> Vec<
     let fixed = signature.to_bytes();
     test_der_ecdsa_signature(fixed.as_slice())
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_der_ecdsa_signature(fixed: &[u8]) -> Vec<u8> {
     let half = fixed.len() / 2;
     test_der_sequence(&[
@@ -1044,8 +961,6 @@ fn test_der_ecdsa_signature(fixed: &[u8]) -> Vec<u8> {
         test_der_unsigned_integer(&fixed[half..]),
     ])
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_der_unsigned_integer(bytes: &[u8]) -> Vec<u8> {
     // DER INTEGER: strip leading zero bytes (keeping at least one), then prepend
     // 0x00 when the high bit is set so the value stays non-negative.
@@ -1061,29 +976,21 @@ fn test_der_unsigned_integer(bytes: &[u8]) -> Vec<u8> {
     contents.extend_from_slice(trimmed);
     test_der_tag(0x02, &contents)
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_sha256(bytes: &[u8]) -> Vec<u8> {
     <sha2::Sha256 as sha2::Digest>::digest(bytes)
         .as_slice()
         .to_vec()
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_sha384(bytes: &[u8]) -> Vec<u8> {
     <sha2::Sha384 as sha2::Digest>::digest(bytes)
         .as_slice()
         .to_vec()
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_ecdsa_sha384_algorithm_identifier() -> Vec<u8> {
     test_der_sequence(&[test_der_oid(&[
         0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x03,
     ])])
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_subject_public_key_info_p384(public_key_bytes: &[u8]) -> Vec<u8> {
     test_der_sequence(&[
         test_der_sequence(&[
@@ -1093,8 +1000,6 @@ fn test_subject_public_key_info_p384(public_key_bytes: &[u8]) -> Vec<u8> {
         test_der_bit_string(public_key_bytes),
     ])
 }
-
-#[cfg(feature = "production-crypto")]
 fn test_certificate_der_with_signature(
     subject_der: &[u8],
     issuer_der: &[u8],
@@ -1127,8 +1032,6 @@ fn test_certificate_der_with_signature(
         test_der_bit_string(&signature),
     ])
 }
-
-#[cfg(feature = "production-crypto")]
 #[test]
 fn apple_app_attest_key_registration_verifier_accepts_p384_intermediate_chain() {
     // Regression for the real Apple App Attest certificate shape: a P-256 leaf

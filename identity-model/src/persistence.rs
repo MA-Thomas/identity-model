@@ -71,10 +71,10 @@ pub trait IdentityWorkflowRepository:
     ) -> Result<(), RepositoryError>;
 }
 
+mod records;
+pub use records::*;
 mod encrypted;
-mod postgres;
 pub use encrypted::*;
-pub use postgres::*;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InMemoryIdentityRepository {
@@ -247,22 +247,14 @@ impl AppendOnlyEpisodeRelationRepository for InMemoryIdentityRepository {
     }
 }
 
-pub fn replay_identity_state(subject_id: SubjectId, facts: &[Fact]) -> MaterializedIdentityState {
-    materialize_identity_state(subject_id, facts)
-}
-
-pub fn replay_identity_state_at(
-    subject_id: SubjectId,
-    facts: &[Fact],
-    as_of: &Timestamp,
-) -> MaterializedIdentityState {
-    materialize_identity_state_at(subject_id, facts, as_of)
+pub fn replay_identity_state(subject_id: SubjectId, facts: &[Fact]) -> IdentityHistory {
+    project_identity_history(subject_id, facts)
 }
 
 pub fn replay_identity_state_from_repository(
     subject_id: SubjectId,
     repository: &impl AppendOnlyFactRepository,
-) -> MaterializedIdentityState {
+) -> IdentityHistory {
     let facts = repository.facts_for_subject(&subject_id);
     replay_identity_state(subject_id, &facts)
 }
@@ -271,9 +263,9 @@ pub fn replay_identity_state_from_repository_at(
     subject_id: SubjectId,
     repository: &impl AppendOnlyFactRepository,
     as_of: &Timestamp,
-) -> MaterializedIdentityState {
+) -> Result<AuthorizationSnapshot, ProjectionError> {
     let facts = repository.facts_for_subject(&subject_id);
-    replay_identity_state_at(subject_id, &facts, as_of)
+    authorization_snapshot(subject_id, &facts, as_of)
 }
 
 fn append_workflow_slice_atomically(

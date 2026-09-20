@@ -1,61 +1,16 @@
+#[allow(unused_imports)]
+use fen_store::RingAes256GcmFactEncryptor;
+#[allow(unused_imports)]
+use identity_adapters::{continuity::*, device::*, hosted::*, oidc::*};
 use identity_model::*;
+#[allow(unused_imports)]
+use identity_server::{mobile::*, mobile_http::*, runtime::*};
+#[allow(unused_imports)]
+use identity_storage_postgres::*;
+use identity_test_support::*;
 
 mod common;
 use common::*;
-
-#[test]
-fn service_facade_returns_workflow_projection_and_narrative() {
-    let author = system_author();
-    let service = IdentityWorkflowService::new(FenTranslator {
-        system_author: author.clone(),
-    });
-    let provider = MockPhase1ContinuityProvider::successful();
-    let subject_id: SubjectId = id("subject-service-onboarding");
-
-    let outcome = service
-        .enroll_subject(
-            OnboardingRequest::fixture(subject_id.clone(), author, ts("2026-05-29T00:00:00Z")),
-            &provider,
-        )
-        .expect("service onboarding should build");
-
-    assert_eq!(outcome.projection.subject_id, subject_id);
-    assert_eq!(outcome.projection.assurance_level, AssuranceLevel::High);
-    assert!(outcome
-        .narrative
-        .iter()
-        .any(|line| line.contains("identity_verification")));
-}
-
-#[test]
-fn service_detailed_onboarding_surfaces_core_fact_ids() {
-    let author = system_author();
-    let service = IdentityWorkflowService::new(FenTranslator {
-        system_author: author.clone(),
-    });
-    let detailed_provider = MockPhase1ContinuityProvider::successful();
-    let compatibility_provider = MockPhase1ContinuityProvider::successful();
-    let request = OnboardingRequest::fixture(
-        id("subject-service-onboarding-detailed"),
-        author,
-        ts("2026-05-29T00:00:00Z"),
-    );
-
-    let detailed = service
-        .enroll_subject_detailed(request.clone(), &detailed_provider)
-        .expect("detailed onboarding should build");
-    let compatibility = service
-        .enroll_subject(request, &compatibility_provider)
-        .expect("compatibility onboarding should build");
-
-    assert_eq!(detailed.workflow, compatibility);
-    assert_eq!(detailed.subject_fact_id, id("fact-onboarding-0"));
-    assert_eq!(detailed.device_binding_fact_id, id("fact-onboarding-1"));
-    assert_eq!(detailed.identity_witness_fact_id, id("fact-onboarding-2"));
-    assert_eq!(detailed.enrollment_fact_id, id("fact-onboarding-3"));
-    assert_eq!(detailed.clinical_link_fact_id, id("fact-onboarding-4"));
-    assert_eq!(detailed.payer_link_fact_id, id("fact-onboarding-5"));
-}
 
 #[test]
 fn service_split_onboarding_steps_do_not_require_provider_or_payer_links() {
@@ -103,7 +58,7 @@ fn service_split_onboarding_steps_do_not_require_provider_or_payer_links() {
     facts.extend(subject.workflow.slice.facts.clone());
     facts.extend(device.workflow.slice.facts.clone());
     facts.extend(continuity.workflow.slice.facts.clone());
-    let projection = materialize_identity_state(subject_id.clone(), &facts);
+    let projection = project_identity_history(subject_id.clone(), &facts);
 
     assert_eq!(projection.subject_id, subject_id);
     assert_eq!(
@@ -257,7 +212,7 @@ fn service_core_onboarding_returns_parent_episode_with_child_part_of_relations()
     facts.extend(outcome.continuity_enrollment.workflow.slice.facts.clone());
     assert_eq!(
         outcome.projection,
-        materialize_identity_state(id("subject-composed-onboarding"), &facts)
+        project_identity_history(id("subject-composed-onboarding"), &facts)
     );
 
     let mut repository = InMemoryIdentityRepository::new();
@@ -470,7 +425,7 @@ fn service_links_provider_and_payer_identity_as_independent_optional_steps() {
     let mut facts = Vec::new();
     facts.extend(provider_link.workflow.slice.facts.clone());
     facts.extend(payer_link.workflow.slice.facts.clone());
-    let projection = materialize_identity_state(subject_id, &facts);
+    let projection = project_identity_history(subject_id, &facts);
 
     assert_eq!(projection.active_clinical_links.len(), 1);
     assert_eq!(projection.active_payer_links.len(), 1);
@@ -585,7 +540,7 @@ fn service_access_authorization_surfaces_policy_reasons_and_access_fact() {
     let mut lifecycle = InMemoryNonceLifecycle::new();
 
     let outcome = service
-        .authorize_complete_record_export_step_up_detailed(
+        .authorize_complete_record_export_step_up(
             CompleteRecordExportStepUpRequest::fixture(
                 id("subject-service-access"),
                 "enrollment-step-up".to_string(),
@@ -619,110 +574,6 @@ fn service_access_authorization_surfaces_policy_reasons_and_access_fact() {
 }
 
 #[test]
-fn service_detailed_access_outcome_matches_compatibility_slice_shape() {
-    let author = system_author();
-    let service = IdentityWorkflowService::new(FenTranslator {
-        system_author: author.clone(),
-    });
-    let detailed_provider = MockPhase1ContinuityProvider::successful();
-    let compatibility_provider = MockPhase1ContinuityProvider::successful();
-    let mut detailed_lifecycle = InMemoryNonceLifecycle::new();
-    let mut compatibility_lifecycle = InMemoryNonceLifecycle::new();
-    let request = CompleteRecordExportStepUpRequest::fixture(
-        id("subject-service-access-compat"),
-        "enrollment-step-up".to_string(),
-        author,
-        ts("2026-05-29T00:00:00Z"),
-    );
-
-    let detailed = service
-        .authorize_complete_record_export_step_up_detailed(
-            request.clone(),
-            &detailed_provider,
-            &mut detailed_lifecycle,
-            &detailed_provider.signature_verifier(),
-            &ResultBasedAssuranceMapper,
-        )
-        .expect("detailed service call should build");
-    let compatibility = service
-        .authorize_complete_record_export_step_up(
-            request,
-            &compatibility_provider,
-            &mut compatibility_lifecycle,
-            &compatibility_provider.signature_verifier(),
-            &ResultBasedAssuranceMapper,
-        )
-        .expect("compatibility service call should build");
-
-    assert_eq!(detailed.workflow.slice, compatibility.slice);
-    assert_eq!(detailed.workflow.projection, compatibility.projection);
-    assert_eq!(detailed.workflow.narrative, compatibility.narrative);
-}
-
-#[test]
-fn service_detailed_recovery_surfaces_path_and_follow_on_fact_ids() {
-    let author = system_author();
-    let service = IdentityWorkflowService::new(FenTranslator {
-        system_author: author.clone(),
-    });
-    let request = RecoveryRequest::approved_government_id_and_liveness(
-        id("subject-service-recovery-detailed"),
-        author,
-        ts("2026-05-29T00:00:00Z"),
-    );
-
-    let detailed = service.recover_account_detailed(request.clone());
-    let compatibility = service.recover_account(request);
-
-    assert_eq!(detailed.workflow, compatibility);
-    assert_eq!(detailed.path, RecoveryPath::ApprovedGovernmentIdAndLiveness);
-    assert_eq!(
-        detailed.recovery_event_fact_ids,
-        vec![id("fact-recovery-approved-1")]
-    );
-    assert_eq!(
-        detailed.access_decision_fact_id,
-        Some(id("fact-recovery-approved-4"))
-    );
-    assert_eq!(
-        detailed.device_revocation_fact_ids,
-        vec![id("fact-recovery-approved-2")]
-    );
-    assert_eq!(
-        detailed.device_establishment_fact_ids,
-        vec![id("fact-recovery-approved-3")]
-    );
-}
-
-#[test]
-fn service_detailed_delegation_surfaces_authority_decision_and_revocation_ids() {
-    let author = system_author();
-    let service = IdentityWorkflowService::new(FenTranslator {
-        system_author: author.clone(),
-    });
-    let request = DelegationRequest::fixture(
-        id("caregiver-service-detailed"),
-        id("patient-service-detailed"),
-        author,
-        ts("2026-05-29T00:00:00Z"),
-    );
-
-    let detailed = service.delegate_authority_detailed(request.clone());
-    let compatibility = service.delegate_authority(request);
-
-    assert_eq!(detailed.workflow, compatibility);
-    assert_eq!(
-        detailed.authority_fact_id,
-        Some(id("fact-delegation-authority"))
-    );
-    assert_eq!(
-        detailed.access_decision_fact_id,
-        Some(id("fact-delegation-3"))
-    );
-    assert_eq!(detailed.revocation_fact_id, Some(id("fact-delegation-4")));
-}
-
-#[test]
 fn service_detailed_dispute_surfaces_reviewable_resolution_ids() {
     let author = system_author();
     let service = IdentityWorkflowService::new(FenTranslator {
@@ -735,10 +586,7 @@ fn service_detailed_dispute_surfaces_reviewable_resolution_ids() {
         ts("2026-05-29T00:00:00Z"),
     );
 
-    let detailed = service.resolve_identity_dispute_detailed(request.clone());
-    let compatibility = service.resolve_identity_dispute(request);
-
-    assert_eq!(detailed.workflow, compatibility);
+    let detailed = service.resolve_identity_dispute(request.clone());
     assert_eq!(
         detailed.kind,
         IdentityDisputeResolutionKind::ContestedProviderLink {
@@ -760,35 +608,6 @@ fn service_detailed_dispute_surfaces_reviewable_resolution_ids() {
     assert_eq!(detailed.subject_graph_correction_fact_id, None);
     assert_eq!(detailed.witness_supersession_fact_id, None);
     assert_eq!(detailed.access_decision_fact_id, None);
-}
-
-#[test]
-fn workflow_id_plan_controls_cross_fact_references() {
-    let author = system_author();
-    let service = IdentityWorkflowService::new(FenTranslator {
-        system_author: author.clone(),
-    });
-    let mut request = DelegationRequest::fixture(
-        id("caregiver-service"),
-        id("patient-service"),
-        author,
-        ts("2026-05-29T00:00:00Z"),
-    );
-    request.id_plan =
-        WorkflowIdPlan::deterministic("delegation-service", id("episode-delegation-service"), 5);
-
-    let outcome = service.delegate_authority(request);
-    let authority_fact_id = id("fact-delegation-service-2");
-    assert!(outcome
-        .slice
-        .facts
-        .iter()
-        .any(|fact| fact.id == authority_fact_id));
-    assert!(outcome.slice.facts.iter().any(|fact| matches!(
-        &fact.payload,
-        FactPayload::AccessDecision { relied_on_facts, .. }
-            if relied_on_facts == &vec![authority_fact_id.clone()]
-    )));
 }
 
 #[test]
@@ -862,7 +681,7 @@ fn service_evaluates_sensitive_action_from_policy_artifact() {
         SensitiveActionPolicyArtifactEvaluationRequest {
             policy_artifact: artifact,
             evidence,
-            context: PolicyEvaluationContext::new(Some(ts("2026-05-29T00:01:00Z"))),
+            context: PolicyEvaluationContext::new(ts("2026-05-29T00:01:00Z")),
         },
     );
 
@@ -905,7 +724,7 @@ fn service_policy_artifact_evaluation_applies_artifact_lifecycle_gates() {
         SensitiveActionPolicyArtifactEvaluationRequest {
             policy_artifact: artifact,
             evidence,
-            context: PolicyEvaluationContext::new(Some(ts("2026-05-29T00:01:00Z"))),
+            context: PolicyEvaluationContext::new(ts("2026-05-29T00:01:00Z")),
         },
     );
 

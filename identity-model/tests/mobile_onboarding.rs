@@ -1,4 +1,12 @@
+#[allow(unused_imports)]
+use fen_store::RingAes256GcmFactEncryptor;
+#[allow(unused_imports)]
+use identity_adapters::{continuity::*, device::*, hosted::*, oidc::*};
 use identity_model::*;
+#[allow(unused_imports)]
+use identity_server::{mobile::*, mobile_http::*, runtime::*};
+#[allow(unused_imports)]
+use identity_storage_postgres::*;
 
 mod common;
 use common::*;
@@ -146,7 +154,6 @@ fn encrypted_mobile_onboarding_command_appends_through_facade_and_replays_summar
     );
     let mut ids = DeterministicIdGenerator::new();
     let key = mobile_active_key();
-    let resolver = StaticFactKeyResolver::from_keys([key.clone()]);
     let policy_refs = mobile_materialization_policy_refs();
     let mut repository = EncryptionAwareWorkflowRepository::new(
         InMemoryStoredEncryptedWorkflowRepository::new(),
@@ -189,10 +196,7 @@ fn encrypted_mobile_onboarding_command_appends_through_facade_and_replays_summar
         MobileOnboardingEncryptedPersistenceContext {
             transaction_id: id("tx-encrypted-mobile-command"),
             committed_at: ts("2026-05-29T00:05:31Z"),
-            materialization_policy: mobile_allowed_policy(policy_refs.clone()),
-            materialization_audit_context: FactMaterializationAuditContext::default(),
         },
-        &resolver,
     )
     .expect("encrypted mobile onboarding command should append and replay");
 
@@ -374,16 +378,6 @@ fn mobile_active_key() -> FactDataEncryptionKey {
 
 fn mobile_materialization_policy_refs() -> Vec<PolicyRef> {
     vec![id("mobile-materialization-policy@v1")]
-}
-
-fn mobile_allowed_policy(policy_refs: Vec<PolicyRef>) -> PolicyEvaluation {
-    PolicyEvaluation {
-        action: SensitiveAction::ViewRecord,
-        decision: AccessDecisionResult::Allowed,
-        reasons: Vec::new(),
-        relied_on_facts: Vec::new(),
-        policy_refs,
-    }
 }
 
 #[test]

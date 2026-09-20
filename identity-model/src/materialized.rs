@@ -4,7 +4,7 @@ use crate::time;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MaterializedIdentityState {
+pub struct IdentityHistory {
     pub subject_id: SubjectId,
     pub assurance_level: AssuranceLevel,
     pub active_devices: Vec<DeviceRef>,
@@ -52,27 +52,91 @@ pub struct AccessDecisionView {
     pub source_fact_id: FactId,
 }
 
-pub fn materialize_identity_state(
-    subject_id: SubjectId,
-    facts: &[Fact],
-) -> MaterializedIdentityState {
-    materialize_identity_state_for(subject_id, facts, None)
+pub fn project_identity_history(subject_id: SubjectId, facts: &[Fact]) -> IdentityHistory {
+    project_identity_history_for(subject_id, facts, None)
 }
 
-pub fn materialize_identity_state_at(
+/// A time-specific projection, never a persistence capability. Facts must come from a trusted repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthorizationSnapshot {
+    history: IdentityHistory,
+    evaluated_at: Timestamp,
+    source_facts: Vec<FactId>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectionError {
+    InvalidTimestamp,
+}
+impl AuthorizationSnapshot {
+    pub fn history(&self) -> &IdentityHistory {
+        &self.history
+    }
+    pub fn evaluated_at(&self) -> &Timestamp {
+        &self.evaluated_at
+    }
+    pub fn source_facts(&self) -> &[FactId] {
+        &self.source_facts
+    }
+    pub fn permits(
+        &self,
+        actor: &SubjectId,
+        action: AuthorizedAction,
+        policy: &crate::policy::PolicyArtifact,
+    ) -> bool {
+        if policy.id.0.is_empty()
+            || policy.version.is_empty()
+            || policy.status != crate::policy::PolicyArtifactStatus::Active
+        {
+            return false;
+        }
+        let reference = crate::policy::versioned_policy_ref(&policy.id, &policy.version);
+        if !is_optional_period_active(&policy.effective_period, Some(&self.evaluated_at)) {
+            return false;
+        }
+        self.history.active_authorities.iter().any(|grant| {
+            &grant.actor_subject_id == actor
+                && grant.target_subject_id == self.history.subject_id
+                && grant.scope.permitted_actions.contains(&action)
+                && grant.scope.constrained_by_policy.contains(&reference)
+        })
+    }
+}
+pub fn authorization_snapshot(
     subject_id: SubjectId,
     facts: &[Fact],
     as_of: &Timestamp,
-) -> MaterializedIdentityState {
-    materialize_identity_state_for(subject_id, facts, Some(as_of))
+) -> Result<AuthorizationSnapshot, ProjectionError> {
+    let at =
+        time::timestamp_to_unix_seconds(as_of).map_err(|_| ProjectionError::InvalidTimestamp)?;
+    let mut visible = Vec::new();
+    for fact in facts.iter().filter(|f| f.subject_id == subject_id) {
+        let start = match &fact.occurred_at {
+            TemporalAnchor::Point(t) => t,
+            TemporalAnchor::Period(p) => &p.start,
+        };
+        let occurred = time::timestamp_to_unix_seconds(start)
+            .map_err(|_| ProjectionError::InvalidTimestamp)?;
+        let imported = time::timestamp_to_unix_seconds(&fact.provenance.imported_at)
+            .map_err(|_| ProjectionError::InvalidTimestamp)?;
+        if occurred <= at && imported <= at {
+            visible.push(fact.clone());
+        }
+    }
+    let source_facts = visible.iter().map(|f| f.id.clone()).collect();
+    let history = project_identity_history_for(subject_id, &visible, Some(as_of));
+    Ok(AuthorizationSnapshot {
+        history,
+        evaluated_at: as_of.clone(),
+        source_facts,
+    })
 }
 
-fn materialize_identity_state_for(
+fn project_identity_history_for(
     subject_id: SubjectId,
     facts: &[Fact],
     as_of: Option<&Timestamp>,
-) -> MaterializedIdentityState {
-    let mut state = MaterializedIdentityState {
+) -> IdentityHistory {
+    let mut state = IdentityHistory {
         subject_id: subject_id.clone(),
         assurance_level: AssuranceLevel::Low,
         active_devices: Vec::new(),
@@ -105,10 +169,14 @@ fn materialize_identity_state_for(
                 assurance_level, ..
             }
             | FactPayload::CredentialAssertion {
-                assurance_level, ..
+                result: CredentialAssertionResult::Succeeded,
+                assurance_level,
+                ..
             }
             | FactPayload::AccountRecoveryEvent {
-                assurance_level, ..
+                result: RecoveryResult::Approved,
+                assurance_level,
+                ..
             } => {
                 state.assurance_level = state.assurance_level.max(*assurance_level);
             }
@@ -235,17 +303,6 @@ fn materialize_identity_state_for(
     state
 }
 
-pub fn authority_permits_action(
-    state: &MaterializedIdentityState,
-    actor_subject_id: &SubjectId,
-    action: AuthorizedAction,
-) -> bool {
-    state.active_authorities.iter().any(|authority| {
-        &authority.actor_subject_id == actor_subject_id
-            && authority.scope.permitted_actions.contains(&action)
-    })
-}
-
 #[derive(Debug, Default)]
 struct MaterializationFactIndex {
     revoked_devices: HashSet<DeviceRef>,
@@ -321,7 +378,8 @@ impl MaterializationFactIndex {
 fn is_optional_period_active(period: &Option<TimeInterval>, as_of: Option<&Timestamp>) -> bool {
     match (period, as_of) {
         (Some(period), Some(as_of)) => {
-            time::timestamp_in_closed_interval(as_of, &period.start, &period.end).unwrap_or(false)
+            time::timestamp_at_or_after(as_of, &period.start).unwrap_or(false)
+                && time::timestamp_before(as_of, &period.end).unwrap_or(false)
         }
         (None, _) => true,
         (_, None) => true,
@@ -334,7 +392,7 @@ fn is_optional_expiration_active(
 ) -> bool {
     match (expires_at, as_of) {
         (Some(expires_at), Some(as_of)) => {
-            time::timestamp_at_or_after(expires_at, as_of).unwrap_or(false)
+            time::timestamp_after(expires_at, as_of).unwrap_or(false)
         }
         (None, _) => true,
         (_, None) => true,

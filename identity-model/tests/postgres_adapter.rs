@@ -1,17 +1,24 @@
+#[allow(unused_imports)]
+use fen_store::RingAes256GcmFactEncryptor;
+#[allow(unused_imports)]
+use identity_adapters::{continuity::*, device::*, hosted::*, oidc::*};
+use identity_application::workflows::EncryptedWorkflowService;
 use identity_model::*;
+#[allow(unused_imports)]
+use identity_server::{mobile::*, mobile_http::*, runtime::*};
+#[allow(unused_imports)]
+use identity_storage_postgres::*;
 
 mod common;
 use common::*;
 
 const KEY_ID: &str = "fact-key-postgres";
-#[cfg(feature = "postgres-adapter")]
 const POSTGRES_URL_ENV: &str = "IDENTITY_MODEL_POSTGRES_URL";
-#[cfg(feature = "postgres-adapter")]
 static LIVE_POSTGRES_MIGRATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
 fn postgres_migration_pins_encrypted_fact_and_audit_table_shape() {
-    let sql = IDENTITY_ENCRYPTED_FACTS_MIGRATION_SQL;
+    let sql = fen_store_postgres::FEN_ENCRYPTED_FACTS_MIGRATION_SQL;
 
     assert!(sql.contains("CREATE TABLE IF NOT EXISTS identity_facts"));
     assert!(sql.contains("append_sequence BIGINT NOT NULL UNIQUE"));
@@ -54,7 +61,11 @@ fn payload_type_labels_are_closed_and_stable() {
     }
     labels.sort_unstable();
     labels.dedup();
-    assert_eq!(labels.len(), FactPayloadType::ALL.len(), "labels must be unique");
+    assert_eq!(
+        labels.len(),
+        FactPayloadType::ALL.len(),
+        "labels must be unique"
+    );
 }
 
 /// The envelope table is shared across payload families, so a row carrying a
@@ -187,23 +198,19 @@ fn postgres_migration_registry_pins_ordered_versions() {
             .map(|migration| migration.name)
             .collect::<Vec<_>>(),
         vec![
-            "0001_identity_encrypted_facts",
             "0002_identity_workflow_transactions",
             "0003_identity_app_attest_key_state",
             "0004_identity_live_presence_challenges",
             "0005_identity_app_attest_key_registration",
-            "0006_health_econ_reconciliation_rule_artifacts"
         ]
     );
     assert_eq!(
         IDENTITY_POSTGRES_MIGRATIONS_SQL,
         [
-            IDENTITY_ENCRYPTED_FACTS_MIGRATION_SQL,
             IDENTITY_WORKFLOW_TRANSACTIONS_MIGRATION_SQL,
             IDENTITY_APP_ATTEST_KEY_STATE_MIGRATION_SQL,
             IDENTITY_LIVE_PRESENCE_CHALLENGES_MIGRATION_SQL,
             IDENTITY_APP_ATTEST_KEY_REGISTRATION_MIGRATION_SQL,
-            HEALTH_ECON_RECONCILIATION_RULE_ARTIFACTS_MIGRATION_SQL,
         ]
     );
 }
@@ -762,11 +769,13 @@ fn postgres_row_rejects_invalid_storage_labels_and_negative_sequence() {
         Err(PostgresAdapterError::InvalidTemporalAnchor)
     );
 }
-
-#[cfg(feature = "postgres-adapter")]
 #[test]
 fn live_postgres_app_attest_key_state_store_rejects_replay_when_env_is_set() {
     let Ok(database_url) = std::env::var(POSTGRES_URL_ENV) else {
+        assert!(
+            std::env::var_os("IDENTITY_REQUIRE_POSTGRES_TESTS").is_none(),
+            "required PostgreSQL test configuration is missing"
+        );
         eprintln!(
             "skipping live PostgreSQL App Attest state test; set {POSTGRES_URL_ENV} to run it"
         );
@@ -863,11 +872,13 @@ fn live_postgres_app_attest_key_state_store_rejects_replay_when_env_is_set() {
         cleanup_live_app_attest_key_state(repository.pool(), &key_id).await;
     });
 }
-
-#[cfg(feature = "postgres-adapter")]
 #[test]
 fn live_postgres_app_attest_key_registration_store_round_trips_when_env_is_set() {
     let Ok(database_url) = std::env::var(POSTGRES_URL_ENV) else {
+        assert!(
+            std::env::var_os("IDENTITY_REQUIRE_POSTGRES_TESTS").is_none(),
+            "required PostgreSQL test configuration is missing"
+        );
         eprintln!(
             "skipping live PostgreSQL App Attest registration test; set {POSTGRES_URL_ENV} to run it"
         );
@@ -921,11 +932,13 @@ fn live_postgres_app_attest_key_registration_store_round_trips_when_env_is_set()
         cleanup_live_app_attest_key_state(repository.pool(), &key_id).await;
     });
 }
-
-#[cfg(feature = "postgres-adapter")]
 #[test]
 fn live_postgres_repository_exercises_append_query_duplicates_and_audit_when_url_is_set() {
     let Ok(database_url) = std::env::var(POSTGRES_URL_ENV) else {
+        assert!(
+            std::env::var_os("IDENTITY_REQUIRE_POSTGRES_TESTS").is_none(),
+            "required PostgreSQL test configuration is missing"
+        );
         eprintln!("skipping live PostgreSQL adapter test; set {POSTGRES_URL_ENV} to run it");
         return;
     };
@@ -1196,11 +1209,13 @@ fn live_postgres_repository_exercises_append_query_duplicates_and_audit_when_url
         .await;
     });
 }
-
-#[cfg(feature = "postgres-adapter")]
 #[test]
 fn live_postgres_encrypted_replay_reconstructs_materialized_state_when_env_is_set() {
     let Ok(database_url) = std::env::var(POSTGRES_URL_ENV) else {
+        assert!(
+            std::env::var_os("IDENTITY_REQUIRE_POSTGRES_TESTS").is_none(),
+            "required PostgreSQL test configuration is missing"
+        );
         eprintln!(
             "skipping live PostgreSQL replay-equivalence test; set {POSTGRES_URL_ENV} to run it"
         );
@@ -1358,11 +1373,13 @@ fn live_postgres_encrypted_replay_reconstructs_materialized_state_when_env_is_se
         .await;
     });
 }
-
-#[cfg(feature = "postgres-adapter")]
 #[test]
 fn live_postgres_encryption_aware_workflow_repository_appends_and_replays_when_env_is_set() {
     let Ok(database_url) = std::env::var(POSTGRES_URL_ENV) else {
+        assert!(
+            std::env::var_os("IDENTITY_REQUIRE_POSTGRES_TESTS").is_none(),
+            "required PostgreSQL test configuration is missing"
+        );
         eprintln!(
             "skipping live PostgreSQL encrypted workflow facade test; set {POSTGRES_URL_ENV} to run it"
         );
@@ -1394,12 +1411,15 @@ fn live_postgres_encryption_aware_workflow_repository_appends_and_replays_when_e
 
         let key = active_key();
         let resolver = StaticFactKeyResolver::from_keys([key.clone()]);
-        let mut repository = SqlxPostgresEncryptionAwareWorkflowRepository::new(
+        let mut repository = EncryptedWorkflowService::new(
             storage,
             DeterministicTestFactEncryptionMetadataPlanner::new(KEY_ID, "nonce-postgres-facade"),
             DeterministicTestFactEncryptor::new(),
             key,
-            materialization_policy_refs(),
+            vec![identity_model::policy::versioned_policy_ref(
+                &id("disclosure"),
+                "1",
+            )],
         );
         let fact = sensitive_fact(&fact_id, subject_id.clone());
         let episode = access_authorization_episode(
@@ -1434,15 +1454,79 @@ fn live_postgres_encryption_aware_workflow_repository_appends_and_replays_when_e
         assert_eq!(stored.encrypted_facts.len(), 1);
         assert_eq!(stored.encrypted_facts[0].fact_id, fact.id);
         assert_eq!(stored.memberships.len(), 1);
-        let projection = repository
-            .replay_identity_state(
-                subject_id.clone(),
-                &allowed_policy(materialization_policy_refs()),
-                &FactMaterializationAuditContext::default(),
+        use identity_model::disclosure::{
+            authorize_disclosure, DisclosureConsent, DisclosurePurpose, DisclosureRequest,
+        };
+        use identity_model::policy::{
+            EvidenceSummary, FreshnessRequirement, PolicyArtifact, PolicyArtifactDefinition,
+            PrincipalEvidence,
+        };
+        let now = ts("2026-05-29T00:06:00Z");
+        let mut policy = PolicyArtifact::sensitive_action(
+            id("disclosure"),
+            "1",
+            SensitiveAction::ViewRecord,
+            None,
+        );
+        if let PolicyArtifactDefinition::SensitiveAction(definition) = &mut policy.definition {
+            definition.requires_fresh_continuity = true;
+            definition.freshness.credential = Some(FreshnessRequirement {
+                max_age_seconds: 900,
+            });
+            definition.freshness.continuity = Some(FreshnessRequirement {
+                max_age_seconds: 300,
+            });
+        }
+        let evidence = EvidenceSummary {
+            credential_fact_id: Some(id("credential")),
+            credential_assurance: Some(AssuranceLevel::High),
+            credential_observed_at: Some(now.clone()),
+            continuity_fact_id: Some(id("continuity")),
+            continuity_assurance: Some(AssuranceLevel::High),
+            continuity_observed_at: Some(now.clone()),
+            risk_fact_id: Some(id("risk")),
+            risk_result: Some(RiskEvaluationResult::Passed),
+            risk_observed_at: Some(now.clone()),
+        };
+        let consent = DisclosureConsent {
+            id: id("consent"),
+            requester: subject_id.clone(),
+            subject: subject_id.clone(),
+            purpose: DisclosurePurpose::AccountInspection,
+            policy: identity_model::policy::versioned_policy_ref(&policy.id, &policy.version),
+            validity: TimeInterval {
+                start: now.clone(),
+                end: ts("2026-05-29T00:07:00Z"),
+            },
+            revoked: false,
+        };
+        let permit = authorize_disclosure(
+            DisclosureRequest {
+                requester: subject_id.clone(),
+                subject: subject_id.clone(),
+                purpose: DisclosurePurpose::AccountInspection,
+                facts: vec![fact.id.clone()],
+            },
+            PrincipalEvidence {
+                principal: &subject_id,
+                evidence: &evidence,
+            },
+            &consent,
+            &policy,
+            None,
+            &now,
+        )
+        .unwrap();
+        let facts = repository
+            .disclose_identifiers(
+                &permit,
+                &identity_model::clock::FixedClock::new(now),
                 &resolver,
             )
             .await
-            .expect("encrypted workflow facade should replay subject state");
+            .expect("authorized disclosure should audit before key access");
+        let projection =
+            identity_model::materialized::project_identity_history(subject_id.clone(), &facts);
         assert_eq!(projection.active_clinical_links.len(), 1);
         assert_eq!(projection.active_clinical_links[0].source_fact_id, fact.id);
 
@@ -1457,11 +1541,13 @@ fn live_postgres_encryption_aware_workflow_repository_appends_and_replays_when_e
         .await;
     });
 }
-
-#[cfg(feature = "postgres-adapter")]
 #[test]
 fn live_postgres_workflow_slice_rolls_back_partial_writes_when_env_is_set() {
     let Ok(database_url) = std::env::var(POSTGRES_URL_ENV) else {
+        assert!(
+            std::env::var_os("IDENTITY_REQUIRE_POSTGRES_TESTS").is_none(),
+            "required PostgreSQL test configuration is missing"
+        );
         eprintln!("skipping live PostgreSQL rollback test; set {POSTGRES_URL_ENV} to run it");
         return;
     };
@@ -1794,11 +1880,13 @@ fn live_postgres_workflow_slice_rolls_back_partial_writes_when_env_is_set() {
         .await;
     });
 }
-
-#[cfg(feature = "postgres-adapter")]
 #[test]
 fn live_postgres_episode_composition_rolls_back_partial_writes_when_env_is_set() {
     let Ok(database_url) = std::env::var(POSTGRES_URL_ENV) else {
+        assert!(
+            std::env::var_os("IDENTITY_REQUIRE_POSTGRES_TESTS").is_none(),
+            "required PostgreSQL test configuration is missing"
+        );
         eprintln!(
             "skipping live PostgreSQL composition rollback test; set {POSTGRES_URL_ENV} to run it"
         );
@@ -1975,8 +2063,6 @@ fn live_postgres_episode_composition_rolls_back_partial_writes_when_env_is_set()
         .await;
     });
 }
-
-#[cfg(feature = "postgres-adapter")]
 async fn next_live_postgres_append_sequence(pool: &sqlx::PgPool) -> AppendSequence {
     let next_sequence: i64 =
         sqlx::query_scalar("SELECT COALESCE(MAX(append_sequence), -1) + 1 FROM identity_facts")
@@ -1985,8 +2071,6 @@ async fn next_live_postgres_append_sequence(pool: &sqlx::PgPool) -> AppendSequen
             .expect("next append sequence query should succeed");
     next_sequence as AppendSequence
 }
-
-#[cfg(feature = "postgres-adapter")]
 async fn next_live_postgres_episode_append_sequence(pool: &sqlx::PgPool) -> AppendSequence {
     let next_sequence: i64 =
         sqlx::query_scalar("SELECT COALESCE(MAX(append_sequence), -1) + 1 FROM identity_episodes")
@@ -1995,8 +2079,6 @@ async fn next_live_postgres_episode_append_sequence(pool: &sqlx::PgPool) -> Appe
             .expect("next episode append sequence query should succeed");
     next_sequence as AppendSequence
 }
-
-#[cfg(feature = "postgres-adapter")]
 async fn next_live_postgres_membership_append_sequence(pool: &sqlx::PgPool) -> AppendSequence {
     let next_sequence: i64 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(append_sequence), -1) + 1 FROM identity_episode_memberships",
@@ -2006,8 +2088,6 @@ async fn next_live_postgres_membership_append_sequence(pool: &sqlx::PgPool) -> A
     .expect("next membership append sequence query should succeed");
     next_sequence as AppendSequence
 }
-
-#[cfg(feature = "postgres-adapter")]
 async fn run_live_postgres_migration(repository: &SqlxPostgresEncryptedFactRepository) {
     let _guard = LIVE_POSTGRES_MIGRATION_LOCK
         .lock()
@@ -2017,8 +2097,6 @@ async fn run_live_postgres_migration(repository: &SqlxPostgresEncryptedFactRepos
         .await
         .expect("migration should run against live PostgreSQL");
 }
-
-#[cfg(feature = "postgres-adapter")]
 async fn next_live_postgres_relation_append_sequence(pool: &sqlx::PgPool) -> AppendSequence {
     let next_sequence: i64 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(append_sequence), -1) + 1 FROM identity_episode_relations",
@@ -2028,8 +2106,6 @@ async fn next_live_postgres_relation_append_sequence(pool: &sqlx::PgPool) -> App
     .expect("next relation append sequence query should succeed");
     next_sequence as AppendSequence
 }
-
-#[cfg(feature = "postgres-adapter")]
 async fn assert_live_postgres_absent(
     pool: &sqlx::PgPool,
     transaction_ids: &[&str],
@@ -2078,8 +2154,6 @@ async fn assert_live_postgres_absent(
     assert_eq!(relation_count, 0);
     assert_eq!(membership_count, 0);
 }
-
-#[cfg(feature = "postgres-adapter")]
 async fn cleanup_live_postgres_rows(
     pool: &sqlx::PgPool,
     subject_id: &SubjectId,
@@ -2159,8 +2233,6 @@ async fn cleanup_live_postgres_rows(
     .await
     .expect("live fact cleanup should succeed");
 }
-
-#[cfg(feature = "postgres-adapter")]
 async fn cleanup_live_app_attest_key_state(pool: &sqlx::PgPool, key_id: &str) {
     sqlx::query(
         r#"
@@ -2195,8 +2267,6 @@ async fn cleanup_live_app_attest_key_state(pool: &sqlx::PgPool, key_id: &str) {
     .await
     .expect("live App Attest registration cleanup should succeed");
 }
-
-#[cfg(feature = "postgres-adapter")]
 fn live_test_suffix() -> String {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2204,8 +2274,6 @@ fn live_test_suffix() -> String {
         .as_nanos()
         .to_string()
 }
-
-#[cfg(feature = "postgres-adapter")]
 fn postgres_app_attest_assertion(
     config: &AppAttestClientConfig,
     key_id: &str,
@@ -2247,8 +2315,6 @@ fn stored_episode(id_value: &str, append_sequence: AppendSequence) -> StoredProb
         },
     }
 }
-
-#[cfg(feature = "postgres-adapter")]
 fn stored_problem_episode_for(
     episode_id: &str,
     subject_id: SubjectId,
@@ -2268,8 +2334,6 @@ fn stored_problem_episode_for(
         ),
     }
 }
-
-#[cfg(feature = "postgres-adapter")]
 fn stored_membership_for(
     membership_id: &str,
     fact_id: FactId,
@@ -2291,8 +2355,6 @@ fn stored_membership_for(
         ),
     }
 }
-
-#[cfg(feature = "postgres-adapter")]
 fn stored_episode_relation_for(
     relation_id: &str,
     source_episode_id: &str,

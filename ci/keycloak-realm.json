@@ -1,0 +1,28 @@
+{
+  "realm": "identity-ci",
+  "enabled": true,
+  "accessTokenLifespan": 1800,
+  "clients": [{
+    "clientId": "identity-ci",
+    "enabled": true,
+    "publicClient": true,
+    "directAccessGrantsEnabled": true,
+    "standardFlowEnabled": false,
+    "protocol": "openid-connect",
+    "protocolMappers": [{
+      "name": "identity-audience",
+      "protocol": "openid-connect",
+      "protocolMapper": "oidc-audience-mapper",
+      "config": {"included.client.audience": "identity-ci", "id.token.claim": "true", "access.token.claim": "true"}
+    }]
+  }],
+  "users": [{
+    "username": "identity-ci",
+    "enabled": true,
+    "email": "identity-ci@example.invalid",
+    "emailVerified": true,
+    "firstName": "CI",
+    "lastName": "Identity",
+    "credentials": [{"type": "password", "value": "ci-local-only", "temporary": false}]
+  }]
+}

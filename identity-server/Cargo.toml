@@ -1,0 +1,15 @@
+[package]
+name = "identity-server"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+identity-application = { path = "../identity-application" }
+identity-model = { path = "../identity-model" }
+identity-adapters = { path = "../identity-adapters" }
+identity-storage-postgres = { path = "../identity-storage-postgres" }
+fen-store = { path = "../fen-store", features = ["production-crypto"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8.6", default-features = false, features = ["postgres", "runtime-tokio-rustls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "net", "signal"] }
+ring = "0.17.14"

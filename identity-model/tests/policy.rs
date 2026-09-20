@@ -1,4 +1,12 @@
+#[allow(unused_imports)]
+use fen_store::RingAes256GcmFactEncryptor;
+#[allow(unused_imports)]
+use identity_adapters::{continuity::*, device::*, hosted::*, oidc::*};
 use identity_model::*;
+#[allow(unused_imports)]
+use identity_server::{mobile::*, mobile_http::*, runtime::*};
+#[allow(unused_imports)]
+use identity_storage_postgres::*;
 
 mod common;
 use common::*;
@@ -12,16 +20,20 @@ fn high_risk_action_requires_continuity_step_up() {
     let evidence = EvidenceSummary {
         credential_fact_id: Some(id("credential-fact")),
         credential_assurance: Some(AssuranceLevel::Medium),
-        credential_observed_at: None,
+        credential_observed_at: Some(ts("2026-05-29T00:00:00Z")),
         continuity_fact_id: None,
         continuity_assurance: None,
-        continuity_observed_at: None,
+        continuity_observed_at: Some(ts("2026-05-29T00:00:00Z")),
         risk_fact_id: Some(id("risk-fact")),
         risk_result: Some(RiskEvaluationResult::Passed),
-        risk_observed_at: None,
+        risk_observed_at: Some(ts("2026-05-29T00:00:00Z")),
     };
 
-    let evaluation = evaluate_action_policy(&policy, &evidence);
+    let evaluation = evaluate_action_policy_with_context(
+        &policy,
+        &evidence,
+        &PolicyEvaluationContext::new(ts("2026-05-29T00:01:00Z")),
+    );
 
     assert_eq!(evaluation.decision, AccessDecisionResult::StepUpRequired);
     assert_eq!(
@@ -40,16 +52,20 @@ fn high_risk_action_allows_sufficient_evidence() {
     let evidence = EvidenceSummary {
         credential_fact_id: Some(id("credential-fact")),
         credential_assurance: Some(AssuranceLevel::Medium),
-        credential_observed_at: None,
+        credential_observed_at: Some(ts("2026-05-29T00:00:00Z")),
         continuity_fact_id: Some(id("continuity-fact")),
         continuity_assurance: Some(AssuranceLevel::High),
-        continuity_observed_at: None,
+        continuity_observed_at: Some(ts("2026-05-29T00:00:00Z")),
         risk_fact_id: Some(id("risk-fact")),
         risk_result: Some(RiskEvaluationResult::Passed),
-        risk_observed_at: None,
+        risk_observed_at: Some(ts("2026-05-29T00:00:00Z")),
     };
 
-    let evaluation = evaluate_action_policy(&policy, &evidence);
+    let evaluation = evaluate_action_policy_with_context(
+        &policy,
+        &evidence,
+        &PolicyEvaluationContext::new(ts("2026-05-29T00:01:00Z")),
+    );
 
     assert_eq!(evaluation.decision, AccessDecisionResult::Allowed);
     assert!(evaluation.reasons.is_empty());
@@ -89,7 +105,7 @@ fn policy_artifacts_generate_versioned_refs_for_access_decisions() {
     let evaluation = evaluate_policy_artifact_with_context(
         &artifact,
         &evidence,
-        &PolicyEvaluationContext::new(Some(ts("2026-05-29T00:01:00Z"))),
+        &PolicyEvaluationContext::new(ts("2026-05-29T00:01:00Z")),
     );
 
     assert_eq!(artifact.id, id("complete-record-export-policy"));
@@ -121,6 +137,9 @@ fn policy_artifacts_carry_action_specific_definitions() {
         "v3",
         None,
         DelegationConstraintsPolicyDefinition {
+            witness_requirements: vec![identity_model::authority::WitnessRequirement(
+                "target-consent".into(),
+            )],
             authority_type: AuthorityType::CaregiverDelegation,
             permitted_actions: vec![AuthorizedAction::ViewRecord, AuthorizedAction::ShareRecord],
             requires_target_subject_continuity: true,
@@ -213,7 +232,7 @@ fn policy_artifact_effective_period_and_status_gate_evaluation() {
     let evaluation = evaluate_policy_artifact_with_context(
         &retired,
         &evidence,
-        &PolicyEvaluationContext::new(Some(ts("2026-05-29T00:01:00Z"))),
+        &PolicyEvaluationContext::new(ts("2026-05-29T00:01:00Z")),
     );
 
     assert_eq!(
@@ -255,7 +274,7 @@ fn policy_artifact_invalid_effective_period_forces_manual_review() {
     let evaluation = evaluate_policy_artifact_with_context(
         &artifact,
         &evidence,
-        &PolicyEvaluationContext::new(Some(ts("2026-05-29T00:01:00Z"))),
+        &PolicyEvaluationContext::new(ts("2026-05-29T00:01:00Z")),
     );
 
     assert_eq!(
@@ -290,10 +309,10 @@ fn policy_freshness_windows_force_step_up_for_stale_evidence() {
         ..stale_continuity.clone()
     };
 
-    let stale_evaluation = evaluate_action_policy_at(
+    let stale_evaluation = evaluate_action_policy_with_context(
         &policy,
         &stale_continuity,
-        Some(&ts("2026-05-29T00:10:01Z")),
+        &PolicyEvaluationContext::new(ts("2026-05-29T00:10:01Z")),
     );
     assert_eq!(
         stale_evaluation.decision,
@@ -304,7 +323,12 @@ fn policy_freshness_windows_force_step_up_for_stale_evidence() {
         vec![PolicyEvaluationReason::ContinuityStale]
     );
     assert_eq!(
-        evaluate_action_policy_at(&policy, &fresh, Some(&ts("2026-05-29T00:10:01Z"))).decision,
+        evaluate_action_policy_with_context(
+            &policy,
+            &fresh,
+            &PolicyEvaluationContext::new(ts("2026-05-29T00:10:01Z"))
+        )
+        .decision,
         AccessDecisionResult::Allowed
     );
 }

@@ -1,4 +1,12 @@
+#[allow(unused_imports)]
+use fen_store::RingAes256GcmFactEncryptor;
+#[allow(unused_imports)]
+use identity_adapters::{continuity::*, device::*, hosted::*, oidc::*};
 use identity_model::*;
+#[allow(unused_imports)]
+use identity_server::{mobile::*, mobile_http::*, runtime::*};
+#[allow(unused_imports)]
+use identity_storage_postgres::*;
 
 mod common;
 use common::*;
@@ -38,13 +46,12 @@ fn encrypted_fact_envelope_round_trips_after_policy_gated_materialization() {
     assert!(associated_data.contains("profile=18:fen-encrypted-fact"));
     assert!(associated_data.contains("payload_type=34:clinical_identity_link_established"));
 }
-
-#[cfg(feature = "production-crypto")]
 #[test]
 fn aes_256_gcm_fact_encryptor_round_trips_and_authenticates_envelope_context() {
     let key = FactDataEncryptionKey::active("aes-key", vec![7_u8; 32]);
     let resolver = StaticFactKeyResolver::from_keys([key.clone()]);
-    let encryptor = RingAes256GcmFactEncryptor::new();
+    let encryptor =
+        RingAes256GcmFactEncryptor::with_codec(identity_adapters::codec::IdentityPlaintextCodec);
     let fact = sensitive_fact("fact-aes-gcm", id("subject-aes-gcm"));
     let encryption = FactEncryptionMetadata::aes_256_gcm(
         "aes-key",
@@ -114,8 +121,6 @@ fn aes_256_gcm_fact_encryptor_round_trips_and_authenticates_envelope_context() {
         Err(FactMaterializationError::AuthenticationFailed)
     );
 }
-
-#[cfg(feature = "production-crypto")]
 #[test]
 fn aes_256_gcm_metadata_planner_derives_unique_nonces_from_append_sequence() {
     let mut planner = Aes256GcmFactEncryptionMetadataPlanner::new("aes-key", *b"FEN1", None);

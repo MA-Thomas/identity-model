@@ -3,11 +3,7 @@ use crate::identity::*;
 use std::collections::HashMap;
 
 mod canonical;
-#[cfg(feature = "ed25519-dalek-verifier")]
-mod ed25519;
 pub use canonical::*;
-#[cfg(feature = "ed25519-dalek-verifier")]
-pub use ed25519::*;
 
 typed_id!(ChallengeId);
 pub type Nonce = String;

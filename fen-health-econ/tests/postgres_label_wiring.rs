@@ -15,11 +15,9 @@
 //!   identity and health-economic facts in the same table with each family's
 //!   replay seeing only its own rows.
 
-use fen_health_econ::{HealthEconFactPayloadType, HealthEconPayloadFamily};
 use fen_core::{FactId, FactStatus, PolicyRef, SubjectId, TemporalAnchor, Timestamp};
-use fen_store::{
-    FactEncryptionMetadata, PersistenceTransactionId, StoredEncryptedFactEnvelope,
-};
+use fen_health_econ::{HealthEconFactPayloadType, HealthEconPayloadFamily};
+use fen_store::{FactEncryptionMetadata, PersistenceTransactionId, StoredEncryptedFactEnvelope};
 use fen_store_postgres::{EncryptedFactPostgresRow, FenStorePostgresError};
 use identity_model::{FactPayloadType, IdentityPayloadFamily};
 
@@ -85,9 +83,7 @@ fn envelope<T: Copy>(
         occurred_at: TemporalAnchor::Point(Timestamp("2026-07-08T00:00:00Z".to_string())),
         payload_type,
         status: FactStatus::Active,
-        materialization_policy_refs: vec![PolicyRef::new(
-            "health-econ-materialization-policy@v1",
-        )],
+        materialization_policy_refs: vec![PolicyRef::new("health-econ-materialization-policy@v1")],
         encryption: FactEncryptionMetadata::deterministic_test(KEY_ID, b"nonce-1".to_vec()),
         ciphertext: vec![1, 2, 3],
     }
@@ -103,7 +99,8 @@ fn health_econ_payload_type_labels_are_closed_and_frozen() {
 
     for (index, (payload_type, label)) in FROZEN_LABELS.iter().enumerate() {
         assert_eq!(
-            HealthEconFactPayloadType::ALL[index], *payload_type,
+            HealthEconFactPayloadType::ALL[index],
+            *payload_type,
             "ALL must list every variant in declaration order"
         );
         assert_eq!(
@@ -163,16 +160,15 @@ fn postgres_row_round_trips_every_health_econ_label() {
 
 #[test]
 fn postgres_row_rejects_labels_outside_the_family() {
-    let health_econ_row =
-        EncryptedFactPostgresRow::try_from_envelope_in_family::<HealthEconPayloadFamily>(
-            &envelope(
-                0,
-                "fact-health-econ-cross-family",
-                "subject-health-econ-cross-family",
-                HealthEconFactPayloadType::Claim,
-            ),
-        )
-        .expect("health-econ envelope should map onto the shared row shape");
+    let health_econ_row = EncryptedFactPostgresRow::try_from_envelope_in_family::<
+        HealthEconPayloadFamily,
+    >(&envelope(
+        0,
+        "fact-health-econ-cross-family",
+        "subject-health-econ-cross-family",
+        HealthEconFactPayloadType::Claim,
+    ))
+    .expect("health-econ envelope should map onto the shared row shape");
 
     assert_eq!(
         health_econ_row
@@ -184,15 +180,14 @@ fn postgres_row_rejects_labels_outside_the_family() {
         "the identity family must not parse health_econ.* rows"
     );
 
-    let identity_row = EncryptedFactPostgresRow::try_from_envelope_in_family::<
-        IdentityPayloadFamily,
-    >(&envelope(
-        1,
-        "fact-identity-cross-family",
-        "subject-health-econ-cross-family",
-        FactPayloadType::SubjectCreated,
-    ))
-    .expect("identity envelope should map onto the shared row shape");
+    let identity_row =
+        EncryptedFactPostgresRow::try_from_envelope_in_family::<IdentityPayloadFamily>(&envelope(
+            1,
+            "fact-identity-cross-family",
+            "subject-health-econ-cross-family",
+            FactPayloadType::SubjectCreated,
+        ))
+        .expect("identity envelope should map onto the shared row shape");
 
     assert_eq!(
         identity_row
@@ -207,8 +202,7 @@ fn postgres_row_rejects_labels_outside_the_family() {
     let mut corrupt_row = identity_row;
     corrupt_row.payload_type = "not_a_label_in_any_family".to_string();
     assert_eq!(
-        corrupt_row
-            .try_into_envelope_in_family::<HealthEconPayloadFamily>(),
+        corrupt_row.try_into_envelope_in_family::<HealthEconPayloadFamily>(),
         Err(FenStorePostgresError::UnknownPayloadType(
             "not_a_label_in_any_family".to_string()
         )),
@@ -247,6 +241,10 @@ mod live {
     #[test]
     fn live_postgres_scopes_mixed_family_subject_replay_when_env_is_set() {
         let Ok(database_url) = std::env::var(POSTGRES_URL_ENV) else {
+            assert!(
+                std::env::var_os("IDENTITY_REQUIRE_POSTGRES_TESTS").is_none(),
+                "required PostgreSQL test configuration is missing"
+            );
             eprintln!(
                 "skipping live PostgreSQL health-econ label test; set {POSTGRES_URL_ENV} to run it"
             );
@@ -305,9 +303,9 @@ mod live {
             assert_eq!(identity_rows, vec![identity_envelope]);
 
             let health_econ_rows = repository
-                .encrypted_facts_for_subject_in_family::<HealthEconPayloadFamily>(
-                    &SubjectId::new(&subject),
-                )
+                .encrypted_facts_for_subject_in_family::<HealthEconPayloadFamily>(&SubjectId::new(
+                    &subject,
+                ))
                 .await
                 .expect("health-econ subject replay should not error on identity rows");
             assert_eq!(health_econ_rows, vec![claim_envelope.clone()]);

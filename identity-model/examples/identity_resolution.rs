@@ -1,4 +1,6 @@
+use fixtures::*;
 use identity_model::*;
+use identity_test_support::fixtures;
 
 fn main() {
     let subject_id = SubjectId("subject-demo-resolution".to_string());
@@ -9,7 +11,7 @@ fn main() {
     };
     let service = IdentityWorkflowService::new(translator);
 
-    let rejected_link = service.resolve_identity_dispute_detailed(
+    let rejected_link = service.resolve_identity_dispute(
         IdentityDisputeResolutionRequest::contested_provider_link(
             subject_id.clone(),
             DisputeResolutionOutcome::Rejected,
@@ -17,7 +19,7 @@ fn main() {
             authored_at.clone(),
         ),
     );
-    let confirmed_link = service.resolve_identity_dispute_detailed(
+    let confirmed_link = service.resolve_identity_dispute(
         IdentityDisputeResolutionRequest::contested_provider_link(
             subject_id.clone(),
             DisputeResolutionOutcome::Confirmed,
@@ -25,7 +27,7 @@ fn main() {
             authored_at.clone(),
         ),
     );
-    let merge = service.resolve_identity_dispute_detailed(
+    let merge = service.resolve_identity_dispute(
         IdentityDisputeResolutionRequest::duplicate_subject_merge(
             subject_id.clone(),
             SubjectId("subject-demo-duplicate".to_string()),
@@ -33,8 +35,8 @@ fn main() {
             authored_at.clone(),
         ),
     );
-    let split = service.resolve_identity_dispute_detailed(
-        IdentityDisputeResolutionRequest::incorrect_merge_split(
+    let split =
+        service.resolve_identity_dispute(IdentityDisputeResolutionRequest::incorrect_merge_split(
             subject_id.clone(),
             vec![
                 SubjectId("subject-demo-restored-a".to_string()),
@@ -42,15 +44,13 @@ fn main() {
             ],
             author.clone(),
             authored_at.clone(),
-        ),
-    );
-    let witness_supersession = service.resolve_identity_dispute_detailed(
-        IdentityDisputeResolutionRequest::witness_supersession(
+        ));
+    let witness_supersession =
+        service.resolve_identity_dispute(IdentityDisputeResolutionRequest::witness_supersession(
             subject_id.clone(),
             author,
             authored_at,
-        ),
-    );
+        ));
 
     print_fixture("Rejected Provider Link Dispute", rejected_link.workflow);
     print_fixture("Confirmed Provider Link Dispute", confirmed_link.workflow);

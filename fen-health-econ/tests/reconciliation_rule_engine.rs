@@ -273,17 +273,13 @@ fn bill_vs_eob_tolerance_edge() {
     };
     let rule = bill_vs_eob_rule(Some(100));
     // Exactly at tolerance: no finding.
-    assert!(
-        evaluate_reconciliation_rules(&[rule.clone()], &facts(10_100), &as_of()).is_empty()
-    );
+    assert!(evaluate_reconciliation_rules(&[rule.clone()], &facts(10_100), &as_of()).is_empty());
     // One minor unit beyond: finding. Symmetric in both directions.
     assert_eq!(
         evaluate_reconciliation_rules(&[rule.clone()], &facts(10_101), &as_of()).len(),
         1
     );
-    assert!(
-        evaluate_reconciliation_rules(&[rule.clone()], &facts(9_900), &as_of()).is_empty()
-    );
+    assert!(evaluate_reconciliation_rules(&[rule.clone()], &facts(9_900), &as_of()).is_empty());
     assert_eq!(
         evaluate_reconciliation_rules(&[rule], &facts(9_899), &as_of()).len(),
         1
@@ -304,9 +300,7 @@ fn currency_mismatch_is_not_compared() {
         ),
     ];
     // The engine cannot honestly compare across currencies: no finding.
-    assert!(
-        evaluate_reconciliation_rules(&[bill_vs_eob_rule(None)], &facts, &as_of()).is_empty()
-    );
+    assert!(evaluate_reconciliation_rules(&[bill_vs_eob_rule(None)], &facts, &as_of()).is_empty());
 }
 
 // -- Matching conservatism (spec §E) --------------------------------------------
@@ -360,9 +354,7 @@ fn ambiguous_claim_match_is_not_a_finding() {
     ];
     // Two active adjudications share the claim ref: the pairing is ambiguous
     // and the engine must not guess which one to accuse the provider with.
-    assert!(
-        evaluate_reconciliation_rules(&[bill_vs_eob_rule(None)], &facts, &as_of()).is_empty()
-    );
+    assert!(evaluate_reconciliation_rules(&[bill_vs_eob_rule(None)], &facts, &as_of()).is_empty());
 }
 
 #[test]
@@ -382,9 +374,7 @@ fn cash_pay_bills_are_never_paired() {
             None,
         ),
     ];
-    assert!(
-        evaluate_reconciliation_rules(&[bill_vs_eob_rule(None)], &facts, &as_of()).is_empty()
-    );
+    assert!(evaluate_reconciliation_rules(&[bill_vs_eob_rule(None)], &facts, &as_of()).is_empty());
 }
 
 #[test]
@@ -414,9 +404,7 @@ fn superseded_facts_are_ignored() {
     ];
     // The superseded bill would have produced a mismatch; the corrected bill
     // agrees. Only active facts are evaluated: no findings.
-    assert!(
-        evaluate_reconciliation_rules(&[bill_vs_eob_rule(None)], &facts, &as_of()).is_empty()
-    );
+    assert!(evaluate_reconciliation_rules(&[bill_vs_eob_rule(None)], &facts, &as_of()).is_empty());
 }
 
 // -- AboveAllowedAmount ----------------------------------------------------------
@@ -434,8 +422,7 @@ fn above_allowed_amount_hit() {
             None,
         ),
     ];
-    let findings =
-        evaluate_reconciliation_rules(&[above_allowed_rule(None)], &facts, &as_of());
+    let findings = evaluate_reconciliation_rules(&[above_allowed_rule(None)], &facts, &as_of());
     assert_eq!(findings.len(), 1);
     let finding = &findings[0];
     assert_eq!(finding.kind, DiscrepancyKind::AboveAllowedAmount);
@@ -488,8 +475,7 @@ fn duplicate_charge_across_claims_within_window_hit() {
         claim_with_lines("fact-claim-1", &[(1, "99213", "2026-06-10")]),
         claim_with_lines("fact-claim-2", &[(1, "99213", "2026-06-12")]),
     ];
-    let findings =
-        evaluate_reconciliation_rules(&[duplicate_charge_rule(7)], &facts, &as_of());
+    let findings = evaluate_reconciliation_rules(&[duplicate_charge_rule(7)], &facts, &as_of());
     assert_eq!(findings.len(), 1);
     let finding = &findings[0];
     assert_eq!(finding.kind, DiscrepancyKind::DuplicateCharge);
@@ -514,8 +500,7 @@ fn duplicate_charge_within_one_claim_cites_the_fact_once() {
         "fact-claim-1",
         &[(1, "99213", "2026-06-10"), (2, "99213", "2026-06-10")],
     )];
-    let findings =
-        evaluate_reconciliation_rules(&[duplicate_charge_rule(7)], &facts, &as_of());
+    let findings = evaluate_reconciliation_rules(&[duplicate_charge_rule(7)], &facts, &as_of());
     assert_eq!(findings.len(), 1);
     assert_eq!(
         findings[0].derived_from.fact_ids,
@@ -530,24 +515,20 @@ fn duplicate_charge_misses() {
         claim_with_lines("fact-claim-1", &[(1, "99213", "2026-06-10")]),
         claim_with_lines("fact-claim-2", &[(1, "99214", "2026-06-10")]),
     ];
-    assert!(evaluate_reconciliation_rules(
-        &[duplicate_charge_rule(7)],
-        &different_codes,
-        &as_of()
-    )
-    .is_empty());
+    assert!(
+        evaluate_reconciliation_rules(&[duplicate_charge_rule(7)], &different_codes, &as_of())
+            .is_empty()
+    );
 
     // Same code outside the window: no finding.
     let outside_window = vec![
         claim_with_lines("fact-claim-1", &[(1, "99213", "2026-06-01")]),
         claim_with_lines("fact-claim-2", &[(1, "99213", "2026-06-20")]),
     ];
-    assert!(evaluate_reconciliation_rules(
-        &[duplicate_charge_rule(7)],
-        &outside_window,
-        &as_of()
-    )
-    .is_empty());
+    assert!(
+        evaluate_reconciliation_rules(&[duplicate_charge_rule(7)], &outside_window, &as_of())
+            .is_empty()
+    );
 }
 
 #[test]
@@ -602,18 +583,18 @@ fn appealable_denial_hit() {
         None,
         Some(carc("197")),
     )];
-    let findings = evaluate_reconciliation_rules(
-        &[appealable_denial_rule(&["50", "197"])],
-        &facts,
-        &as_of(),
-    );
+    let findings =
+        evaluate_reconciliation_rules(&[appealable_denial_rule(&["50", "197"])], &facts, &as_of());
     assert_eq!(findings.len(), 1);
     let finding = &findings[0];
     assert_eq!(finding.kind, DiscrepancyKind::AppealableDenial);
     assert_eq!(finding.expected, None);
     assert_eq!(finding.observed, None);
     assert_eq!(finding.match_basis, None);
-    assert_eq!(finding.derived_from.fact_ids, vec![FactId::new("fact-adj-1")]);
+    assert_eq!(
+        finding.derived_from.fact_ids,
+        vec![FactId::new("fact-adj-1")]
+    );
     assert_eq!(
         finding.derived_from.rule_ref,
         RuleArtifactRef::new("appealable-denials@v1")

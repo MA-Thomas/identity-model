@@ -167,11 +167,7 @@ impl InMemoryReconciliationRuleStore {
         Ok(())
     }
 
-    pub fn get(
-        &self,
-        id: &RuleArtifactRef,
-        version: &str,
-    ) -> Option<&ReconciliationRuleArtifact> {
+    pub fn get(&self, id: &RuleArtifactRef, version: &str) -> Option<&ReconciliationRuleArtifact> {
         self.artifacts
             .iter()
             .find(|artifact| artifact.id == *id && artifact.version == version)

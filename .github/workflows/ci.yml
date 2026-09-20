@@ -1,86 +1,72 @@
-# CI for the FEN workspace.
-#
-# This is the CI half of FABLE_UPDATES.md section 5, pulled forward by
-# CLAIMS_SPINE_PLAN.md milestone M0: the feature matrix from
-# FEATURE_MATRIX.md must hold by machine, not by convention, before two
-# crates multiply the combinations.
-
 name: ci
-
 on:
   push:
-    branches: [main, master]
   pull_request:
-
 env:
   CARGO_TERM_COLOR: always
-
 jobs:
-  # The default build must stay dependency-light. This job proves the domain
-  # model, deterministic fixtures, policy, translation, and in-memory
-  # persistence build and pass without PostgreSQL, Keycloak, Apple services,
-  # or a production crypto provider.
   core:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
       - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p identity-model --lib --no-default-features
+      - run: cargo check -p identity-application --lib --no-default-features
       - run: cargo test --workspace
-
-  # The eight feature combinations from FEATURE_MATRIX.md, plus the
-  # fen-health-econ feature gates. Features are additive and unify across the
-  # graph, so passing with `runtime-server` proves nothing about a build of
-  # a single feature; each combination is exercised on its own.
-  matrix:
+      - run: cargo fmt --all --check
+      - run: cargo clippy -p identity-application -p identity-contract -p identity-enrollment --all-targets --no-deps -- -D warnings
+  adapters:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - crate: identity-model
-            features: "mobile-http"
-          - crate: identity-model
-            features: "postgres-adapter"
-          - crate: identity-model
-            features: "oidc-jwks-verifier"
-          - crate: identity-model
-            features: "ed25519-dalek-verifier"
-          - crate: identity-model
-            features: "production-crypto"
-          - crate: identity-model
-            features: "mobile-http postgres-adapter"
-          - crate: identity-model
-            features: "runtime-server"
-          - crate: fen-health-econ
-            features: "fhir-ingest"
-          - crate: fen-health-econ
-            features: "claims-ingest"
-          - crate: fen-health-econ
-            features: "postgres-adapter"
+        crate: [identity-adapters, identity-storage-postgres, identity-server]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p ${{ matrix.crate }} --features "${{ matrix.features }}"
-
-  runtime-server-binary:
+      - run: cargo check -p ${{ matrix.crate }} --all-targets
+  live:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: identity
+          POSTGRES_PASSWORD: identity
+          POSTGRES_DB: identity
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U identity"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      IDENTITY_MODEL_POSTGRES_URL: postgres://identity:identity@127.0.0.1:5432/identity
+      IDENTITY_REQUIRE_POSTGRES_TESTS: '1'
+      IDENTITY_REQUIRE_PROVIDER_TESTS: '1'
+      IDENTITY_MODEL_KEYCLOAK_ISSUER: http://localhost:8080/realms/identity-ci
+      IDENTITY_MODEL_KEYCLOAK_CLIENT_ID: identity-ci
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check -p identity-model --features runtime-server --bin mobile_onboarding_server
-
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - run: cargo fmt --all --check
-
-  # Live harnesses (PostgreSQL service container + Keycloak) are env-gated
-  # and compile under the feature jobs above; wiring the containers is
-  # follow-on work per LOCAL_BACKEND_E2E.md / LOCAL_KEYCLOAK_DEV.md.
+      - name: Start isolated OIDC provider
+        run: |
+          docker run -d --name identity-ci-oidc -p 8080:8080 \
+            -v "$PWD/ci/keycloak-realm.json:/opt/keycloak/data/import/realm.json:ro" \
+            quay.io/keycloak/keycloak:26.0.7 start-dev --import-realm
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent "$IDENTITY_MODEL_KEYCLOAK_ISSUER/.well-known/openid-configuration" >/dev/null; then break; fi
+            sleep 2
+          done
+          curl --fail --silent "$IDENTITY_MODEL_KEYCLOAK_ISSUER/.well-known/openid-configuration" >/dev/null
+          token=$(curl --fail --silent "$IDENTITY_MODEL_KEYCLOAK_ISSUER/protocol/openid-connect/token" \
+            --data-urlencode client_id=identity-ci --data-urlencode username=identity-ci \
+            --data-urlencode password=ci-local-only --data-urlencode grant_type=password | jq -er .access_token)
+          echo "::add-mask::$token"
+          echo "IDENTITY_MODEL_KEYCLOAK_TOKEN=$token" >> "$GITHUB_ENV"
+      - run: cargo test --workspace --all-features -- --test-threads=1
+      - if: failure()
+        run: docker logs identity-ci-oidc

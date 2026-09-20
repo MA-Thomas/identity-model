@@ -4,8 +4,8 @@
 
 use fen_health_econ::{
     versioned_rule_artifact_ref, InMemoryReconciliationRuleStore, Money,
-    ReconciliationRuleArtifact, ReconciliationRuleDefinition, RuleArtifactRef,
-    RuleArtifactStatus, RuleReview, RuleStoreError,
+    ReconciliationRuleArtifact, ReconciliationRuleDefinition, RuleArtifactRef, RuleArtifactStatus,
+    RuleReview, RuleStoreError,
 };
 use identity_model::{Author, AuthorType, TimeInterval, Timestamp};
 
@@ -66,7 +66,9 @@ fn citation_ref_is_rule_id_at_version() {
 #[test]
 fn duplicate_id_version_is_rejected() {
     let mut store = InMemoryReconciliationRuleStore::new();
-    store.insert(draft_artifact("eob-bill-reconciliation", "v1")).unwrap();
+    store
+        .insert(draft_artifact("eob-bill-reconciliation", "v1"))
+        .unwrap();
     let err = store
         .insert(draft_artifact("eob-bill-reconciliation", "v1"))
         .unwrap_err();
@@ -78,7 +80,9 @@ fn duplicate_id_version_is_rejected() {
         }
     );
     // A second version of the same rule ID is fine.
-    store.insert(draft_artifact("eob-bill-reconciliation", "v2")).unwrap();
+    store
+        .insert(draft_artifact("eob-bill-reconciliation", "v2"))
+        .unwrap();
     assert_eq!(
         store
             .versions_of(&RuleArtifactRef::new("eob-bill-reconciliation"))
@@ -92,7 +96,9 @@ fn duplicate_id_version_is_rejected() {
 #[test]
 fn draft_rules_are_not_resolved_for_evaluation() {
     let mut store = InMemoryReconciliationRuleStore::new();
-    store.insert(draft_artifact("eob-bill-reconciliation", "v1")).unwrap();
+    store
+        .insert(draft_artifact("eob-bill-reconciliation", "v1"))
+        .unwrap();
     let resolved = store.active_rules(&ts("2026-07-08T00:00:00Z")).unwrap();
     assert!(resolved.is_empty());
 }
@@ -101,7 +107,9 @@ fn draft_rules_are_not_resolved_for_evaluation() {
 fn activation_records_review_and_makes_the_rule_resolvable() {
     let mut store = InMemoryReconciliationRuleStore::new();
     let id = RuleArtifactRef::new("eob-bill-reconciliation");
-    store.insert(draft_artifact("eob-bill-reconciliation", "v1")).unwrap();
+    store
+        .insert(draft_artifact("eob-bill-reconciliation", "v1"))
+        .unwrap();
     store.activate(&id, "v1", review()).unwrap();
 
     let stored = store.get(&id, "v1").unwrap();
@@ -127,11 +135,16 @@ fn activation_records_review_and_makes_the_rule_resolvable() {
 fn retiring_removes_from_resolution_but_keeps_history() {
     let mut store = InMemoryReconciliationRuleStore::new();
     let id = RuleArtifactRef::new("eob-bill-reconciliation");
-    store.insert(draft_artifact("eob-bill-reconciliation", "v1")).unwrap();
+    store
+        .insert(draft_artifact("eob-bill-reconciliation", "v1"))
+        .unwrap();
     store.activate(&id, "v1", review()).unwrap();
     store.retire(&id, "v1").unwrap();
 
-    assert!(store.active_rules(&ts("2026-07-08T00:00:00Z")).unwrap().is_empty());
+    assert!(store
+        .active_rules(&ts("2026-07-08T00:00:00Z"))
+        .unwrap()
+        .is_empty());
     // Retired artifacts remain part of history: findings cite them.
     assert_eq!(
         store.get(&id, "v1").unwrap().status,
@@ -145,7 +158,9 @@ fn new_version_replaces_old_without_mutation() {
     // one, never mutating in place.
     let mut store = InMemoryReconciliationRuleStore::new();
     let id = RuleArtifactRef::new("eob-bill-reconciliation");
-    store.insert(draft_artifact("eob-bill-reconciliation", "v1")).unwrap();
+    store
+        .insert(draft_artifact("eob-bill-reconciliation", "v1"))
+        .unwrap();
     store.activate(&id, "v1", review()).unwrap();
 
     let mut v2 = draft_artifact("eob-bill-reconciliation", "v2");
@@ -168,7 +183,9 @@ fn new_version_replaces_old_without_mutation() {
 fn invalid_lifecycle_transitions_are_rejected() {
     let mut store = InMemoryReconciliationRuleStore::new();
     let id = RuleArtifactRef::new("eob-bill-reconciliation");
-    store.insert(draft_artifact("eob-bill-reconciliation", "v1")).unwrap();
+    store
+        .insert(draft_artifact("eob-bill-reconciliation", "v1"))
+        .unwrap();
 
     // Retire a draft: rejected.
     assert_eq!(
@@ -229,12 +246,36 @@ fn effective_window_gates_resolution() {
     store.activate(&id, "v1", review()).unwrap();
 
     // Before the window, after the window: not resolved.
-    assert!(store.active_rules(&ts("2026-06-30T23:59:59Z")).unwrap().is_empty());
-    assert!(store.active_rules(&ts("2026-08-01T00:00:00Z")).unwrap().is_empty());
+    assert!(store
+        .active_rules(&ts("2026-06-30T23:59:59Z"))
+        .unwrap()
+        .is_empty());
+    assert!(store
+        .active_rules(&ts("2026-08-01T00:00:00Z"))
+        .unwrap()
+        .is_empty());
     // Inside (closed interval, boundaries included): resolved.
-    assert_eq!(store.active_rules(&ts("2026-07-01T00:00:00Z")).unwrap().len(), 1);
-    assert_eq!(store.active_rules(&ts("2026-07-15T12:00:00Z")).unwrap().len(), 1);
-    assert_eq!(store.active_rules(&ts("2026-07-31T23:59:59Z")).unwrap().len(), 1);
+    assert_eq!(
+        store
+            .active_rules(&ts("2026-07-01T00:00:00Z"))
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        store
+            .active_rules(&ts("2026-07-15T12:00:00Z"))
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        store
+            .active_rules(&ts("2026-07-31T23:59:59Z"))
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[test]

@@ -5,7 +5,7 @@ use super::{
 use crate::fen::*;
 use crate::flows::IdentityWorkflowSlice;
 use crate::identity::AccessDecisionResult;
-use crate::materialized::{materialize_identity_state, MaterializedIdentityState};
+use crate::materialized::{project_identity_history, IdentityHistory};
 use crate::policy::PolicyEvaluation;
 use crate::workflows::{EpisodeRelation, ProblemEpisode};
 pub use fen_store::*;
@@ -317,10 +317,6 @@ pub type InMemoryEncryptedFactPlaintextCodec<P = FactPayload> =
 pub type DeterministicTestFactEncryptor<C = InMemoryEncryptedFactPlaintextCodec<FactPayload>> =
     fen_store::DeterministicTestFactEncryptor<C>;
 
-#[cfg(feature = "production-crypto")]
-pub type RingAes256GcmFactEncryptor<C = InMemoryEncryptedFactPlaintextCodec<FactPayload>> =
-    fen_store::RingAes256GcmFactEncryptor<C>;
-
 pub trait EncryptedFactRepository {
     fn append_encrypted_fact(
         &mut self,
@@ -525,9 +521,9 @@ where
         subject_id: SubjectId,
         policy_evaluation: &PolicyEvaluation,
         key_resolver: &impl FactKeyResolver,
-    ) -> Result<MaterializedIdentityState, FactMaterializationError> {
+    ) -> Result<IdentityHistory, FactMaterializationError> {
         let facts = self.materialize_subject_facts(&subject_id, policy_evaluation, key_resolver)?;
-        Ok(materialize_identity_state(subject_id, &facts))
+        Ok(project_identity_history(subject_id, &facts))
     }
 }
 

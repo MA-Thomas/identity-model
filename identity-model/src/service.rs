@@ -25,26 +25,26 @@ pub struct IdentityWorkflowService {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkflowOutcome {
     pub slice: IdentityWorkflowSlice,
-    pub projection: MaterializedIdentityState,
+    pub projection: IdentityHistory,
     pub narrative: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositoryBackedWorkflowOutcome {
     pub workflow: WorkflowOutcome,
-    pub replayed_projection: MaterializedIdentityState,
+    pub replayed_projection: IdentityHistory,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositoryBackedCoreIdentityOnboardingOutcome {
     pub onboarding: CoreIdentityOnboardingOutcome,
-    pub replayed_projection: MaterializedIdentityState,
+    pub replayed_projection: IdentityHistory,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositoryBackedAccountSessionBootstrapOutcome {
     pub bootstrap: AccountSessionBootstrapOutcome,
-    pub replayed_projection: MaterializedIdentityState,
+    pub replayed_projection: IdentityHistory,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,7 +73,7 @@ pub struct CoreIdentityOnboardingOutcome {
     pub device_binding: DeviceBindingOutcome,
     pub continuity_enrollment: ContinuityEnrollmentOutcome,
     pub episode_relations: Vec<EpisodeRelation>,
-    pub projection: MaterializedIdentityState,
+    pub projection: IdentityHistory,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,17 +155,6 @@ pub struct AccessAuthorizationOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OnboardingOutcome {
-    pub workflow: WorkflowOutcome,
-    pub subject_fact_id: FactId,
-    pub device_binding_fact_id: FactId,
-    pub identity_witness_fact_id: FactId,
-    pub enrollment_fact_id: FactId,
-    pub clinical_link_fact_id: FactId,
-    pub payer_link_fact_id: FactId,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubjectRegistrationOutcome {
     pub workflow: WorkflowOutcome,
     pub subject_id: SubjectId,
@@ -195,24 +184,6 @@ pub struct ProviderIdentityLinkOutcome {
 pub struct PayerIdentityLinkOutcome {
     pub workflow: WorkflowOutcome,
     pub payer_link_fact_id: FactId,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RecoveryOutcome {
-    pub workflow: WorkflowOutcome,
-    pub path: RecoveryPath,
-    pub recovery_event_fact_ids: Vec<FactId>,
-    pub access_decision_fact_id: Option<FactId>,
-    pub device_revocation_fact_ids: Vec<FactId>,
-    pub device_establishment_fact_ids: Vec<FactId>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DelegationOutcome {
-    pub workflow: WorkflowOutcome,
-    pub authority_fact_id: Option<FactId>,
-    pub access_decision_fact_id: Option<FactId>,
-    pub revocation_fact_id: Option<FactId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -346,49 +317,6 @@ impl IdentityWorkflowService {
         })
     }
 
-    pub fn enroll_subject(
-        &self,
-        request: OnboardingRequest,
-        provider: &impl ContinuityVaultProvider,
-    ) -> Result<WorkflowOutcome, VerticalSliceError> {
-        let subject_id = request.subject_id.clone();
-        let slice = onboarding_vertical_slice_from_request(request, provider, &self.translator)?;
-        Ok(workflow_outcome(subject_id, slice))
-    }
-
-    pub fn enroll_subject_detailed(
-        &self,
-        request: OnboardingRequest,
-        provider: &impl ContinuityVaultProvider,
-    ) -> Result<OnboardingOutcome, VerticalSliceError> {
-        let workflow = self.enroll_subject(request, provider)?;
-
-        Ok(OnboardingOutcome {
-            subject_fact_id: required_fact_id_matching(&workflow.slice, |payload| {
-                matches!(payload, FactPayload::SubjectCreated { .. })
-            }),
-            device_binding_fact_id: required_fact_id_matching(&workflow.slice, |payload| {
-                matches!(payload, FactPayload::DeviceBindingEstablished { .. })
-            }),
-            identity_witness_fact_id: required_fact_id_matching(&workflow.slice, |payload| {
-                matches!(payload, FactPayload::IdentityWitnessRecorded { .. })
-            }),
-            enrollment_fact_id: required_fact_id_matching(&workflow.slice, |payload| {
-                matches!(
-                    payload,
-                    FactPayload::BiometricEnrollmentReferenceAdded { .. }
-                )
-            }),
-            clinical_link_fact_id: required_fact_id_matching(&workflow.slice, |payload| {
-                matches!(payload, FactPayload::ClinicalIdentityLinkEstablished { .. })
-            }),
-            payer_link_fact_id: required_fact_id_matching(&workflow.slice, |payload| {
-                matches!(payload, FactPayload::PayerIdentityLinkEstablished { .. })
-            }),
-            workflow,
-        })
-    }
-
     pub fn onboard_core_identity(
         &self,
         request: CoreIdentityOnboardingRequest,
@@ -476,7 +404,7 @@ impl IdentityWorkflowService {
         facts.extend(registration.workflow.slice.facts.clone());
         facts.extend(device_binding.workflow.slice.facts.clone());
         facts.extend(continuity_enrollment.workflow.slice.facts.clone());
-        let projection = materialize_identity_state(subject_id.clone(), &facts);
+        let projection = project_identity_history(subject_id.clone(), &facts);
 
         Ok(CoreIdentityOnboardingOutcome {
             subject_id,
@@ -541,7 +469,7 @@ impl IdentityWorkflowService {
         }
     }
 
-    pub fn accept_account_session(
+    pub fn compose_account_session(
         &self,
         request: AccountSessionBootstrapRequest,
     ) -> AccountSessionBootstrapOutcome {
@@ -590,7 +518,7 @@ impl IdentityWorkflowService {
             verifier.verify_session(&request.token, &request.oidc_config, &request.observed_at)?;
 
         Ok(
-            self.accept_account_session(AccountSessionBootstrapRequest::with_generated_ids(
+            self.compose_account_session(AccountSessionBootstrapRequest::with_generated_ids(
                 request.subject_id,
                 request.authored_by,
                 request.observed_at,
@@ -626,7 +554,7 @@ impl IdentityWorkflowService {
             return Err(AccountTokenWithAppAttestBootstrapError::DeviceRefMismatch);
         }
 
-        Ok(self.accept_account_session(
+        Ok(self.compose_account_session(
             AccountSessionBootstrapRequest::with_generated_ids_and_app_attest(
                 request.account.subject_id,
                 request.account.authored_by,
@@ -765,26 +693,6 @@ impl IdentityWorkflowService {
         nonce_lifecycle: &mut InMemoryNonceLifecycle,
         signature_verifier: &impl ContinuitySignatureVerifier,
         assurance_mapper: &impl ContinuityAssuranceMapper,
-    ) -> Result<WorkflowOutcome, VerticalSliceError> {
-        let subject_id = request.subject_id.clone();
-        let slice = complete_record_export_step_up_slice_from_request(
-            request,
-            provider,
-            nonce_lifecycle,
-            signature_verifier,
-            assurance_mapper,
-            &self.translator,
-        )?;
-        Ok(workflow_outcome(subject_id, slice))
-    }
-
-    pub fn authorize_complete_record_export_step_up_detailed(
-        &self,
-        request: CompleteRecordExportStepUpRequest,
-        provider: &impl ContinuityVaultProvider,
-        nonce_lifecycle: &mut InMemoryNonceLifecycle,
-        signature_verifier: &impl ContinuitySignatureVerifier,
-        assurance_mapper: &impl ContinuityAssuranceMapper,
     ) -> Result<AccessAuthorizationOutcome, VerticalSliceError> {
         let subject_id = request.subject_id.clone();
         let outcome = complete_record_export_step_up_outcome_from_request(
@@ -803,81 +711,16 @@ impl IdentityWorkflowService {
         })
     }
 
-    pub fn recover_account(&self, request: RecoveryRequest) -> WorkflowOutcome {
-        let subject_id = request.subject_id.clone();
-        workflow_outcome(
-            subject_id,
-            recovery_slice_from_request(request, &self.translator),
-        )
-    }
-
-    pub fn recover_account_detailed(&self, request: RecoveryRequest) -> RecoveryOutcome {
-        let path = request.path;
-        let workflow = self.recover_account(request);
-
-        RecoveryOutcome {
-            recovery_event_fact_ids: fact_ids_matching(&workflow.slice, |payload| {
-                matches!(payload, FactPayload::AccountRecoveryEvent { .. })
-            }),
-            access_decision_fact_id: first_fact_id_matching(&workflow.slice, |payload| {
-                matches!(payload, FactPayload::AccessDecision { .. })
-            }),
-            device_revocation_fact_ids: fact_ids_matching(&workflow.slice, |payload| {
-                matches!(payload, FactPayload::DeviceBindingRevoked { .. })
-            }),
-            device_establishment_fact_ids: fact_ids_matching(&workflow.slice, |payload| {
-                matches!(payload, FactPayload::DeviceBindingEstablished { .. })
-            }),
-            workflow,
-            path,
-        }
-    }
-
-    pub fn delegate_authority(&self, request: DelegationRequest) -> WorkflowOutcome {
-        let subject_id = request.target_subject_id.clone();
-        workflow_outcome(
-            subject_id,
-            delegation_vertical_slice_from_request(request, &self.translator),
-        )
-    }
-
-    pub fn delegate_authority_detailed(&self, request: DelegationRequest) -> DelegationOutcome {
-        let workflow = self.delegate_authority(request);
-
-        DelegationOutcome {
-            authority_fact_id: first_fact_id_matching(&workflow.slice, |payload| {
-                matches!(
-                    payload,
-                    FactPayload::AuthorityRelationshipEstablished { .. }
-                )
-            }),
-            access_decision_fact_id: first_fact_id_matching(&workflow.slice, |payload| {
-                matches!(payload, FactPayload::AccessDecision { .. })
-            }),
-            revocation_fact_id: first_fact_id_matching(&workflow.slice, |payload| {
-                matches!(payload, FactPayload::AuthorityRelationshipRevoked { .. })
-            }),
-            workflow,
-        }
-    }
-
     pub fn resolve_identity_dispute(
-        &self,
-        request: IdentityDisputeResolutionRequest,
-    ) -> WorkflowOutcome {
-        let subject_id = request.subject_id.clone();
-        workflow_outcome(
-            subject_id,
-            identity_dispute_resolution_slice_from_request(request, &self.translator),
-        )
-    }
-
-    pub fn resolve_identity_dispute_detailed(
         &self,
         request: IdentityDisputeResolutionRequest,
     ) -> IdentityDisputeOutcome {
         let kind = request.kind.clone();
-        let workflow = self.resolve_identity_dispute(request);
+        let subject_id = request.subject_id.clone();
+        let workflow = workflow_outcome(
+            subject_id,
+            identity_dispute_resolution_slice_from_request(request, &self.translator),
+        );
 
         IdentityDisputeOutcome {
             dispute_evidence_fact_ids: fact_ids_matching(&workflow.slice, |payload| {

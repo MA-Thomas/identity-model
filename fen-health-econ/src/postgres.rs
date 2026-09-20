@@ -179,8 +179,18 @@ impl PostgresReconciliationRuleStore {
         .bind(&artifact.title)
         .bind(&artifact.description)
         .bind(postgres_rule_status_label(artifact.status))
-        .bind(artifact.effective_period.as_ref().map(|period| period.start.0.clone()))
-        .bind(artifact.effective_period.as_ref().map(|period| period.end.0.clone()))
+        .bind(
+            artifact
+                .effective_period
+                .as_ref()
+                .map(|period| period.start.0.clone()),
+        )
+        .bind(
+            artifact
+                .effective_period
+                .as_ref()
+                .map(|period| period.end.0.clone()),
+        )
         .bind(
             artifact
                 .review
@@ -199,8 +209,18 @@ impl PostgresReconciliationRuleStore {
                 .as_ref()
                 .and_then(|review| review.reviewed_by.display_name.clone()),
         )
-        .bind(artifact.review.as_ref().map(|review| review.reviewed_at.0.clone()))
-        .bind(artifact.review.as_ref().and_then(|review| review.notes.clone()))
+        .bind(
+            artifact
+                .review
+                .as_ref()
+                .map(|review| review.reviewed_at.0.clone()),
+        )
+        .bind(
+            artifact
+                .review
+                .as_ref()
+                .and_then(|review| review.notes.clone()),
+        )
         .bind(postgres_rule_definition_type_label(&artifact.definition))
         .bind(tolerance_currency)
         .bind(tolerance_amount)
@@ -264,9 +284,7 @@ impl PostgresReconciliationRuleStore {
         review: RuleReview,
     ) -> Result<(), PostgresRuleStoreError> {
         let mut tx = self.pool.begin().await.map_err(storage)?;
-        let status = self
-            .locked_status(&mut tx, id, version)
-            .await?;
+        let status = self.locked_status(&mut tx, id, version).await?;
         if status != RuleArtifactStatus::Draft {
             return Err(PostgresRuleStoreError::Store(
                 RuleStoreError::InvalidLifecycleTransition {
@@ -289,7 +307,13 @@ impl PostgresReconciliationRuleStore {
         .bind(&id.0)
         .bind(version)
         .bind(author_type_label(review.reviewed_by.author_type.clone()))
-        .bind(review.reviewed_by.author_id.as_ref().map(|author_id| author_id.0.clone()))
+        .bind(
+            review
+                .reviewed_by
+                .author_id
+                .as_ref()
+                .map(|author_id| author_id.0.clone()),
+        )
         .bind(review.reviewed_by.display_name.clone())
         .bind(&review.reviewed_at.0)
         .bind(&review.notes)
@@ -306,9 +330,7 @@ impl PostgresReconciliationRuleStore {
         version: &str,
     ) -> Result<(), PostgresRuleStoreError> {
         let mut tx = self.pool.begin().await.map_err(storage)?;
-        let status = self
-            .locked_status(&mut tx, id, version)
-            .await?;
+        let status = self.locked_status(&mut tx, id, version).await?;
         if status != RuleArtifactStatus::Active {
             return Err(PostgresRuleStoreError::Store(
                 RuleStoreError::InvalidLifecycleTransition {
@@ -425,9 +447,7 @@ fn definition_columns(definition: &ReconciliationRuleDefinition) -> DefinitionCo
     }
 }
 
-fn artifact_from_row(
-    row: &PgRow,
-) -> Result<ReconciliationRuleArtifact, PostgresRuleStoreError> {
+fn artifact_from_row(row: &PgRow) -> Result<ReconciliationRuleArtifact, PostgresRuleStoreError> {
     let rule_id: String = row.try_get("rule_id").map_err(storage)?;
     let version: String = row.try_get("version").map_err(storage)?;
     let title: String = row.try_get("title").map_err(storage)?;
@@ -479,8 +499,7 @@ fn artifact_from_row(
     };
 
     let definition_type: String = row.try_get("definition_type").map_err(storage)?;
-    let tolerance_currency: Option<String> =
-        row.try_get("tolerance_currency").map_err(storage)?;
+    let tolerance_currency: Option<String> = row.try_get("tolerance_currency").map_err(storage)?;
     let tolerance_amount: Option<i64> = row
         .try_get("tolerance_amount_minor_units")
         .map_err(storage)?;
