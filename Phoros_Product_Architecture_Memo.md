@@ -1,5 +1,7 @@
 # Phoros Product Architecture
 
+> **Design principles.** Before changing code or this design, read the [Rust-domain design principles](docs/rust-domain-principles.md). They are binding for cs-mail and identity-model; new work must not regress them.
+
 Identity follows the shared [product identity model](../cs-mail/docs/product-identity-model.md):
 one durable Phoros login identity with multiple authentication methods. Its
 enrollment ceremony establishes the required biological identity and continuity

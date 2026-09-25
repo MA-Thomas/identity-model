@@ -1,5 +1,7 @@
 # Shared identity and product enrollment, version 1
 
+> **Design principles.** Before changing code or this design, read the [Rust-domain design principles](rust-domain-principles.md). They are binding for cs-mail and identity-model; new work must not regress them.
+
 Status: bank-backed cs-mail enrollment and account changes. The September addendum
 below defines device-key recovery, bank rebinding and security events. Phoros
 policy, subject merge/split and arbitrary cross-issuer federation remain separate.

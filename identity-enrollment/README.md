@@ -1,5 +1,7 @@
 # Shared identity enrollment service
 
+> **Design principles.** Before changing code or this design, read the [Rust-domain design principles](../docs/rust-domain-principles.md). They are binding for cs-mail and identity-model; new work must not regress them.
+
 This crate hosts HTTP transport for bank-backed cs-mail enrollment and explicit
 account changes. `identity-application` owns the application services and policy;
 `identity-storage-postgres` implements their persistence ports. The existing identity-model workflow/mobile examples

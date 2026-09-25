@@ -1,8 +1,7 @@
 # Remaining domain work — 2026-09-20
 
-The [ten Rust-domain design principles](../cs-mail/docs/rust-domain-principles.md)
-are the shared architectural reference for identity-model and cs-mail. The link
-assumes sibling repository checkouts.
+The [ten Rust-domain design principles](docs/rust-domain-principles.md)
+are the shared architectural reference for identity-model and cs-mail.
 
 The previous August audit described a combined identity/runtime crate and a
 synthetic delegation flow. Those interfaces have been replaced. The current
