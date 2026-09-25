@@ -11,6 +11,7 @@ pub mod identity;
 pub mod identity_proofing;
 pub mod ids;
 pub mod liveness;
+pub mod login;
 pub mod materialized;
 pub mod narrative;
 pub mod persistence;

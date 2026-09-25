@@ -1,12 +1,15 @@
 # Shared identity and product enrollment, version 1
 
 Status: bank-backed cs-mail enrollment and account changes. The September addendum
-below defines recovery, bank rebinding, login linking and security events. Phoros
+below defines device-key recovery, bank rebinding and security events. Phoros
 policy, subject merge/split and arbitrary cross-issuer federation remain separate.
+
+See the canonical [product identity model](../../cs-mail/docs/product-identity-model.md)
+for one durable login per product and the future ceremony-bound reuse of a subject.
 
 ## Ownership
 
-The identity service owns SubjectId, verified external login mappings, product-scoped
+The identity service owns SubjectId, durable product-login bindings, product-scoped
 opaque subject references, evidence policy, and durable binding reservations. cs-mail
 owns AccountId, PrincipalRef, persona ownership, account authority, and billing/member
 associations. Billing continues to own funding records and financial obligations.
@@ -16,7 +19,11 @@ mutable identity profile. Email is never a subject key.
 ## Trust boundaries
 
 Only a configured OIDC verifier establishes an external (issuer, subject). The service
-resolves that pair to its persisted SubjectId; an enrollment request cannot select one.
+resolves that pair within the configured product to its persisted SubjectId; an
+enrollment request cannot select one. Matching a login in another product does not
+authorize subject adoption. Each product has one durable login per subject, with
+multiple authentication methods managed by the configured provider. Method changes
+and provider recovery retain its issuer/subject pair and the product binding.
 OIDC audience, authorized party, timestamps, and challenge nonce must all match.
 A configured bank attestation authority asserts ownership for that login and operation,
 including the digest of the exact financial evidence accepted by cs-mail. An attestation
@@ -43,7 +50,7 @@ cs-mail commits product account, principal, identity binding, persona, initial a
 Confirmation is idempotent and runs outside the local transaction. Batches continue after individual delivery failures, schedule transient retries and retain permanent rejection codes for intervention. Administrative retry preserves the original signed decision. Lost acknowledgements cannot create a second account; exact committed decisions remain replayable after expiry. Reconciliation returns the stored eligible, review, denied or missing outcome explicitly.
 
 The shared service makes cs-mail real-person uniqueness a best-effort policy. Exact
-login mappings and product binding uniqueness are transactional constraints. Phoros
+product-login ownership and product binding uniqueness are transactional constraints. Phoros
 strict person resolution is not inferred from bank evidence and cannot enroll under
 this policy.
 
@@ -58,7 +65,8 @@ scheduler keys remain relationship-owned. Accepted commands retain receipt-time
 authority for audit and replay.
 
 Fixture constructors, rendering and synthetic onboarding/recovery workflows live in the development-only `identity-test-support` crate. The production facade that fabricated a government-ID witness has been removed. Public session entry points verify tokens before
-calling internal workflow composition. Verified recovery is separate future work.
+calling internal workflow composition. Mobile workflow inputs do not resolve
+product subject ownership or implement Phoros enrollment.
 
 ## Verification gates
 
@@ -93,8 +101,10 @@ One database connection per service instance intentionally serializes short loca
 `ChangeIntent` binds a product/account/subject, expected security version, fresh
 challenge, replacement key or bank digest, and a typed change kind. Recovery needs
 the existing authenticated login, fresh bank ownership and replacement-key
-possession. Bank rebinding requires the current key; login linking additionally
-verifies a second token in the configured realm. No subject reassignment occurs.
+possession. Bank rebinding requires the current key. Both operations require the
+existing login belonging to that product and preserve the subject and login binding.
+There is no second-login linking operation. Provider login recovery and product
+operational-key recovery are different processes.
 
 Changes return a signed security event. Events carry a key identifier and a
 contiguous product security version. A product verifies issuer, audience, subject,
@@ -108,7 +118,10 @@ Signing uses `identity/enrollment-decision/v2` for key-identified decisions and
 format is not accepted. Trusted decision keys have explicit validity windows;
 rotation is an operator configuration operation with an expected revision.
 
-This schema is for fresh installations. Tokens are verified in memory and are not
+Shared-enrollment schema version 2 is a fresh baseline; version 1 is rejected
+without conversion. Product logins are unique by both product/subject and
+product/external-login pair. Enrollment foreign keys bind the login and scoped
+reference to the same subject. Tokens are verified in memory and are not
 stored in event records. Login identifiers are omitted from product notifications.
 Real provider verification and product-specific consent/role policies remain host
 integration responsibilities.

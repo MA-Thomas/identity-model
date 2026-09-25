@@ -7,7 +7,9 @@ pub mod ports;
 pub use decisions::DecisionSigner;
 pub use error::ServiceError;
 use identity_contract::*;
-use identity_model::{OidcClientConfig, OidcSessionVerifier};
+use identity_model::{
+    fen::SubjectId, login::ProductLoginIdentity, OidcClientConfig, OidcSessionVerifier,
+};
 use ports::EnrollmentStore;
 use std::sync::Arc;
 
@@ -86,7 +88,6 @@ impl<R: EnrollmentStore, V: OidcSessionVerifier + Send + Sync + 'static, C: Cloc
                 oidc_token,
                 bank,
                 device_proof,
-                new_login_token,
             } => {
                 let now = self.clock.now()?;
                 let hash = digest("identity/change-request/v1", request)?;
@@ -107,34 +108,10 @@ impl<R: EnrollmentStore, V: OidcSessionVerifier + Send + Sync + 'static, C: Cloc
                 let token = oidc_token.clone();
                 let bank_copy = bank.clone();
                 let proof = device_proof.clone();
-                let new_token = new_login_token.clone();
-                let (evidence, new_login) = tokio::task::spawn_blocking(move || {
-                    let evidence = policy::verify(
+                let evidence = tokio::task::spawn_blocking(move || {
+                    policy::verify(
                         &*verifier, &config, &authority, &token, &bank_copy, &proof, now,
-                    )?;
-                    let new_login = if let Some(token) = new_token {
-                        let at = identity_model::time::unix_seconds_to_timestamp(now);
-                        let session = verifier
-                            .verify_session(&token, &config.oidc, &at)
-                            .map_err(|_| Error::Unauthorized)?;
-                        identity_model::validate_oidc_session_context(&session, &config.oidc, &at)
-                            .map_err(|_| Error::Unauthorized)?;
-                        let authenticated = session
-                            .auth_time
-                            .as_ref()
-                            .and_then(|at| identity_model::time::timestamp_to_unix_seconds(at).ok())
-                            .ok_or(Error::Unauthorized)?;
-                        if session.nonce.as_deref() != Some(&authority.challenge)
-                            || authenticated > now
-                            || now - authenticated > MAX_LIFETIME
-                        {
-                            return Err(Error::Unauthorized);
-                        }
-                        Some(session)
-                    } else {
-                        None
-                    };
-                    Ok::<_, Error>((evidence, new_login))
+                    )
                 })
                 .await??;
                 self.repository
@@ -143,20 +120,16 @@ impl<R: EnrollmentStore, V: OidcSessionVerifier + Send + Sync + 'static, C: Cloc
                             product: &self.config.product,
                             intent,
                             login: (&evidence.session.issuer, &evidence.session.subject),
-                            new_login: new_login
-                                .as_ref()
-                                .map(|s| (s.issuer.as_str(), s.subject.as_str())),
                         },
                         |context| {
                             decisions::change(
                                 decisions::DecisionAuthority {
                                     config: &self.config,
                                     signer: &self.signer,
-                                    clock: &self.clock,
+                                    now: self.clock.now()?,
                                 },
                                 intent,
                                 &evidence,
-                                new_login.as_ref(),
                                 &bank.claims.evidence_ref,
                                 &hash,
                                 context,
@@ -208,6 +181,18 @@ impl<R: EnrollmentStore, V: OidcSessionVerifier + Send + Sync + 'static, C: Cloc
                     )
                 })
                 .await??;
+                // Allocate candidates before acquiring persistence protection. The
+                // deterministic decision discards them when a product login exists.
+                let fresh = decisions::NewProductLogin {
+                    identity: ProductLoginIdentity::new(
+                        self.config.product.clone(),
+                        SubjectId(random_id()?),
+                        evidence.session.issuer.clone(),
+                        evidence.session.subject.clone(),
+                    )
+                    .map_err(|_| Error::Invalid)?,
+                    subject_ref: random_id()?.try_into()?,
+                };
                 self.repository
                     .record(
                         ports::EnrollmentScope {
@@ -220,13 +205,15 @@ impl<R: EnrollmentStore, V: OidcSessionVerifier + Send + Sync + 'static, C: Cloc
                                 decisions::DecisionAuthority {
                                     config: &self.config,
                                     signer: &self.signer,
-                                    clock: &self.clock,
+                                    // Sample trusted time only after protected reads.
+                                    now: self.clock.now()?,
                                 },
                                 intent,
                                 &evidence,
                                 &bank.claims.evidence_ref,
                                 &hash,
                                 context,
+                                fresh,
                             )
                         },
                     )

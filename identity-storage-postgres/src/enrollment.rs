@@ -1,5 +1,6 @@
 //! PostgreSQL implementation of the identity application's atomic ownership contracts.
 use identity_application::enrollment::{ports::*, ServiceError};
+use identity_model::{fen::SubjectId, login::ProductLoginIdentity};
 
 use identity_contract::{changes::*, *};
 
@@ -58,8 +59,12 @@ impl PostgresEnrollmentStore {
         Ok(Self { db: Mutex::new(db) })
     }
 }
-async fn login_lock(tx: &Transaction<'_>, login: (&str, &str)) -> Result<(), StoreError> {
-    let key = serde_json::to_string(&login).map_err(|_| Error::Invalid)?;
+async fn login_lock(
+    tx: &Transaction<'_>,
+    product: &str,
+    login: (&str, &str),
+) -> Result<(), StoreError> {
+    let key = serde_json::to_string(&(product, login)).map_err(|_| Error::Invalid)?;
 
     tx.query_one(
         "SELECT pg_advisory_xact_lock(hashtext($1))",
@@ -96,22 +101,34 @@ async fn migrate(db: &mut Client) -> Result<(), StoreError> {
     )
     .await?;
 
-    if tx
-        .query_opt(
-            "SELECT 1 FROM shared_identity_schema_migrations WHERE version=1",
+    let versions: Vec<i32> = tx
+        .query(
+            "SELECT version FROM shared_identity_schema_migrations ORDER BY version",
             &[],
         )
         .await?
-        .is_none()
-    {
-        tx.batch_execute(include_str!("../migrations/0001_shared_enrollment.sql"))
-            .await?;
-
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    if versions.is_empty() {
+        tx.batch_execute(include_str!(
+            "../migrations/0002_product_login_enrollment.sql"
+        ))
+        .await?;
         tx.execute(
-            "INSERT INTO shared_identity_schema_migrations(version) VALUES(1)",
+            "INSERT INTO shared_identity_schema_migrations(version) VALUES(2)",
             &[],
         )
         .await?;
+    } else if versions != [2] {
+        return Err(ServiceError::Storage {
+            code: Error::Unavailable,
+            source: Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "product login identities require a fresh shared-identity schema (version 2)",
+            )),
+        }
+        .into());
     }
     tx.commit().await?;
 
@@ -217,19 +234,19 @@ impl EnrollmentStore for PostgresEnrollmentStore {
         let mut db=self.db.lock().await;
  let tx=db.transaction().await?;
 
-        login_lock(&tx,scope.login).await?;
+        login_lock(&tx,scope.product,scope.login).await?;
 
         operation_lock(&tx,scope.product,&scope.intent.operation).await?;
 
         let prior=tx.query_opt("SELECT intent,request_digest,response FROM shared_identity_attempts WHERE product=$1 AND operation=$2 ORDER BY created_at DESC LIMIT 1", &[&scope.product,&scope.intent.operation]).await?.map(|r|PriorAttempt {intent:r.get::<_,Json<EnrollmentIntent>>(0).0,digest:r.get(1),response:r.get::<_,Json<Response>>(2).0});
 
-        // Subject row protection also serializes product-reference creation through different logins.
-        let login=if let Some(row)=tx.query_opt("SELECT s.subject_id,s.status FROM shared_identity_logins l JOIN shared_identity_subjects s USING(subject_id) WHERE l.issuer=$1 AND l.login_subject=$2 FOR UPDATE OF s", &[&scope.login.0,&scope.login.1]).await? {
-            let subject:String=row.get(0);
-
-            let product_ref=tx.query_opt("SELECT subject_ref FROM shared_identity_product_refs WHERE product=$1 AND subject_id=$2", &[&scope.product,&subject]).await?.map(|r|r.get(0));
-
-            Some(LoginOwner {subject,status:row.get(1),product_ref})
+        // The product scopes both the protected lookup and external-login ownership.
+        let login=if let Some(row)=tx.query_opt(
+            "SELECT s.subject_id,s.status,r.subject_ref,l.issuer,l.login_subject FROM shared_identity_product_logins l JOIN shared_identity_subjects s USING(subject_id) JOIN shared_identity_product_refs r ON r.product=l.product AND r.subject_id=l.subject_id WHERE l.product=$1 AND l.issuer=$2 AND l.login_subject=$3 FOR UPDATE OF s,l",
+            &[&scope.product,&scope.login.0,&scope.login.1],
+        ).await? {
+            let identity = ProductLoginIdentity::new(scope.product.into(), SubjectId(row.get(0)), row.get(3), row.get(4)).map_err(|_| Error::Invalid)?;
+            Some(LoginOwner {identity,status:row.get(1),product_ref:row.get::<_,String>(2).try_into()?})
         }else{None};
 
         let enrollment=tx.query_opt("SELECT account,subject_ref,confirmed FROM shared_identity_enrollments WHERE product=$1 AND operation=$2 FOR UPDATE", &[&scope.product,&scope.intent.operation]).await?.map(|r|EnrollmentOwner {account:r.get(0),subject_ref:r.get(1),confirmed:r.get(2)});
@@ -237,14 +254,17 @@ impl EnrollmentStore for PostgresEnrollmentStore {
         let (response,writes)=decide(EnrollmentContext {prior,enrollment,login})?.into_parts();
 
         if let Some(writes)=writes {
-            if let Some((subject,status))=writes.subject {tx.execute("INSERT INTO shared_identity_subjects(subject_id,status) VALUES($1,$2)", &[&subject,&status]).await?;
+            if let Some((subject,status))=writes.subject {tx.execute("INSERT INTO shared_identity_subjects(subject_id,status) VALUES($1,$2)", &[&subject.as_str(),&status]).await?;
 }
-            if let Some((issuer,login,subject))=writes.login {tx.execute("INSERT INTO shared_identity_logins(issuer,login_subject,subject_id) VALUES($1,$2,$3)", &[&issuer,&login,&subject]).await?;
-}
-            if let Some((subject,reference))=writes.product_ref {tx.execute("INSERT INTO shared_identity_product_refs(product,subject_id,subject_ref) VALUES($1,$2,$3)", &[&scope.product,&subject,&reference]).await?;
-}
-            if let Some((account,reference))=writes.enrollment {tx.execute("INSERT INTO shared_identity_enrollments(product,operation,account,subject_ref) VALUES($1,$2,$3,$4)", &[&scope.product,&scope.intent.operation,&account,&reference]).await?;
-}
+            if let Some((subject,reference))=writes.product_ref {
+                tx.execute("INSERT INTO shared_identity_product_refs(product,subject_id,subject_ref) VALUES($1,$2,$3)", &[&scope.product,&subject.as_str(),&reference.as_str()]).await?;
+            }
+            if let Some(login)=writes.login {
+                tx.execute("INSERT INTO shared_identity_product_logins(product,subject_id,issuer,login_subject) VALUES($1,$2,$3,$4)", &[&login.product(),&login.subject().as_str(),&login.issuer(),&login.external_subject()]).await?;
+            }
+            if let Some(binding)=writes.enrollment {
+                tx.execute("INSERT INTO shared_identity_enrollments(product,operation,account,subject_id,subject_ref) VALUES($1,$2,$3,$4,$5)", &[&scope.product,&scope.intent.operation,&binding.account,&binding.subject.as_str(),&binding.subject_ref.as_str()]).await?;
+            }
             let attempt=writes.attempt;
 
             tx.execute("INSERT INTO shared_identity_attempts(product,operation,challenge,created_at,intent,request_digest,response) VALUES($1,$2,$3,$4,$5,$6,$7)", &[&scope.product,&attempt.intent.operation,&attempt.intent.challenge,&attempt.intent.created_at,&Json(&attempt.intent),&attempt.digest,&Json(attempt.response)]).await?;
@@ -263,18 +283,12 @@ Ok(response)
         let mut db=self.db.lock().await;
 let tx=db.transaction().await?;
 
-        let mut logins=vec![scope.login];
-if let Some(login)=scope.new_login{logins.push(login);
-}logins.sort_unstable();
-logins.dedup();
-
-        for login in logins {login_lock(&tx,login).await?;
-}
+        login_lock(&tx,scope.product,scope.login).await?;
         operation_lock(&tx,scope.product,&scope.intent.authorization.operation).await?;
 
         let owner=tx.query_opt("SELECT s.subject_id,s.status FROM shared_identity_product_refs r JOIN shared_identity_subjects s USING(subject_id) WHERE r.product=$1 AND r.subject_ref=$2 FOR UPDATE OF s", &[&scope.product,&scope.intent.subject_ref.as_str()]).await?.ok_or(Error::Unauthorized)?;
 
-        let subject:String=owner.get(0);
+        let subject=SubjectId(owner.get(0));
 
         let enrollment=tx.query_opt("SELECT security_version,confirmed FROM shared_identity_enrollments WHERE product=$1 AND account=$2 AND subject_ref=$3 FOR UPDATE", &[&scope.product,&scope.intent.authorization.account,&scope.intent.subject_ref.as_str()]).await?.ok_or(Error::Unauthorized)?;
 
@@ -284,9 +298,10 @@ logins.dedup();
 
         let prior=tx.query_opt("SELECT request_digest,event FROM shared_identity_security_events WHERE product=$1 AND operation=$2", &[&scope.product,&scope.intent.authorization.operation]).await?.map(|r|(r.get(0),r.get::<_,Json<SignedSecurityEvent>>(1).0));
 
-        let login_owned=tx.query_opt("SELECT 1 FROM shared_identity_logins WHERE issuer=$1 AND login_subject=$2 AND subject_id=$3", &[&scope.login.0,&scope.login.1,&subject]).await?.is_some();
-
-        let new_login_owner=if let Some((issuer,login))=scope.new_login {tx.query_opt("SELECT subject_id FROM shared_identity_logins WHERE issuer=$1 AND login_subject=$2", &[&issuer,&login]).await?.map(|r|r.get(0))}else{None};
+        let login=tx.query_opt(
+            "SELECT issuer,login_subject FROM shared_identity_product_logins WHERE product=$1 AND subject_id=$2 FOR UPDATE",
+            &[&scope.product,&subject.as_str()],
+        ).await?.map(|row| ProductLoginIdentity::new(scope.product.into(), subject.clone(), row.get(0), row.get(1)).map_err(|_| Error::Invalid)).transpose()?;
 
         let (old_key,old_bank)=if version>1 {
             let event=tx.query_one("SELECT event FROM shared_identity_security_events WHERE product=$1 AND subject_ref=$2 AND security_version=$3", &[&scope.product,&scope.intent.subject_ref.as_str(),&version_i64]).await?.get::<_,Json<SignedSecurityEvent>>(0).0.event;
@@ -298,11 +313,9 @@ logins.dedup();
             (intent.initial_key,intent.bank_digest)
         };
 
-        let (response,writes)=decide(ChangeContext {version,subject,status:owner.get(1),confirmed:enrollment.get(1),login_owned,new_login_owner,old_key,old_bank,prior})?.into_parts();
+        let (response,writes)=decide(ChangeContext {version,subject,status:owner.get(1),confirmed:enrollment.get(1),login,old_key,old_bank,prior})?.into_parts();
 
         if let Some(writes)=writes {
-            if let Some((issuer,login,subject))=writes.login {tx.execute("INSERT INTO shared_identity_logins(issuer,login_subject,subject_id) VALUES($1,$2,$3)", &[&issuer,&login,&subject]).await?;
-}
             let event=&writes.event.event;
 let next=i64::try_from(event.security_version).map_err(|_|Error::Invalid)?;
 

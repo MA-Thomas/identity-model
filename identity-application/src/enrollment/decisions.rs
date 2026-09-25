@@ -1,5 +1,6 @@
-use super::{policy::Evidence, ports::*, Clock, Config, ServiceError};
+use super::{policy::Evidence, ports::*, Config, ServiceError};
 use identity_contract::{changes::*, *};
+use identity_model::login::ProductLoginIdentity;
 /// Local signing is an application dependency. Storage never receives a signing secret.
 pub struct DecisionSigner {
     secret: [u8; 32],
@@ -15,23 +16,29 @@ impl DecisionSigner {
         SignedSecurityEvent::sign(event, &self.secret)
     }
 }
-pub(super) struct DecisionAuthority<'a, C> {
+pub(super) struct DecisionAuthority<'a> {
     pub config: &'a Config,
     pub signer: &'a DecisionSigner,
-    pub clock: &'a C,
+    pub now: i64,
+}
+/// Fresh identifiers prepared by orchestration; only used for a new product login.
+pub(super) struct NewProductLogin {
+    pub identity: ProductLoginIdentity,
+    pub subject_ref: ProductSubjectRef,
 }
 pub(super) fn enroll(
-    authority: DecisionAuthority<'_, impl Clock>,
+    authority: DecisionAuthority<'_>,
     intent: &EnrollmentIntent,
     evidence: &Evidence,
     evidence_ref: &str,
     hash: &[u8; 32],
     context: EnrollmentContext,
+    fresh: NewProductLogin,
 ) -> Result<EnrollmentDecision, ServiceError> {
     let DecisionAuthority {
         config,
         signer,
-        clock,
+        now,
     } = authority;
     if let Some(prior) = context.prior {
         if prior.intent.challenge == intent.challenge {
@@ -50,7 +57,6 @@ pub(super) fn enroll(
     if context.enrollment.as_ref().is_some_and(|e| e.confirmed) {
         return Err(Error::Conflict.into());
     }
-    let now = clock.now()?;
     intent.validate(now)?;
     if now >= evidence.expires_at {
         return Err(Error::Expired.into());
@@ -64,38 +70,48 @@ pub(super) fn enroll(
         Ownership::ReviewRequired => Response::ReviewRequired,
         Ownership::Confirmed => {
             let (subject, reference) = if let Some(login) = context.login {
-                if login.status != "active" {
+                if login.status != "active"
+                    || !login.identity.matches_login(
+                        &config.product,
+                        &evidence.session.issuer,
+                        &evidence.session.subject,
+                    )
+                {
                     return Err(Error::Unauthorized.into());
                 }
-                (login.subject, login.product_ref)
+                (login.identity.subject().clone(), login.product_ref)
             } else {
-                let subject = random_id()?;
+                // This policy creates a cs-mail subject. Phoros subject reuse requires
+                // its own ceremony-authorized resolution; an OIDC match is not that proof.
+                if !fresh.identity.matches_login(
+                    &config.product,
+                    &evidence.session.issuer,
+                    &evidence.session.subject,
+                ) {
+                    return Err(Error::Context.into());
+                }
+                let subject = fresh.identity.subject().clone();
+                let reference = fresh.subject_ref;
                 subject_write = Some((subject.clone(), "active".into()));
-                login_write = Some((
-                    evidence.session.issuer.clone(),
-                    evidence.session.subject.clone(),
-                    subject.clone(),
-                ));
-                (subject, None)
-            };
-            let reference = if let Some(reference) = reference {
-                reference
-            } else {
-                let reference = random_id()?;
-                reference_write = Some((subject, reference.clone()));
-                reference
+                reference_write = Some((subject.clone(), reference.clone()));
+                login_write = Some(fresh.identity);
+                (subject, reference)
             };
             if let Some(owner) = context.enrollment {
-                if owner.account != intent.account || owner.subject_ref != reference {
+                if owner.account != intent.account || owner.subject_ref != reference.as_str() {
                     return Err(Error::Conflict.into());
                 }
             } else {
-                enrollment_write = Some((intent.account.clone(), reference.clone()));
+                enrollment_write = Some(EnrollmentBinding {
+                    account: intent.account.clone(),
+                    subject,
+                    subject_ref: reference.clone(),
+                });
             }
             Response::Eligible(Box::new(signer.decision(DecisionClaims {
                 issuer: config.issuer.clone(),
                 intent: intent.clone(),
-                subject_ref: reference.try_into()?,
+                subject_ref: reference,
                 binding_version: 1,
                 security_version: 1,
                 policy: CS_MAIL_POLICY.into(),
@@ -121,10 +137,9 @@ pub(super) fn enroll(
     })
 }
 pub(super) fn change(
-    authority: DecisionAuthority<'_, impl Clock>,
+    authority: DecisionAuthority<'_>,
     intent: &ChangeIntent,
     evidence: &Evidence,
-    new_login: Option<&identity_model::VerifiedOidcSession>,
     evidence_ref: &str,
     hash: &[u8; 32],
     context: ChangeContext,
@@ -132,7 +147,7 @@ pub(super) fn change(
     let DecisionAuthority {
         config,
         signer,
-        clock,
+        now,
     } = authority;
     if let Some((digest, event)) = context.prior {
         if digest != hash {
@@ -146,11 +161,19 @@ pub(super) fn change(
     if context.version != intent.expected_security_version {
         return Err(Error::Conflict.into());
     }
-    if !context.login_owned || context.status != "active" || !context.confirmed {
+    if !context.login.as_ref().is_some_and(|login| {
+        login.subject() == &context.subject
+            && login.matches_login(
+                &config.product,
+                &evidence.session.issuer,
+                &evidence.session.subject,
+            )
+    }) || context.status != "active"
+        || !context.confirmed
+    {
         return Err(Error::Unauthorized.into());
     }
     let authorization = &intent.authorization;
-    let mut login_write = None;
     match &intent.change {
         IdentityChange::RecoverDevice { .. } if authorization.bank_digest != context.old_bank => {
             return Err(Error::Context.into())
@@ -161,35 +184,11 @@ pub(super) fn change(
         {
             return Err(Error::Context.into())
         }
-        IdentityChange::LinkLogin => {
-            if authorization.initial_key != context.old_key
-                || authorization.bank_digest != context.old_bank
-            {
-                return Err(Error::Context.into());
-            }
-            let login = new_login.ok_or(Error::Unauthorized)?;
-            if let Some(owner) = context.new_login_owner {
-                if owner != context.subject {
-                    return Err(Error::Conflict.into());
-                }
-            } else {
-                login_write = Some((login.issuer.clone(), login.subject.clone(), context.subject));
-            }
-        }
         _ => {}
     }
-    let now = clock.now()?;
     intent.validate(now)?;
     if now >= evidence.expires_at || evidence.ownership != Ownership::Confirmed {
         return Err(Error::Unauthorized.into());
-    }
-    if let Some(login) = new_login {
-        if identity_model::time::timestamp_to_unix_seconds(&login.expires_at)
-            .map_err(|_| Error::Invalid)?
-            <= now
-        {
-            return Err(Error::Expired.into());
-        }
     }
     let event = signer.event(SecurityEvent {
         id: authorization.operation.clone(),
@@ -210,7 +209,6 @@ pub(super) fn change(
         writes: Some(ChangeWrites {
             event,
             digest: *hash,
-            login: login_write,
         }),
     })
 }

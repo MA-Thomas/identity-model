@@ -797,6 +797,8 @@ impl MobileOnboardingAppAttestEnvironmentHttpInput {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct MobileIdentityOnboardingHttpRequestBody {
+    /// Development workflow input, not proof of subject ownership. This endpoint
+    /// is not a Phoros enrollment or cross-product subject-resolution API.
     pub subject_id: String,
     pub observed_at: String,
     #[serde(default)]

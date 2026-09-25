@@ -8,7 +8,6 @@ pub enum IdentityChange {
         persona: String,
     },
     RebindBank,
-    LinkLogin,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

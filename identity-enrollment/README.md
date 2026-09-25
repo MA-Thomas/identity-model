@@ -4,7 +4,9 @@ This crate hosts HTTP transport for bank-backed cs-mail enrollment and explicit
 account changes. `identity-application` owns the application services and policy;
 `identity-storage-postgres` implements their persistence ports. The existing identity-model workflow/mobile examples
 are not its account-enrollment or recovery APIs. It uses the existing OIDC verifier
-and SubjectId type, with a durable subject/login index and product binding repository.
+and SubjectId type, with durable product-login ownership and product bindings.
+The [product identity model](../../cs-mail/docs/product-identity-model.md) defines
+login, authentication-method, recovery and cross-product subject semantics.
 
 The [version 1 contract](../docs/shared-identity-contract.md) defines ownership,
 proof context, concurrency and failure rules. The cs-mail sibling integration suite
@@ -49,20 +51,23 @@ a device-possession signature, and bank-ownership evidence. JSON responses carry
 signed eligible decision or an explicit non-eligible/error result; consumers must
 verify the decision, not infer eligibility from HTTP status.
 
-Migrations run transactionally under a migration lock and record schema version 1.
+Migrations run transactionally under a migration lock and record schema version 2.
+This is a fresh baseline; old version 1 schemas are rejected without conversion.
 Each operation is idempotent by product and operation ID. Login resolution uses a
-separate lock on the verified issuer/subject pair; database constraints prevent
+separate lock on the product and verified issuer/subject pair; database constraints prevent
 concurrent duplicate product bindings. Reservations survive expiry and lost ACKs.
-Confirmed decisions remain replayable, but expired uncommitted enrollment requires
-explicit review; no automatic reservation release or subject merge is implemented.
+Confirmed decisions remain replayable. Expired uncommitted enrollment renews its
+challenge with fresh evidence while preserving ownership. No automatic reservation
+release, login replacement or subject merge is implemented.
 
-Recovery, bank rebinding and same-realm login linking use separate `ChangeIntent`
-variants. Ordered signed security events let the product invalidate authority and
+Device-key recovery and bank rebinding use separate `ChangeIntent` variants. Ordered signed security events let the product invalidate authority and
 reconcile changes. Signing-key IDs and product trust windows support deliberate
 rotation. Recovery requires the existing login and fresh bank ownership; losing
-both requires a separate reviewed process. Phoros policy, arbitrary cross-issuer
-linking, subject merge/split and global cross-product broadcasts remain separate
-work. This service does not authorize healthcare access.
+access to the product login requires the provider's recovery process, retaining its
+external subject. Additional review remains separate work. Second-login linking is
+not part of the product model. Phoros enrollment and its ceremony-bound adoption of
+an existing cs-mail subject remain deferred, as do subject merge/split and global
+cross-product broadcasts. This service does not authorize healthcare access.
 
 The cs-mail development schema uses fresh databases. Unbound account provisioning
 and account compatibility modes have been removed. Identity-model recovery simulations

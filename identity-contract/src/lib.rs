@@ -397,7 +397,6 @@ pub enum Request {
         oidc_token: String,
         bank: SignedBankOwnership,
         device_proof: Vec<u8>,
-        new_login_token: Option<String>,
     },
     SecurityEvents {
         after_version: u64,

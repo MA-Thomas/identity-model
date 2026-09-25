@@ -489,6 +489,8 @@ fn build_verified_mobile_identity_onboarding_composition(
     id_generator: &mut impl IdGenerator,
 ) -> Result<MobileIdentityOnboardingComposition, MobileIdentityOnboardingCommandError> {
     let observed_at = request.account.observed_at.clone();
+    // Development evidence composition only: this supplied ID grants no product
+    // enrollment authority. Phoros must use a separate authorized resolution flow.
     let subject_id = request.account.subject_id.clone();
     let authored_by = request.account.authored_by.clone();
     let id_namespace = request.account.id_namespace.clone();

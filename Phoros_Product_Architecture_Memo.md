@@ -1,5 +1,12 @@
 # Phoros Product Architecture
 
+Identity follows the shared [product identity model](../cs-mail/docs/product-identity-model.md):
+one durable Phoros login identity with multiple authentication methods. Its
+enrollment ceremony establishes the required biological identity and continuity
+evidence. If it also establishes control of an existing cs-mail account, Phoros
+adopts that account's underlying SubjectId while retaining its own login and
+permissions. This ceremony is not yet implemented by the development mobile host.
+
 ## Patient-Controlled Healthcare Communications and Workspace
 
 ## Executive Summary
