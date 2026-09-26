@@ -16,9 +16,10 @@ Working conventions:
   `identity-contract` as an interface consumed by other products.
 - cs-mail pins these sources in its `identity-source.sha256`. Commit changes here first,
   then update that manifest in cs-mail.
-- Schema migrations: until the first pilot data is created, a schema change may replace
-  or renumber existing migrations and requires a fresh database. From the first pilot
-  data onward, migrations are forward-only: never edit, remove or renumber a merged
-  migration. The same policy applies in cs-mail.
+- Schema migrations: until the first user data is created (the first open
+  enrollment), a schema change may replace or renumber existing migrations and
+  requires a fresh database. From the first user data onward, migrations are
+  forward-only: never edit, remove or renumber a merged migration. The same policy
+  applies in cs-mail.
 - Development and testing are local. PostgreSQL suites run with `IDENTITY_DATABASE_URL`
   set to an isolated database.
