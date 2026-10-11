@@ -6,9 +6,11 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 
 pub mod changes;
+pub mod evidence;
 
 pub const VERSION: u16 = 1;
-pub const CS_MAIL_POLICY: &str = "cs-mail.bank-ownership.v1";
+/// cs-mail's enrollment evidence policy, named in the decisions it produces.
+pub const CS_MAIL_POLICY: &str = "cs-mail.person-evidence.v1";
 pub const MAX_LIFETIME: i64 = 900;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,6 +173,11 @@ pub struct BankOwnershipClaims {
     pub login_issuer: String,
     pub login_subject: String,
     pub bank_digest: [u8; 32],
+    /// The bank integration's stable reference to the verified account: the same
+    /// account yields the same reference whoever enrolls with it.
+    pub account_token: [u8; 32],
+    /// The account's owners as the bank reports them.
+    pub owners: Vec<evidence::ReportedOwner>,
     pub evidence_ref: String,
     pub ownership: Ownership,
     pub issued_at: i64,
@@ -208,6 +215,7 @@ impl SignedBankOwnership {
             || c.bank_digest != intent.bank_digest
             || c.login_issuer != issuer
             || c.login_subject != subject
+            || c.account_token == [0; 32]
             || !text_valid(&c.evidence_ref)
         {
             return Err(Error::Context);
@@ -407,12 +415,23 @@ pub enum Request {
         oidc_token: String,
         bank: SignedBankOwnership,
         device_proof: Vec<u8>,
+        applicant: evidence::ApplicantClaims,
     },
     Lookup {
         operation: String,
     },
     Confirm {
         decision: SignedDecision,
+    },
+    /// The product's open review cases.
+    Reviews,
+    /// The product's reviewer resolves a case. Repeating the same resolution returns the
+    /// recorded case; a different one conflicts.
+    ResolveReview {
+        case: evidence::ReviewCaseId,
+        resolution: evidence::ReviewResolution,
+        reviewer: String,
+        authorization: String,
     },
 }
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -449,7 +468,15 @@ pub enum Response {
     IdentityChanged(Box<changes::SignedSecurityEvent>),
     SecurityEvents(Vec<changes::SignedSecurityEvent>),
     Eligible(Box<SignedDecision>),
+    /// The bank integration could not confirm ownership and requires its own review.
     ReviewRequired,
+    /// The applicant's evidence overlaps another enrollment's; the product's reviewer
+    /// must approve before the enrollment can become eligible.
+    UnderReview,
+    /// The reviewer approved; a fresh attempt for the same enrollment can become eligible.
+    ReviewApproved,
+    Reviews(Vec<evidence::ReviewCase>),
+    ReviewResolved(Box<evidence::ReviewCase>),
     Denied,
     Missing,
     Confirmed,

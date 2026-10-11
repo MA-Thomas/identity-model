@@ -28,6 +28,7 @@ Configure these environment variables, then run `cargo run -p identity-enrollmen
 | PRODUCT_KEY_FILE | Path to the cs-mail backend Ed25519 public key |
 | BANK_KEY_FILE | Path to the bank-ownership adapter Ed25519 public key |
 | DECISION_SECRET_FILE | Path to the identity decision Ed25519 secret seed |
+| EVIDENCE_SECRET_FILE | Path to the 32-byte key for enrollment evidence fingerprints; changing it disconnects new enrollments from recorded evidence |
 | IDENTITY_PORT | Loopback listening port |
 
 Key files contain JSON arrays of exactly 32 bytes. Supply secrets through protected
@@ -47,14 +48,18 @@ time-bounded and do not follow redirects. PostgreSQL uses its asynchronous clien
 in the shared request DTOs.
 
 POST `/v1/enrollment` accepts SignedRequest and returns Response. Its operations
-are Enroll, Lookup, Confirm, ChangeIdentity and SecurityEvents. Each request must be signed by the configured
+are Enroll, Lookup, Confirm, ChangeIdentity, SecurityEvents, Reviews and
+ResolveReview. Each request must be signed by the configured
 product backend. Enrollment additionally requires challenge-bound OIDC authentication,
 a device-possession signature, and bank-ownership evidence. JSON responses carry a
 signed eligible decision or an explicit non-eligible/error result; consumers must
 verify the decision, not infer eligibility from HTTP status.
 
-Migrations run transactionally under a migration lock and record schema version 2.
-This is a fresh baseline; old version 1 schemas are rejected without conversion.
+Migrations run transactionally under a migration lock and record schema versions 2
+and 6 (enrollment evidence and review). Version 2 is a fresh baseline; old version 1
+schemas, and versions this build does not know, are rejected without conversion.
+Enrollment evidence is screened under the product's evidence policy and overlaps are
+held for the product's review; see the contract's "Enrollment evidence and review".
 Each operation is idempotent by product and operation ID. Login resolution uses a
 separate lock on the product and verified issuer/subject pair; database constraints prevent
 concurrent duplicate product bindings. Reservations survive expiry and lost ACKs.

@@ -7,3 +7,6 @@ identity-model = { path = "../identity-model" }
 identity-contract = { path = "../identity-contract" }
 tokio = { version = "1", features = ["rt"] }
 ed25519-dalek = "3.0.0"
+hmac = "0.13"
+sha2 = "0.11"
+unicode-normalization = "0.1"

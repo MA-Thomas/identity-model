@@ -1,6 +1,8 @@
 //! Loopback HTTP host. Terminate TLS and enforce rate limits at the deployment proxy.
 use identity_adapters::oidc::OidcJwksSessionVerifier;
-use identity_application::enrollment::{Config, DecisionSigner, EnrollmentService, SystemClock};
+use identity_application::enrollment::{
+    evidence::EvidenceKey, Config, DecisionSigner, EnrollmentService, SystemClock,
+};
 use identity_model::OidcClientConfig;
 use identity_storage_postgres::enrollment::PostgresEnrollmentStore;
 use std::{env, future::IntoFuture, sync::Arc};
@@ -40,6 +42,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         OidcJwksSessionVerifier::new(),
         SystemClock,
         DecisionSigner::new(key("DECISION_SECRET_FILE")?),
+        // Keys the fingerprints enrollment evidence is compared by; changing it
+        // disconnects new enrollments from recorded evidence.
+        EvidenceKey::new(key("EVIDENCE_SECRET_FILE")?),
     )?;
     let app = identity_enrollment::router(Arc::new(service));
     let port: u16 = required("IDENTITY_PORT")?.parse()?;

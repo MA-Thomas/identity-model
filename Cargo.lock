@@ -1032,9 +1032,12 @@ name = "identity-application"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek 3.0.0",
+ "hmac 0.13.0",
  "identity-contract",
  "identity-model",
+ "sha2 0.11.0",
  "tokio",
+ "unicode-normalization",
 ]
 
 [[package]]

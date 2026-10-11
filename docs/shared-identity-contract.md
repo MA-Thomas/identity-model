@@ -28,8 +28,9 @@ multiple authentication methods managed by the configured provider. Method chang
 and provider recovery retain its issuer/subject pair and the product binding.
 OIDC audience, authorized party, timestamps, and challenge nonce must all match.
 A configured bank attestation authority asserts ownership for that login and operation,
-including the digest of the exact financial evidence accepted by cs-mail. An attestation
-is not proof of universal person uniqueness. A configured product key authenticates
+including the digest of the exact financial evidence accepted by cs-mail, its stable
+reference to the bank account, and the owners the bank reports. An attestation is not
+proof of universal person uniqueness. A configured product key authenticates
 service requests; the proposed device proves possession of its private key.
 
 The service signs a versioned decision over issuer, product/environment audience,
@@ -41,7 +42,7 @@ seconds; domain timestamps in cs-mail are converted explicitly where necessary.
 
 ## State and concurrency
 
-cs-mail first reserves local persona, initial key, billing/member and funding-token ownership, and persists independent account/principal IDs with an authentication challenge. The stable enrollment and its expiring attempts are separate concepts. Each authenticated attempt has a durable eligible, denied or review-required outcome. Exact retries return the recorded outcome.
+cs-mail first reserves local persona, initial key and billing/member ownership, and persists independent account/principal IDs with an authentication challenge. The stable enrollment and its expiring attempts are separate concepts. Each authenticated attempt has a durable eligible, denied, review-required (by the bank) or under-review (by evidence) outcome. Exact retries return the recorded outcome.
 
 After the challenge expires, an uncommitted local enrollment can renew its challenge and timestamps while retaining every ownership ID and input. Fresh OIDC, bank and device evidence is required. The service permits renewed eligibility only for the same stable enrollment and reserved product subject. A review or denial cannot be overridden by the product: the bank authority must issue new evidence. This deliberately prevents overlapping attempts and can require waiting for the current challenge lifetime (at most 15 minutes).
 
@@ -51,10 +52,49 @@ cs-mail commits product account, principal, identity binding, persona, initial a
 
 Confirmation is idempotent and runs outside the local transaction. Batches continue after individual delivery failures, schedule transient retries and retain permanent rejection codes for intervention. Administrative retry preserves the original signed decision. Lost acknowledgements cannot create a second account; exact committed decisions remain replayable after expiry. Reconciliation returns the stored eligible, review, denied or missing outcome explicitly.
 
-The shared service makes cs-mail real-person uniqueness a best-effort policy. Exact
-product-login ownership and product binding uniqueness are transactional constraints. Phoros
+Exact product-login ownership and product binding uniqueness are transactional
+constraints. Whether a person may hold a second account is decided by the product's
+evidence policy and, when evidence overlaps, by the product's reviewer (below). Phoros
 strict person resolution is not inferred from bank evidence and cannot enroll under
 this policy.
+
+## Enrollment evidence and review
+
+Each product has its own evidence policy, selected from the configured product
+(`EvidencePolicy` in `identity-application`). A policy names the person evidence the
+product requires, how it is normalized for exact comparison, and which overlaps with
+another enrollment of the same product require review. Decisions carry the policy's
+identifier.
+
+cs-mail's policy (`cs-mail.person-evidence.v1`) requires legal name, date of birth, bank
+account, address and phone. The enrollment request carries the applicant's statement of
+all but the bank account; the name, address and phone must be ones the bank reports
+for one owner of the verified account, and the bank account is the integration's
+stable account reference. Values are compared exactly after normalization (Unicode
+compatibility form, case, spacing and punctuation for text; E.164 for phones, with a
+ten-digit number read as North American; YYYY-MM-DD dates). An enrollment whose
+evidence shares the bank account, or any two fields, with another cs-mail enrollment is
+held for review. Enrollments of different products are never compared.
+
+The service keeps evidence only as HMAC fingerprints under its evidence key, scoped
+to the product, so stored values neither disclose the evidence nor match across
+products. An operation's evidence is fixed once recorded; a retry with different
+evidence conflicts. Screening of one product's enrollments is serialized, so two
+overlapping applicants cannot both miss each other.
+
+An overlapping enrollment's attempt returns `UnderReview` and opens one review case
+for its operation, listing the enrollments it overlaps and the matching fields. The
+product lists open cases (`Reviews`) and resolves one (`ResolveReview`) with its
+reviewer and a reference to the authorization it verified; for cs-mail these are the
+operator key and the digest of the signed operator command. A case is resolved once:
+the same resolution again returns the recorded case, a different one conflicts. The
+opened case and its decision are separate records. After approval, `Lookup` reports
+`ReviewApproved` and a fresh attempt for the same enrollment can become eligible;
+after denial, every attempt is denied. A login already bound to another enrollment is
+refused before evidence is screened or recorded.
+
+Not yet covered: account changes (device recovery, bank rebinding) do not screen
+evidence, and phones are not verified by a code.
 
 ## Account ownership and authorization
 

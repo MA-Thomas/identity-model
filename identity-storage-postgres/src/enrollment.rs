@@ -1,8 +1,8 @@
 //! PostgreSQL implementation of the identity application's atomic ownership contracts.
-use identity_application::enrollment::{ports::*, ServiceError};
+use identity_application::enrollment::{evidence::EvidenceFingerprints, ports::*, ServiceError};
 use identity_model::{fen::SubjectId, login::ProductLoginIdentity};
 
-use identity_contract::{changes::*, *};
+use identity_contract::{changes::*, evidence::*, *};
 
 use tokio::sync::Mutex;
 
@@ -87,6 +87,123 @@ async fn operation_lock(
 
     Ok(())
 }
+/// Serializes screening of one product's enrollments, so two overlapping applicants
+/// cannot both miss each other.
+async fn evidence_lock(tx: &Transaction<'_>, product: &str) -> Result<(), StoreError> {
+    tx.query_one(
+        "SELECT pg_advisory_xact_lock(hashtext($1))",
+        &[&format!("identity-evidence:{product}")],
+    )
+    .await?;
+    Ok(())
+}
+fn fingerprints(
+    rows: impl IntoIterator<Item = (String, Vec<u8>)>,
+) -> Result<EvidenceFingerprints, StoreError> {
+    let mut parsed = Vec::new();
+    for (field, value) in rows {
+        parsed.push((
+            EvidenceField::parse(&field)?,
+            value.try_into().map_err(|_| Error::Invalid)?,
+        ));
+    }
+    Ok(EvidenceFingerprints::from_recorded(parsed)?)
+}
+async fn recorded_evidence(
+    tx: &Transaction<'_>,
+    product: &str,
+    operation: &str,
+) -> Result<Option<EvidenceFingerprints>, StoreError> {
+    let rows = tx
+        .query(
+            "SELECT field,fingerprint FROM shared_identity_evidence WHERE product=$1 AND operation=$2",
+            &[&product, &operation],
+        )
+        .await?;
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(fingerprints(
+        rows.into_iter().map(|row| (row.get(0), row.get(1))),
+    )?))
+}
+/// The product's other enrollments sharing any fingerprint with `evidence`. The query
+/// over-selects; the policy decides which overlaps matter.
+async fn candidates(
+    tx: &Transaction<'_>,
+    product: &str,
+    operation: &str,
+    evidence: &EvidenceFingerprints,
+) -> Result<Vec<EvidenceCandidate>, StoreError> {
+    let fields: Vec<&str> = evidence.iter().map(|(field, _)| field.as_str()).collect();
+    let values: Vec<&[u8]> = evidence.iter().map(|(_, value)| value.as_slice()).collect();
+    let rows = tx
+        .query(
+            "SELECT operation,account,field,fingerprint FROM shared_identity_evidence WHERE product=$1 AND operation<>$2 AND operation IN (SELECT operation FROM shared_identity_evidence WHERE product=$1 AND field=ANY($3) AND fingerprint=ANY($4)) ORDER BY operation,field",
+            &[&product, &operation, &fields, &values],
+        )
+        .await?;
+    // Operation -> (account, recorded field fingerprints).
+    type Recorded = (String, Vec<(String, Vec<u8>)>);
+    let mut grouped = std::collections::BTreeMap::<String, Recorded>::new();
+    for row in rows {
+        grouped
+            .entry(row.get(0))
+            .or_insert_with(|| (row.get(1), Vec::new()))
+            .1
+            .push((row.get(2), row.get(3)));
+    }
+    grouped
+        .into_values()
+        .map(|(account, rows)| {
+            Ok(EvidenceCandidate {
+                account,
+                fingerprints: fingerprints(rows)?,
+            })
+        })
+        .collect()
+}
+/// A case as opened, with its decision when one is recorded.
+fn review_case(
+    opened: ReviewCase,
+    decision: Option<ReviewDecision>,
+) -> Result<ReviewCase, StoreError> {
+    if opened.decision.is_some() {
+        return Err(Error::Invalid.into());
+    }
+    Ok(ReviewCase { decision, ..opened })
+}
+const CASE_SELECT: &str = "SELECT r.opened,d.decision FROM shared_identity_reviews r LEFT JOIN shared_identity_review_decisions d USING(product,id)";
+fn case_from(row: &tokio_postgres::Row) -> Result<ReviewCase, StoreError> {
+    review_case(
+        row.get::<_, Json<ReviewCase>>(0).0,
+        row.get::<_, Option<Json<ReviewDecision>>>(1).map(|d| d.0),
+    )
+}
+async fn operation_case(
+    db: &impl tokio_postgres::GenericClient,
+    product: &str,
+    operation: &str,
+) -> Result<Option<ReviewCase>, StoreError> {
+    db.query_opt(
+        &format!("{CASE_SELECT} WHERE r.product=$1 AND r.operation=$2"),
+        &[&product, &operation],
+    )
+    .await?
+    .map(|row| case_from(&row))
+    .transpose()
+}
+/// The product-enrollment schema, applied in order.
+const MIGRATIONS: [(i32, &str); 2] = [
+    (
+        2,
+        include_str!("../migrations/0002_product_login_enrollment.sql"),
+    ),
+    (
+        6,
+        include_str!("../migrations/0006_product_enrollment_review.sql"),
+    ),
+];
 async fn migrate(db: &mut Client) -> Result<(), StoreError> {
     let tx = db.transaction().await?;
 
@@ -101,7 +218,7 @@ async fn migrate(db: &mut Client) -> Result<(), StoreError> {
     )
     .await?;
 
-    let versions: Vec<i32> = tx
+    let applied: Vec<i32> = tx
         .query(
             "SELECT version FROM shared_identity_schema_migrations ORDER BY version",
             &[],
@@ -110,25 +227,24 @@ async fn migrate(db: &mut Client) -> Result<(), StoreError> {
         .into_iter()
         .map(|row| row.get(0))
         .collect();
-    if versions.is_empty() {
-        tx.batch_execute(include_str!(
-            "../migrations/0002_product_login_enrollment.sql"
-        ))
-        .await?;
-        tx.execute(
-            "INSERT INTO shared_identity_schema_migrations(version) VALUES(2)",
-            &[],
-        )
-        .await?;
-    } else if versions != [2] {
+    let known: Vec<i32> = MIGRATIONS.iter().map(|(version, _)| *version).collect();
+    if !known.starts_with(&applied) {
         return Err(ServiceError::Storage {
             code: Error::Unavailable,
             source: Box::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "product login identities require a fresh shared-identity schema (version 2)",
+                "the shared-identity schema has versions this build does not know; use a fresh database",
             )),
         }
         .into());
+    }
+    for (version, sql) in &MIGRATIONS[applied.len()..] {
+        tx.batch_execute(sql).await?;
+        tx.execute(
+            "INSERT INTO shared_identity_schema_migrations(version) VALUES($1)",
+            &[version],
+        )
+        .await?;
     }
     tx.commit().await?;
 
@@ -154,12 +270,62 @@ impl EnrollmentStore for PostgresEnrollmentStore {
     }
     }).await
     }
-    async fn lookup(&self, product: &str, operation: &str) -> Result<Response, ServiceError> {
+    async fn lookup(&self, product: &str, operation: &str) -> Result<LookupRecord, ServiceError> {
         finish(async {
-    let db = self.db.lock().await;
-
-    Ok(db.query_opt("SELECT response FROM shared_identity_attempts WHERE product=$1 AND operation=$2 ORDER BY created_at DESC LIMIT 1", &[&product,&operation]).await?.map_or(Response::Missing, |r| r.get::<_,Json<Response>>(0).0))
-    }).await
+            let db = self.db.lock().await;
+            let response = db.query_opt("SELECT response FROM shared_identity_attempts WHERE product=$1 AND operation=$2 ORDER BY created_at DESC LIMIT 1", &[&product,&operation]).await?.map(|r| r.get::<_,Json<Response>>(0).0);
+            let case = operation_case(&*db, product, operation).await?;
+            Ok(LookupRecord { response, case })
+        })
+        .await
+    }
+    async fn reviews(&self, product: &str) -> Result<Vec<ReviewCase>, ServiceError> {
+        finish(async {
+            let db = self.db.lock().await;
+            db.query(
+                &format!("{CASE_SELECT} WHERE r.product=$1 AND d.id IS NULL ORDER BY r.opened_at, r.id LIMIT 100"),
+                &[&product],
+            )
+            .await?
+            .iter()
+            .map(case_from)
+            .collect()
+        })
+        .await
+    }
+    async fn resolve(
+        &self,
+        product: &str,
+        case: &ReviewCaseId,
+        decide: impl FnOnce(ReviewCase) -> Result<ResolutionDecision, ServiceError> + Send,
+    ) -> Result<ReviewCase, ServiceError> {
+        finish(async {
+            let mut db = self.db.lock().await;
+            let tx = db.transaction().await?;
+            // A case's operation never changes; take the operation's lock before its rows
+            // so the decision serializes with the applicant's attempts.
+            let operation: String = tx
+                .query_opt(
+                    "SELECT operation FROM shared_identity_reviews WHERE product=$1 AND id=$2",
+                    &[&product, &case.as_str()],
+                )
+                .await?
+                .ok_or(Error::Invalid)?
+                .get(0);
+            operation_lock(&tx, product, &operation).await?;
+            let current = operation_case(&tx, product, &operation).await?.ok_or(Error::Invalid)?;
+            let (resolved, decision) = decide(current)?.into_parts();
+            if let Some(decision) = decision {
+                tx.execute(
+                    "INSERT INTO shared_identity_review_decisions(product,id,decision) VALUES($1,$2,$3)",
+                    &[&product, &case.as_str(), &Json(&decision)],
+                )
+                .await?;
+            }
+            tx.commit().await?;
+            Ok(resolved)
+        })
+        .await
     }
     async fn confirm(
         &self,
@@ -251,7 +417,14 @@ impl EnrollmentStore for PostgresEnrollmentStore {
 
         let enrollment=tx.query_opt("SELECT account,subject_ref,confirmed FROM shared_identity_enrollments WHERE product=$1 AND operation=$2 FOR UPDATE", &[&scope.product,&scope.intent.operation]).await?.map(|r|EnrollmentOwner {account:r.get(0),subject_ref:r.get(1),confirmed:r.get(2)});
 
-        let (response,writes)=decide(EnrollmentContext {prior,enrollment,login})?.into_parts();
+        let recorded=recorded_evidence(&tx,scope.product,&scope.intent.operation).await?;
+        let case=operation_case(&tx,scope.product,&scope.intent.operation).await?;
+        let candidates=if let Some(evidence)=scope.evidence {
+            evidence_lock(&tx,scope.product).await?;
+            candidates(&tx,scope.product,&scope.intent.operation,evidence).await?
+        } else { Vec::new() };
+
+        let (response,writes)=decide(EnrollmentContext {prior,enrollment,login,screening:ScreeningContext{recorded,case,candidates}})?.into_parts();
 
         if let Some(writes)=writes {
             if let Some((subject,status))=writes.subject {tx.execute("INSERT INTO shared_identity_subjects(subject_id,status) VALUES($1,$2)", &[&subject.as_str(),&status]).await?;
@@ -264,6 +437,14 @@ impl EnrollmentStore for PostgresEnrollmentStore {
             }
             if let Some(binding)=writes.enrollment {
                 tx.execute("INSERT INTO shared_identity_enrollments(product,operation,account,subject_id,subject_ref) VALUES($1,$2,$3,$4,$5)", &[&scope.product,&scope.intent.operation,&binding.account,&binding.subject.as_str(),&binding.subject_ref.as_str()]).await?;
+            }
+            if let Some((account,evidence))=writes.evidence {
+                for (field,value) in evidence.iter() {
+                    tx.execute("INSERT INTO shared_identity_evidence(product,operation,account,field,fingerprint) VALUES($1,$2,$3,$4,$5)", &[&scope.product,&scope.intent.operation,&account,&field.as_str(),&value.as_slice()]).await?;
+                }
+            }
+            if let Some(case)=writes.review {
+                tx.execute("INSERT INTO shared_identity_reviews(product,id,operation,opened_at,opened) VALUES($1,$2,$3,$4,$5)", &[&scope.product,&case.id.as_str(),&case.operation,&case.opened_at,&Json(&case)]).await?;
             }
             let attempt=writes.attempt;
 

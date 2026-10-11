@@ -2,10 +2,12 @@
 #![forbid(unsafe_code)]
 mod decisions;
 mod error;
+pub mod evidence;
 mod policy;
 pub mod ports;
 pub use decisions::DecisionSigner;
 pub use error::ServiceError;
+use evidence::{EvidenceKey, EvidencePolicy};
 use identity_contract::*;
 use identity_model::{
     fen::SubjectId, login::ProductLoginIdentity, OidcClientConfig, OidcSessionVerifier,
@@ -39,23 +41,26 @@ pub struct EnrollmentService<R, V, C> {
     repository: R,
     signer: DecisionSigner,
     config: Config,
+    policy: EvidencePolicy,
+    evidence_key: EvidenceKey,
     verifier: Arc<V>,
     clock: C,
 }
 impl<R: EnrollmentStore, V: OidcSessionVerifier + Send + Sync + 'static, C: Clock>
     EnrollmentService<R, V, C>
 {
-    /// Hosts assemble persistence, verification, trusted time and signing.
+    /// Hosts assemble persistence, verification, trusted time, signing and the evidence
+    /// key. The product's evidence policy follows from the configured product.
     pub fn new(
         repository: R,
         config: Config,
         verifier: V,
         clock: C,
         signer: DecisionSigner,
+        evidence_key: EvidenceKey,
     ) -> Result<Self, ServiceError> {
-        if !config.product.starts_with("cs-mail/")
-            || config.product.len() <= 8
-            || config.issuer.is_empty()
+        let policy = EvidencePolicy::for_product(&config.product).ok_or(Error::Invalid)?;
+        if config.issuer.is_empty()
             || config.oidc.issuer.is_empty()
             || config.oidc.client_id.is_empty()
         {
@@ -68,6 +73,8 @@ impl<R: EnrollmentStore, V: OidcSessionVerifier + Send + Sync + 'static, C: Cloc
             repository,
             signer,
             config,
+            policy,
+            evidence_key,
             verifier: Arc::new(verifier),
             clock,
         })
@@ -125,6 +132,7 @@ impl<R: EnrollmentStore, V: OidcSessionVerifier + Send + Sync + 'static, C: Cloc
                             decisions::change(
                                 decisions::DecisionAuthority {
                                     config: &self.config,
+                                    policy: self.policy,
                                     signer: &self.signer,
                                     now: self.clock.now()?,
                                 },
@@ -138,10 +146,34 @@ impl<R: EnrollmentStore, V: OidcSessionVerifier + Send + Sync + 'static, C: Cloc
                     )
                     .await
             }
-            Request::Lookup { operation } => {
+            Request::Lookup { operation } => Ok(decisions::lookup(
                 self.repository
                     .lookup(&self.config.product, operation)
-                    .await
+                    .await?,
+            )),
+            Request::Reviews => Ok(Response::Reviews(
+                self.repository.reviews(&self.config.product).await?,
+            )),
+            Request::ResolveReview {
+                case,
+                resolution,
+                reviewer,
+                authorization,
+            } => {
+                let case = self
+                    .repository
+                    .resolve(&self.config.product, case, |case| {
+                        decisions::resolve(
+                            case,
+                            *resolution,
+                            reviewer,
+                            authorization,
+                            // Sample trusted time only after protected reads.
+                            self.clock.now()?,
+                        )
+                    })
+                    .await?;
+                Ok(Response::ReviewResolved(Box::new(case)))
             }
             Request::Confirm { decision } => {
                 self.repository
@@ -153,6 +185,7 @@ impl<R: EnrollmentStore, V: OidcSessionVerifier + Send + Sync + 'static, C: Cloc
                 oidc_token,
                 bank,
                 device_proof,
+                applicant,
             } => {
                 if intent.product != self.config.product {
                     return Err(Error::Context.into());
@@ -181,6 +214,17 @@ impl<R: EnrollmentStore, V: OidcSessionVerifier + Send + Sync + 'static, C: Cloc
                     )
                 })
                 .await??;
+                // Evidence is established only when the bank confirmed ownership; the
+                // decision records and screens it.
+                let fingerprints = if evidence.ownership == Ownership::Confirmed {
+                    Some(
+                        self.policy
+                            .establish(applicant, &bank.claims)?
+                            .fingerprints(&self.evidence_key, &self.config.product)?,
+                    )
+                } else {
+                    None
+                };
                 // Allocate candidates before acquiring persistence protection. The
                 // deterministic decision discards them when a product login exists.
                 let fresh = decisions::NewProductLogin {
@@ -199,19 +243,24 @@ impl<R: EnrollmentStore, V: OidcSessionVerifier + Send + Sync + 'static, C: Cloc
                             product: &self.config.product,
                             intent,
                             login: (&evidence.session.issuer, &evidence.session.subject),
+                            evidence: fingerprints.as_ref(),
                         },
                         |context| {
                             decisions::enroll(
                                 decisions::DecisionAuthority {
                                     config: &self.config,
+                                    policy: self.policy,
                                     signer: &self.signer,
                                     // Sample trusted time only after protected reads.
                                     now: self.clock.now()?,
                                 },
-                                intent,
-                                &evidence,
-                                &bank.claims.evidence_ref,
-                                &hash,
+                                decisions::EnrollAttempt {
+                                    intent,
+                                    evidence: &evidence,
+                                    fingerprints: fingerprints.as_ref(),
+                                    evidence_ref: &bank.claims.evidence_ref,
+                                    hash: &hash,
+                                },
                                 context,
                                 fresh,
                             )

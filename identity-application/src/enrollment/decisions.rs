@@ -1,5 +1,10 @@
-use super::{policy::Evidence, ports::*, Config, ServiceError};
-use identity_contract::{changes::*, *};
+use super::{
+    evidence::{EvidenceFingerprints, EvidencePolicy},
+    policy::Evidence,
+    ports::*,
+    Config, ServiceError,
+};
+use identity_contract::{changes::*, evidence::*, *};
 use identity_model::login::ProductLoginIdentity;
 /// Local signing is an application dependency. Storage never receives a signing secret.
 pub struct DecisionSigner {
@@ -18,6 +23,7 @@ impl DecisionSigner {
 }
 pub(super) struct DecisionAuthority<'a> {
     pub config: &'a Config,
+    pub policy: EvidencePolicy,
     pub signer: &'a DecisionSigner,
     pub now: i64,
 }
@@ -26,17 +32,31 @@ pub(super) struct NewProductLogin {
     pub identity: ProductLoginIdentity,
     pub subject_ref: ProductSubjectRef,
 }
+/// One enrollment attempt with its verified evidence.
+pub(super) struct EnrollAttempt<'a> {
+    pub intent: &'a EnrollmentIntent,
+    pub evidence: &'a Evidence,
+    /// The applicant's evidence, when the bank confirmed ownership.
+    pub fingerprints: Option<&'a EvidenceFingerprints>,
+    pub evidence_ref: &'a str,
+    pub hash: &'a [u8; 32],
+}
 pub(super) fn enroll(
     authority: DecisionAuthority<'_>,
-    intent: &EnrollmentIntent,
-    evidence: &Evidence,
-    evidence_ref: &str,
-    hash: &[u8; 32],
+    attempt: EnrollAttempt<'_>,
     context: EnrollmentContext,
     fresh: NewProductLogin,
 ) -> Result<EnrollmentDecision, ServiceError> {
+    let EnrollAttempt {
+        intent,
+        evidence,
+        fingerprints,
+        evidence_ref,
+        hash,
+    } = attempt;
     let DecisionAuthority {
         config,
+        policy,
         signer,
         now,
     } = authority;
@@ -65,60 +85,89 @@ pub(super) fn enroll(
     let mut login_write = None;
     let mut reference_write = None;
     let mut enrollment_write = None;
+    let mut evidence_write = None;
+    let mut review_write = None;
     let response = match evidence.ownership {
         Ownership::Denied => Response::Denied,
         Ownership::ReviewRequired => Response::ReviewRequired,
         Ownership::Confirmed => {
-            let (subject, reference) = if let Some(login) = context.login {
-                if login.status != "active"
-                    || !login.identity.matches_login(
-                        &config.product,
-                        &evidence.session.issuer,
-                        &evidence.session.subject,
-                    )
-                {
-                    return Err(Error::Unauthorized.into());
-                }
-                (login.identity.subject().clone(), login.product_ref)
-            } else {
-                // This policy creates a cs-mail subject. Phoros subject reuse requires
-                // its own ceremony-authorized resolution; an OIDC match is not that proof.
-                if !fresh.identity.matches_login(
-                    &config.product,
-                    &evidence.session.issuer,
-                    &evidence.session.subject,
-                ) {
-                    return Err(Error::Context.into());
-                }
-                let subject = fresh.identity.subject().clone();
-                let reference = fresh.subject_ref;
-                subject_write = Some((subject.clone(), "active".into()));
-                reference_write = Some((subject.clone(), reference.clone()));
-                login_write = Some(fresh.identity);
-                (subject, reference)
-            };
-            if let Some(owner) = context.enrollment {
-                if owner.account != intent.account || owner.subject_ref != reference.as_str() {
-                    return Err(Error::Conflict.into());
-                }
-            } else {
-                enrollment_write = Some(EnrollmentBinding {
-                    account: intent.account.clone(),
-                    subject,
-                    subject_ref: reference.clone(),
-                });
+            // A product login belongs to one enrollment; it is refused outright, before
+            // evidence is screened or recorded.
+            if context.login.is_some() && context.enrollment.is_none() {
+                return Err(Error::Conflict.into());
             }
-            Response::Eligible(Box::new(signer.decision(DecisionClaims {
-                issuer: config.issuer.clone(),
-                intent: intent.clone(),
-                subject_ref: reference,
-                binding_version: 1,
-                security_version: 1,
-                policy: CS_MAIL_POLICY.into(),
-                evidence_ref: evidence_ref.into(),
-                issued_at: now,
-                expires_at: evidence.expires_at,
-            })?))
+            let fingerprints = fingerprints.ok_or(Error::Invalid)?;
+            if context.screening.recorded.is_none() {
+                evidence_write = Some((intent.account.clone(), fingerprints.clone()));
+            }
+            match screen(
+                policy,
+                &config.product,
+                intent,
+                fingerprints,
+                context.screening,
+                now,
+            )? {
+                Screening::Held(opened) => {
+                    review_write = opened;
+                    Response::UnderReview
+                }
+                Screening::Denied => Response::Denied,
+                Screening::Clear => {
+                    let (subject, reference) = if let Some(login) = context.login {
+                        if login.status != "active"
+                            || !login.identity.matches_login(
+                                &config.product,
+                                &evidence.session.issuer,
+                                &evidence.session.subject,
+                            )
+                        {
+                            return Err(Error::Unauthorized.into());
+                        }
+                        (login.identity.subject().clone(), login.product_ref)
+                    } else {
+                        // This policy creates a cs-mail subject. Phoros subject reuse requires
+                        // its own ceremony-authorized resolution; an OIDC match is not that proof.
+                        if !fresh.identity.matches_login(
+                            &config.product,
+                            &evidence.session.issuer,
+                            &evidence.session.subject,
+                        ) {
+                            return Err(Error::Context.into());
+                        }
+                        let subject = fresh.identity.subject().clone();
+                        let reference = fresh.subject_ref;
+                        subject_write = Some((subject.clone(), "active".into()));
+                        reference_write = Some((subject.clone(), reference.clone()));
+                        login_write = Some(fresh.identity);
+                        (subject, reference)
+                    };
+                    if let Some(owner) = context.enrollment {
+                        if owner.account != intent.account
+                            || owner.subject_ref != reference.as_str()
+                        {
+                            return Err(Error::Conflict.into());
+                        }
+                    } else {
+                        enrollment_write = Some(EnrollmentBinding {
+                            account: intent.account.clone(),
+                            subject,
+                            subject_ref: reference.clone(),
+                        });
+                    }
+                    Response::Eligible(Box::new(signer.decision(DecisionClaims {
+                        issuer: config.issuer.clone(),
+                        intent: intent.clone(),
+                        subject_ref: reference,
+                        binding_version: 1,
+                        security_version: 1,
+                        policy: policy.id().into(),
+                        evidence_ref: evidence_ref.into(),
+                        issued_at: now,
+                        expires_at: evidence.expires_at,
+                    })?))
+                }
+            }
         }
     };
     Ok(EnrollmentDecision {
@@ -128,12 +177,107 @@ pub(super) fn enroll(
             login: login_write,
             product_ref: reference_write,
             enrollment: enrollment_write,
+            evidence: evidence_write,
+            review: review_write,
             attempt: PriorAttempt {
                 intent: intent.clone(),
                 digest: hash.to_vec(),
                 response,
             },
         }),
+    })
+}
+/// Whether an enrollment with confirmed bank ownership may proceed to eligibility.
+enum Screening {
+    Clear,
+    /// Held for review; carries the case when this attempt opens it.
+    Held(Option<ReviewCase>),
+    Denied,
+}
+/// Applies the product's policy to the applicant's evidence. The evidence of an
+/// operation is fixed once recorded; an operation's case decides every later attempt.
+fn screen(
+    policy: EvidencePolicy,
+    product: &str,
+    intent: &EnrollmentIntent,
+    fingerprints: &EvidenceFingerprints,
+    context: ScreeningContext,
+    now: i64,
+) -> Result<Screening, ServiceError> {
+    if context
+        .recorded
+        .as_ref()
+        .is_some_and(|recorded| recorded != fingerprints)
+    {
+        return Err(Error::Conflict.into());
+    }
+    if let Some(case) = context.case {
+        return Ok(match case.decision.map(|d| d.resolution) {
+            None => Screening::Held(None),
+            Some(ReviewResolution::Approve) => Screening::Clear,
+            Some(ReviewResolution::Deny) => Screening::Denied,
+        });
+    }
+    let matches: Vec<ReviewMatch> = context
+        .candidates
+        .into_iter()
+        .filter_map(|candidate| {
+            let fields = fingerprints.matching(&candidate.fingerprints);
+            policy.requires_review(&fields).then_some(ReviewMatch {
+                account: candidate.account,
+                fields,
+            })
+        })
+        .collect();
+    if matches.is_empty() {
+        return Ok(Screening::Clear);
+    }
+    Ok(Screening::Held(Some(ReviewCase {
+        id: ReviewCaseId::for_operation(product, &intent.operation)?,
+        operation: intent.operation.clone(),
+        account: intent.account.clone(),
+        opened_at: now,
+        matches,
+        decision: None,
+    })))
+}
+/// What an operation's latest attempt means now: a held attempt reports its case's
+/// decision once the reviewer has made it.
+pub(super) fn lookup(record: LookupRecord) -> Response {
+    match (record.response, record.case.and_then(|case| case.decision)) {
+        (None, _) => Response::Missing,
+        (Some(Response::UnderReview), Some(decision)) => match decision.resolution {
+            ReviewResolution::Approve => Response::ReviewApproved,
+            ReviewResolution::Deny => Response::Denied,
+        },
+        (Some(response), _) => response,
+    }
+}
+/// Records a reviewer's decision on an open case. The same resolution again returns the
+/// recorded case; a different one conflicts.
+pub(super) fn resolve(
+    case: ReviewCase,
+    resolution: ReviewResolution,
+    reviewer: &str,
+    authorization: &str,
+    now: i64,
+) -> Result<ResolutionDecision, ServiceError> {
+    if let Some(decided) = &case.decision {
+        if decided.resolution != resolution {
+            return Err(Error::Conflict.into());
+        }
+        return Ok(ResolutionDecision {
+            case,
+            decision: None,
+        });
+    }
+    let decision = ReviewDecision::new(resolution, reviewer.into(), authorization.into(), now)?;
+    Ok(ResolutionDecision {
+        case: ReviewCase {
+            decision: Some(decision.clone()),
+            ..case
+        },
+        decision: Some(decision),
     })
 }
 pub(super) fn change(
@@ -148,6 +292,7 @@ pub(super) fn change(
         config,
         signer,
         now,
+        ..
     } = authority;
     if let Some((digest, event)) = context.prior {
         if digest != hash {
